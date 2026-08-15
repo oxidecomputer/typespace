@@ -1,0 +1,34 @@
+#
+# Configuration for GitHub-based CI
+#
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-style:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Report cargo version
+      run: cargo --version
+    - name: Report rustfmt version
+      run: cargo fmt -- --version
+    - name: Check style
+      run: cargo fmt -- --check
+
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --tests --verbose
+    - name: Run tests
+      run: cargo test --verbose
