@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use typespace::{
     no_cycles, EnumTagType, EnumVariant, JsonValue, StructProperty, StructPropertySerde,
     StructPropertyState, Type, TypeEnum, TypeNative, TypeNewtypeConstraints, TypeNewtypeStruct,
-    TypeStruct, TypeTupleStruct, TypeTypeAlias, TypeUnitStruct, TypespaceBuilder,
+    TypeStruct, TypeTupleStruct, TypeTypeAlias, TypeUnitStruct, TypespaceBuilder, TypespaceError,
     TypespaceSettings, TypespaceSettingsOptionalNullable, TypespaceSettingsStd, VariantDetails,
 };
 use typespace_test_macro::check_and_include;
@@ -67,10 +67,12 @@ fn test_struct_field_serde() {
         let mut builder = TypespaceBuilder::default();
 
         let string_id = "string".to_string();
-        builder.insert(string_id.clone(), Type::String);
+        builder.insert(string_id.clone(), Type::String).unwrap();
 
         let option_id = "option_string".to_string();
-        builder.insert(option_id.clone(), Type::Option(string_id.clone()));
+        builder
+            .insert(option_id.clone(), Type::Option(string_id.clone()))
+            .unwrap();
 
         let properties = vec![
             StructProperty::new(
@@ -124,10 +126,12 @@ fn test_struct_field_serde() {
             ),
         ];
 
-        builder.insert(
-            "X".to_string(),
-            Type::Struct(TypeStruct::new(name, None, properties, false)),
-        );
+        builder
+            .insert(
+                "X".to_string(),
+                Type::Struct(TypeStruct::new(name, None, properties, false)),
+            )
+            .unwrap();
 
         let ts = builder.finalize(settings, no_cycles).unwrap();
         let out = ts.to_codespace();
@@ -210,14 +214,16 @@ fn test_struct_field_serde() {
 fn test_unit_struct() {
     let mut builder = TypespaceBuilder::default();
 
-    builder.insert(
-        "MyUnitStruct".to_string(),
-        Type::UnitStruct(TypeUnitStruct::new(
-            "MyUnitStruct",
-            None,
-            serde_json::json!("<<+>>"),
-        )),
-    );
+    builder
+        .insert(
+            "MyUnitStruct".to_string(),
+            Type::UnitStruct(TypeUnitStruct::new(
+                "MyUnitStruct",
+                None,
+                serde_json::json!("<<+>>"),
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(TypespaceSettings::default(), no_cycles)
@@ -238,23 +244,29 @@ fn test_tuple_struct() {
     let mut builder = TypespaceBuilder::default();
 
     let int_id = "integer".to_string();
-    builder.insert(int_id.clone(), Type::Integer("u32".to_string()));
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
 
     let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String);
+    builder.insert(string_id.clone(), Type::String).unwrap();
 
     let string_vec_id = "string_vec".to_string();
-    builder.insert(string_vec_id.clone(), Type::Vec(string_id.clone()));
+    builder
+        .insert(string_vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
 
-    builder.insert(
-        "MyTupleStruct".to_string(),
-        Type::TupleStruct(TypeTupleStruct::new(
-            "MyTupleStruct",
-            None,
-            vec![string_id, int_id],
-            Some(string_vec_id),
-        )),
-    );
+    builder
+        .insert(
+            "MyTupleStruct".to_string(),
+            Type::TupleStruct(TypeTupleStruct::new(
+                "MyTupleStruct",
+                None,
+                vec![string_id, int_id],
+                Some(string_vec_id),
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(TypespaceSettings::default(), no_cycles)
@@ -318,10 +330,12 @@ fn test_enums() {
         let mut builder = TypespaceBuilder::default();
 
         let string_id = "string".to_string();
-        builder.insert(string_id.clone(), Type::String);
+        builder.insert(string_id.clone(), Type::String).unwrap();
 
         let int_id = "integer".to_string();
-        builder.insert(int_id.clone(), Type::Integer("u32".to_string()));
+        builder
+            .insert(int_id.clone(), Type::Integer("u32".to_string()))
+            .unwrap();
 
         // Internal tagging doesn't support newtype variants wrapping non-struct
         // types, so we use only unit and struct variants for Internal.
@@ -374,17 +388,19 @@ fn test_enums() {
             ],
         };
 
-        builder.insert(
-            "E".to_string(),
-            Type::Enum(TypeEnum::new(
-                *name,
-                None,
-                None,
-                tag_type.clone(),
-                variants,
-                false,
-            )),
-        );
+        builder
+            .insert(
+                "E".to_string(),
+                Type::Enum(TypeEnum::new(
+                    *name,
+                    None,
+                    None,
+                    tag_type.clone(),
+                    variants,
+                    false,
+                )),
+            )
+            .unwrap();
 
         builder
             .finalize(
@@ -449,32 +465,38 @@ fn test_newtype_struct() {
     let mut builder = TypespaceBuilder::default();
 
     let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String);
+    builder.insert(string_id.clone(), Type::String).unwrap();
 
     let int_id = "integer".to_string();
-    builder.insert(int_id.clone(), Type::Integer("u32".to_string()));
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
 
-    builder.insert(
-        "MyString".to_string(),
-        Type::NewtypeStruct(TypeNewtypeStruct::new(
-            "MyString",
-            Some("A newtype wrapping String.".to_string()),
-            None,
-            string_id,
-            TypeNewtypeConstraints::None,
-        )),
-    );
+    builder
+        .insert(
+            "MyString".to_string(),
+            Type::NewtypeStruct(TypeNewtypeStruct::new(
+                "MyString",
+                Some("A newtype wrapping String.".to_string()),
+                None,
+                string_id,
+                TypeNewtypeConstraints::None,
+            )),
+        )
+        .unwrap();
 
-    builder.insert(
-        "MyInt".to_string(),
-        Type::NewtypeStruct(TypeNewtypeStruct::new(
-            "MyInt",
-            None,
-            None,
-            int_id,
-            TypeNewtypeConstraints::None,
-        )),
-    );
+    builder
+        .insert(
+            "MyInt".to_string(),
+            Type::NewtypeStruct(TypeNewtypeStruct::new(
+                "MyInt",
+                None,
+                None,
+                int_id,
+                TypeNewtypeConstraints::None,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(
@@ -506,24 +528,30 @@ fn test_type_alias() {
     let mut builder = TypespaceBuilder::default();
 
     let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String);
+    builder.insert(string_id.clone(), Type::String).unwrap();
 
     let vec_string_id = "vec_string".to_string();
-    builder.insert(vec_string_id.clone(), Type::Vec(string_id.clone()));
+    builder
+        .insert(vec_string_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
 
-    builder.insert(
-        "MyAlias".to_string(),
-        Type::TypeAlias(TypeTypeAlias::new("MyAlias", None, string_id)),
-    );
+    builder
+        .insert(
+            "MyAlias".to_string(),
+            Type::TypeAlias(TypeTypeAlias::new("MyAlias", None, string_id)),
+        )
+        .unwrap();
 
-    builder.insert(
-        "StringList".to_string(),
-        Type::TypeAlias(TypeTypeAlias::new(
-            "StringList",
-            Some("A list of strings.".to_string()),
-            vec_string_id,
-        )),
-    );
+    builder
+        .insert(
+            "StringList".to_string(),
+            Type::TypeAlias(TypeTypeAlias::new(
+                "StringList",
+                Some("A list of strings.".to_string()),
+                vec_string_id,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(
@@ -547,55 +575,61 @@ fn test_struct_serde_rename_flatten() {
     let mut builder = TypespaceBuilder::default();
 
     let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String);
+    builder.insert(string_id.clone(), Type::String).unwrap();
 
     let int_id = "integer".to_string();
-    builder.insert(int_id.clone(), Type::Integer("u32".to_string()));
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
 
     // Inner struct that will be flattened.
-    builder.insert(
-        "Inner".to_string(),
-        Type::Struct(TypeStruct::new(
-            "Inner",
-            None,
-            vec![StructProperty::new(
-                format_ident!("value"),
-                StructPropertySerde::None,
-                StructPropertyState::Required,
+    builder
+        .insert(
+            "Inner".to_string(),
+            Type::Struct(TypeStruct::new(
+                "Inner",
                 None,
-                int_id.clone(),
-            )],
-            false,
-        )),
-    );
+                vec![StructProperty::new(
+                    format_ident!("value"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Required,
+                    None,
+                    int_id.clone(),
+                )],
+                false,
+            )),
+        )
+        .unwrap();
 
     let inner_id = "Inner".to_string();
 
     // Outer struct with a renamed field and a flattened inner struct.
-    builder.insert(
-        "Outer".to_string(),
-        Type::Struct(TypeStruct::new(
-            "Outer",
-            None,
-            vec![
-                StructProperty::new(
-                    format_ident!("my_field"),
-                    StructPropertySerde::Rename("my-field".to_string()),
-                    StructPropertyState::Required,
-                    None,
-                    string_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("inner"),
-                    StructPropertySerde::Flatten,
-                    StructPropertyState::Required,
-                    None,
-                    inner_id,
-                ),
-            ],
-            false,
-        )),
-    );
+    builder
+        .insert(
+            "Outer".to_string(),
+            Type::Struct(TypeStruct::new(
+                "Outer",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("my_field"),
+                        StructPropertySerde::Rename("my-field".to_string()),
+                        StructPropertyState::Required,
+                        None,
+                        string_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("inner"),
+                        StructPropertySerde::Flatten,
+                        StructPropertyState::Required,
+                        None,
+                        inner_id,
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(
@@ -623,26 +657,30 @@ fn test_native_type() {
     let mut builder = TypespaceBuilder::default();
 
     let uuid_id = "path".to_string();
-    builder.insert(
-        uuid_id.clone(),
-        Type::Native(TypeNative::new_string_like("std::path::PathBuf")),
-    );
+    builder
+        .insert(
+            uuid_id.clone(),
+            Type::Native(TypeNative::new_string_like("std::path::PathBuf")),
+        )
+        .unwrap();
 
-    builder.insert(
-        "Resource".to_string(),
-        Type::Struct(TypeStruct::new(
-            "Resource",
-            None,
-            vec![StructProperty::new(
-                format_ident!("location"),
-                StructPropertySerde::None,
-                StructPropertyState::Required,
+    builder
+        .insert(
+            "Resource".to_string(),
+            Type::Struct(TypeStruct::new(
+                "Resource",
                 None,
-                uuid_id,
-            )],
-            false,
-        )),
-    );
+                vec![StructProperty::new(
+                    format_ident!("location"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Required,
+                    None,
+                    uuid_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(
@@ -660,238 +698,262 @@ fn test_compound_field_types() {
     let mut builder = TypespaceBuilder::default();
 
     let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String);
+    builder.insert(string_id.clone(), Type::String).unwrap();
 
     let int_id = "integer".to_string();
-    builder.insert(int_id.clone(), Type::Integer("u32".to_string()));
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
 
     let bool_id = "boolean".to_string();
-    builder.insert(bool_id.clone(), Type::Boolean);
+    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
 
     let float_id = "float".to_string();
-    builder.insert(float_id.clone(), Type::Float("f64".to_string()));
+    builder
+        .insert(float_id.clone(), Type::Float("f64".to_string()))
+        .unwrap();
 
     let json_id = "json".to_string();
-    builder.insert(json_id.clone(), Type::JsonValue);
+    builder.insert(json_id.clone(), Type::JsonValue).unwrap();
 
     let vec_id = "vec_string".to_string();
-    builder.insert(vec_id.clone(), Type::Vec(string_id.clone()));
+    builder
+        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
 
     let map_id = "map".to_string();
-    builder.insert(map_id.clone(), Type::Map(string_id.clone(), int_id.clone()));
+    builder
+        .insert(map_id.clone(), Type::Map(string_id.clone(), int_id.clone()))
+        .unwrap();
 
     let set_id = "set".to_string();
-    builder.insert(set_id.clone(), Type::Set(string_id.clone()));
+    builder
+        .insert(set_id.clone(), Type::Set(string_id.clone()))
+        .unwrap();
 
     let array_id = "array".to_string();
-    builder.insert(array_id.clone(), Type::Array(int_id.clone(), 3));
+    builder
+        .insert(array_id.clone(), Type::Array(int_id.clone(), 3))
+        .unwrap();
 
     let opt_id = "opt_string".to_string();
-    builder.insert(opt_id.clone(), Type::Option(string_id.clone()));
+    builder
+        .insert(opt_id.clone(), Type::Option(string_id.clone()))
+        .unwrap();
 
     let box_string_id = "box_string".to_string();
-    builder.insert(box_string_id.clone(), Type::Box(string_id.clone()));
+    builder
+        .insert(box_string_id.clone(), Type::Box(string_id.clone()))
+        .unwrap();
 
     let box_vec_id = "box_vec_string".to_string();
-    builder.insert(box_vec_id.clone(), Type::Box(vec_id.clone()));
+    builder
+        .insert(box_vec_id.clone(), Type::Box(vec_id.clone()))
+        .unwrap();
 
     let tuple_id = "tuple".to_string();
-    builder.insert(
-        tuple_id.clone(),
-        Type::Tuple(vec![string_id.clone(), int_id.clone()]),
-    );
+    builder
+        .insert(
+            tuple_id.clone(),
+            Type::Tuple(vec![string_id.clone(), int_id.clone()]),
+        )
+        .unwrap();
 
-    builder.insert(
-        "All".to_string(),
-        Type::Struct(TypeStruct::new(
-            "All",
-            None,
-            vec![
-                StructProperty::new(
-                    format_ident!("a_bool"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    bool_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("an_int"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    int_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_float"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    float_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_string"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    string_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_json"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    json_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_vec"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    vec_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_map"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    map_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_set"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    set_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("an_array"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    array_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_tuple"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    tuple_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_box_string"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    box_string_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("a_box_vec"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    box_vec_id.clone(),
-                ),
-            ],
-            false,
-        )),
-    );
+    builder
+        .insert(
+            "All".to_string(),
+            Type::Struct(TypeStruct::new(
+                "All",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("a_bool"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        bool_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_int"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        int_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_float"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        float_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_string"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        string_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_json"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        json_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        vec_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_map"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        map_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_set"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        set_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_array"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        array_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_tuple"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        tuple_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_box_string"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        box_string_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_box_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        box_vec_id.clone(),
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
 
     // Exercise StructPropertyState::Default for each applicable field type.
     // JsonValue is excluded: Default is not supported for it.
-    builder.insert(
-        "Defaults".to_string(),
-        Type::Struct(TypeStruct::new(
-            "Defaults",
-            None,
-            vec![
-                StructProperty::new(
-                    format_ident!("a_bool"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    bool_id,
-                ),
-                StructProperty::new(
-                    format_ident!("an_int"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    int_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_float"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    float_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_string"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    string_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_vec"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    vec_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_map"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    map_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_set"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    set_id,
-                ),
-                StructProperty::new(
-                    format_ident!("an_array"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    array_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_tuple"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    tuple_id,
-                ),
-                StructProperty::new(
-                    format_ident!("an_option"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    opt_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_box_string"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    box_string_id,
-                ),
-                StructProperty::new(
-                    format_ident!("a_box_vec"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Default,
-                    None,
-                    box_vec_id,
-                ),
-            ],
-            false,
-        )),
-    );
+    builder
+        .insert(
+            "Defaults".to_string(),
+            Type::Struct(TypeStruct::new(
+                "Defaults",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("a_bool"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        bool_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_int"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        int_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_float"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        float_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_string"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        string_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        vec_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_map"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        map_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_set"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        set_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_array"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        array_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_tuple"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        tuple_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_option"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        opt_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_box_string"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        box_string_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_box_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        box_vec_id,
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(
@@ -927,8 +989,7 @@ fn test_compound_field_types() {
         assert_eq!(*v.a_box_vec, vec!["p", "q"]);
 
         // All fields omitted — each should take its intrinsic default.
-        let d: import::Defaults =
-            serde_json::from_value(serde_json::json!({})).unwrap();
+        let d: import::Defaults = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(d.a_bool, false);
         assert_eq!(d.an_int, 0u32);
         assert_eq!(d.a_string, "");
@@ -956,33 +1017,75 @@ fn test_map_key_struct_with_float() {
     let mut builder = TypespaceBuilder::default();
 
     let float_id = "float".to_string();
-    builder.insert(float_id.clone(), Type::Float("f64".to_string()));
+    builder
+        .insert(float_id.clone(), Type::Float("f64".to_string()))
+        .unwrap();
 
     let key_id = "key".to_string();
-    builder.insert(
-        key_id.clone(),
-        Type::Struct(TypeStruct::new(
-            "Key",
-            None,
-            vec![StructProperty::new(
-                format_ident!("value"),
-                StructPropertySerde::None,
-                StructPropertyState::Required,
+    builder
+        .insert(
+            key_id.clone(),
+            Type::Struct(TypeStruct::new(
+                "Key",
                 None,
-                float_id,
-            )],
-            false,
-        )),
-    );
+                vec![StructProperty::new(
+                    format_ident!("value"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Required,
+                    None,
+                    float_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
 
     let value_id = "value".to_string();
-    builder.insert(value_id.clone(), Type::String);
+    builder.insert(value_id.clone(), Type::String).unwrap();
 
-    builder.insert("map".to_string(), Type::Map(key_id, value_id));
+    builder
+        .insert("map".to_string(), Type::Map(key_id, value_id))
+        .unwrap();
 
-    assert!(builder
-        .finalize(TypespaceSettings::default(), no_cycles)
-        .is_err());
+    let Err(err) = builder.finalize(TypespaceSettings::default(), no_cycles) else {
+        panic!("expected finalize to fail");
+    };
+    assert!(matches!(
+        err,
+        TypespaceError::FloatTraits { ref type_id, ref name, .. }
+            if type_id == "float" && name == "f64"
+    ));
+}
+
+// Inserting two types with the same ID is a caller error.
+#[test]
+fn test_duplicate_type_id() {
+    let mut builder = TypespaceBuilder::default();
+
+    builder.insert("s".to_string(), Type::String).unwrap();
+    let err = builder.insert("s".to_string(), Type::Boolean).unwrap_err();
+    assert!(matches!(
+        err,
+        TypespaceError::DuplicateTypeId { ref type_id } if type_id == "s"
+    ));
+}
+
+// Referencing a type ID for which no type was inserted is a caller error.
+#[test]
+fn test_unknown_type_id() {
+    let mut builder = TypespaceBuilder::default();
+
+    builder
+        .insert("v".to_string(), Type::Vec("missing".to_string()))
+        .unwrap();
+    let Err(err) = builder.finalize(TypespaceSettings::default(), no_cycles) else {
+        panic!("expected finalize to fail");
+    };
+    assert!(matches!(
+        err,
+        TypespaceError::UnknownTypeId { ref type_id, ref child_id }
+            if type_id == "v" && child_id == "missing"
+    ));
 }
 
 // Test a some simple cyclic types.
@@ -998,54 +1101,60 @@ fn test_cycles() {
     };
 
     let struct_a_id = next();
-    builder.insert(
-        struct_a_id,
-        Type::Struct(TypeStruct::new(
-            "A",
-            None,
-            vec![StructProperty::new(
-                format_ident!("a"),
-                StructPropertySerde::None,
-                StructPropertyState::Optional,
+    builder
+        .insert(
+            struct_a_id,
+            Type::Struct(TypeStruct::new(
+                "A",
                 None,
-                struct_a_id,
-            )],
-            false,
-        )),
-    );
+                vec![StructProperty::new(
+                    format_ident!("a"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Optional,
+                    None,
+                    struct_a_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
 
     let b_id = next();
     let c_id = next();
-    builder.insert(
-        b_id,
-        Type::Struct(TypeStruct::new(
-            "B",
-            None,
-            vec![StructProperty::new(
-                format_ident!("c"),
-                StructPropertySerde::None,
-                StructPropertyState::Optional,
+    builder
+        .insert(
+            b_id,
+            Type::Struct(TypeStruct::new(
+                "B",
                 None,
-                c_id,
-            )],
-            false,
-        )),
-    );
-    builder.insert(
-        c_id,
-        Type::Struct(TypeStruct::new(
-            "C",
-            None,
-            vec![StructProperty::new(
-                format_ident!("b"),
-                StructPropertySerde::None,
-                StructPropertyState::Optional,
+                vec![StructProperty::new(
+                    format_ident!("c"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Optional,
+                    None,
+                    c_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
+    builder
+        .insert(
+            c_id,
+            Type::Struct(TypeStruct::new(
+                "C",
                 None,
-                b_id,
-            )],
-            false,
-        )),
-    );
+                vec![StructProperty::new(
+                    format_ident!("b"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Optional,
+                    None,
+                    b_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
 
     let ts = builder
         .finalize(TypespaceSettings::default(), |_: &i32| next())

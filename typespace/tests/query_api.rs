@@ -1,8 +1,8 @@
 use quote::{format_ident, quote};
 use typespace::{
-    no_cycles, EnumTagType, EnumVariant, StructProperty, StructPropertySerde,
-    StructPropertyState, Type, TypeDetails, TypeEnum, TypeEnumVariant, TypeSpaceImpl,
-    TypeStruct, TypespaceBuilder, TypespaceSettings, VariantDetails,
+    no_cycles, EnumTagType, EnumVariant, StructProperty, StructPropertySerde, StructPropertyState,
+    Type, TypeDetails, TypeEnum, TypeEnumVariant, TypeSpaceImpl, TypeStruct, TypespaceBuilder,
+    TypespaceSettings, VariantDetails,
 };
 
 fn make_typespace() -> typespace::Typespace<String> {
@@ -10,83 +10,91 @@ fn make_typespace() -> typespace::Typespace<String> {
     let settings = TypespaceSettings::default();
 
     let str_id = "str".to_string();
-    builder.insert(str_id.clone(), Type::String);
+    builder.insert(str_id.clone(), Type::String).unwrap();
 
     let u32_id = "u32".to_string();
-    builder.insert(u32_id.clone(), Type::Integer("u32".to_string()));
+    builder
+        .insert(u32_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
 
     let bool_id = "bool".to_string();
-    builder.insert(bool_id.clone(), Type::Boolean);
+    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
 
     let opt_str_id = "opt_str".to_string();
-    builder.insert(opt_str_id.clone(), Type::Option(str_id.clone()));
+    builder
+        .insert(opt_str_id.clone(), Type::Option(str_id.clone()))
+        .unwrap();
 
     // A struct with three properties.
     let struct_id = "MyStruct".to_string();
-    builder.insert(
-        struct_id.clone(),
-        Type::Struct(TypeStruct::new(
-            "MyStruct",
-            Some("A sample struct".to_string()),
-            vec![
-                StructProperty::new(
-                    format_ident!("name"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    Some("The name field".to_string()),
-                    str_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("count"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Required,
-                    None,
-                    u32_id.clone(),
-                ),
-                StructProperty::new(
-                    format_ident!("label"),
-                    StructPropertySerde::None,
-                    StructPropertyState::Optional,
-                    None,
-                    opt_str_id.clone(),
-                ),
-            ],
-            false,
-        )),
-    );
+    builder
+        .insert(
+            struct_id.clone(),
+            Type::Struct(TypeStruct::new(
+                "MyStruct",
+                Some("A sample struct".to_string()),
+                vec![
+                    StructProperty::new(
+                        format_ident!("name"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        Some("The name field".to_string()),
+                        str_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("count"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        u32_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("label"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Optional,
+                        None,
+                        opt_str_id.clone(),
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
 
     // An enum with three variants: unit, single-item (Item), multi-item (Tuple).
     let enum_id = "MyEnum".to_string();
-    builder.insert(
-        enum_id.clone(),
-        Type::Enum(TypeEnum::new(
-            "MyEnum",
-            Some("A sample enum".to_string()),
-            None,
-            EnumTagType::External,
-            vec![
-                EnumVariant {
-                    rust_name: "Nothing".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Unit,
-                },
-                EnumVariant {
-                    rust_name: "Single".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Item(str_id.clone()),
-                },
-                EnumVariant {
-                    rust_name: "Pair".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
-                },
-            ],
-            false,
-        )),
-    );
+    builder
+        .insert(
+            enum_id.clone(),
+            Type::Enum(TypeEnum::new(
+                "MyEnum",
+                Some("A sample enum".to_string()),
+                None,
+                EnumTagType::External,
+                vec![
+                    EnumVariant {
+                        rust_name: "Nothing".to_string(),
+                        rename: None,
+                        description: None,
+                        details: VariantDetails::Unit,
+                    },
+                    EnumVariant {
+                        rust_name: "Single".to_string(),
+                        rename: None,
+                        description: None,
+                        details: VariantDetails::Item(str_id.clone()),
+                    },
+                    EnumVariant {
+                        rust_name: "Pair".to_string(),
+                        rename: None,
+                        description: None,
+                        details: VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
+                    },
+                ],
+                false,
+            )),
+        )
+        .unwrap();
 
     builder.finalize(settings, no_cycles).unwrap()
 }
@@ -101,8 +109,7 @@ fn get_type_panics_for_unknown_id() {
 #[test]
 fn iter_types_covers_all_inserted_ids() {
     let ts = make_typespace();
-    let names: std::collections::BTreeSet<String> =
-        ts.iter_types().map(|t| t.name()).collect();
+    let names: std::collections::BTreeSet<String> = ts.iter_types().map(|t| t.name()).collect();
     assert!(names.contains("MyStruct"), "missing MyStruct in {names:?}");
     assert!(names.contains("MyEnum"), "missing MyEnum in {names:?}");
 }

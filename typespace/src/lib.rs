@@ -1,3 +1,4 @@
+mod error;
 mod type_alias;
 mod type_common;
 mod type_enum;
@@ -6,6 +7,7 @@ mod type_native;
 mod type_struct;
 pub(crate) mod value_tokens;
 
+pub use error::TypespaceError;
 pub use type_alias::*;
 pub use type_common::*;
 pub use type_enum::*;
@@ -454,14 +456,17 @@ impl<Id> Default for TypespaceBuilder<Id> {
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id> {
-    pub fn insert(&mut self, id: Id, typ: Type<Id>) {
+    pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), TypespaceError<Id>> {
         match self.types.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(typ);
+                Ok(())
             }
-            Entry::Occupied(_) => {
+            Entry::Occupied(e) => {
                 // Duplicate insertions are a caller error.
-                panic!("duplicate type id");
+                Err(TypespaceError::DuplicateTypeId {
+                    type_id: e.key().clone(),
+                })
             }
         }
     }
@@ -479,7 +484,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         self,
         settings: TypespaceSettings,
         make_box_id: F,
-    ) -> Result<Typespace<Id>, ()>
+    ) -> Result<Typespace<Id>, TypespaceError<Id>>
     where
         F: FnMut(&Id) -> Id,
     {
@@ -489,6 +494,19 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // 3. Type-specific finalization
 
         let Self { mut types } = self;
+
+        // Verify that every type ID referenced by another type is actually
+        // present; subsequent steps rely on lookups of child IDs succeeding.
+        for (type_id, typ) in &types {
+            for child_id in typ.children() {
+                if !types.contains_key(&child_id) {
+                    return Err(TypespaceError::UnknownTypeId {
+                        type_id: type_id.clone(),
+                        child_id,
+                    });
+                }
+            }
+        }
 
         build_commons(&mut types);
         break_cycles(&mut types, make_box_id);
@@ -1134,7 +1152,7 @@ where
     }
 }
 
-fn push_traits<Id>(types: &mut BTreeMap<Id, Type<Id>>) -> Result<(), ()>
+fn push_traits<Id>(types: &mut BTreeMap<Id, Type<Id>>) -> Result<(), TypespaceError<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -1257,12 +1275,21 @@ where
 
                 // TODO 3/31/2026
                 // Comment and do better
-                Type::Float(_) => {
-                    if traits.contains(&TypespaceTrait::Ord)
-                        || traits.contains(&TypespaceTrait::Eq)
-                        || traits.contains(&TypespaceTrait::Hash)
-                    {
-                        return Err(());
+                Type::Float(name) => {
+                    let missing = [
+                        TypespaceTrait::Ord,
+                        TypespaceTrait::Eq,
+                        TypespaceTrait::Hash,
+                    ]
+                    .into_iter()
+                    .filter(|tt| traits.contains(tt))
+                    .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        return Err(TypespaceError::FloatTraits {
+                            type_id: schema_ref,
+                            name: name.clone(),
+                            missing,
+                        });
                     }
                 }
 
@@ -1273,12 +1300,20 @@ where
                 // JsonValue implements everything except for Eq, Ord,
                 // PartialOrd, and Hash.
                 Type::JsonValue => {
-                    if traits.contains(&TypespaceTrait::Eq)
-                        || traits.contains(&TypespaceTrait::Ord)
-                        || traits.contains(&TypespaceTrait::PartialOrd)
-                        || traits.contains(&TypespaceTrait::Hash)
-                    {
-                        return Err(());
+                    let missing = [
+                        TypespaceTrait::Eq,
+                        TypespaceTrait::Ord,
+                        TypespaceTrait::PartialOrd,
+                        TypespaceTrait::Hash,
+                    ]
+                    .into_iter()
+                    .filter(|tt| traits.contains(tt))
+                    .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        return Err(TypespaceError::JsonValueTraits {
+                            type_id: schema_ref,
+                            missing,
+                        });
                     }
                 }
             }
