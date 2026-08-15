@@ -1,15 +1,43 @@
 # typespace
 
-A crate for modeling Rust types for code generation. Consumers build up a
-`TypespaceBuilder`, by inserting named `Type<Id>` values, call
-`finalize(settings, make_box_id)` to break cycles and propagate trait
-requirements, then call `render()` to emit a `TokenStream` of Rust type
-definitions, or `to_codespace()` to get a structured `codespace::Codespace`
-that can be merged with other output before rendering.
+Semantic model of Rust types for code generation.
 
-Serde default-value helpers are emitted into a `pub mod defaults` submodule
-and named `{snake_case_struct}__{field}` (double underscore separator to avoid
-collisions between e.g. `TypeName::foo` and `Type::name_foo`).
+## What it is
+
+- Models Rust types semantically: structs, enums, newtypes, tuple structs, type aliases, native/container types.
+- NOT a general Rust AST — just the vocabulary a schema-driven generator needs.
+
+## Workflow
+
+- Construct `Type<Id>` values; the caller picks the `Id` type.
+- Insert fully-named types into a `TypespaceBuilder`.
+- `finalize(settings, make_box_id)` validates the graph, breaks containment cycles by boxing, propagates trait requirements.
+- `to_codespace()` emits into a `codespace::Codespace`; from there, tokens or files.
+
+## Principles
+
+- Names come from outside; typespace never invents identifiers.
+- The only output is a `Codespace` — token emission is codespace's job.
+- Type-to-module layout is a settings axis with multiple strategies (everything in one mod; custom impls routed to submods such as a serde mod; ...).
+- Generated code is faithful to JSON semantics: absent vs `null`, tuple rest fields, newtype constraints enforced at deserialization.
+- Caller-input problems are `TypespaceError`; panics are typespace bugs.
+- Deterministic output.
+
+## Boundaries
+
+- No JSON Schema / OpenAPI / IDL awareness — that belongs to callers like typify.
+- No identifier generation, casing, or collision resolution.
+- No formatting.
+
+## Status
+
+- Pre-publication; API unstable.
+- Part of the typify/progenitor code-generation stack being extracted from oxidecomputer/typify.
+
+## Open questions
+
+- Trait/derive configurability: required-of-types vs emitted-derives — deliberately unresolved.
+- Whether generated code keeps the json-serde runtime dep or inlines helpers — to be settled before crates.io publish.
 
 ## TODO
 
@@ -51,9 +79,6 @@ collisions between e.g. `TypeName::foo` and `Type::name_foo`).
   operations, no `Display`). Once trait configurability is added these become
   part of the public settings surface; until then, consider keeping them
   `pub(crate)`.
-
-- **Add a proper error type** — `finalize` returns `Result<_, ()>` and several
-  methods panic instead of returning errors. Introduce a `TypespaceError` enum.
 
 ### Test coverage
 
