@@ -229,7 +229,7 @@ fn test_unit_struct() {
         .finalize(TypespaceSettings::default(), no_cycles)
         .expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_unit_struct.rs", ts.render())]
+    #[check_and_include("tests/output/test_unit_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let value = import::MyUnitStruct;
         assert_eq!(serde_json::to_string(&value).unwrap(), "\"<<+>>\"");
@@ -272,7 +272,7 @@ fn test_tuple_struct() {
         .finalize(TypespaceSettings::default(), no_cycles)
         .expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_tuple_struct.rs", ts.render())]
+    #[check_and_include("tests/output/test_tuple_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
         // Serialization: rest Vec<String> is flattened into the outer sequence.
         let value = import::MyTupleStruct("hello".to_string(), 42, vec![]);
@@ -408,7 +408,8 @@ fn test_enums() {
                 no_cycles,
             )
             .unwrap()
-            .render()
+            .to_codespace()
+            .into_stream()
     });
 
     let output = quote! { #( #outputs )* };
@@ -505,7 +506,7 @@ fn test_newtype_struct() {
         )
         .unwrap();
 
-    #[check_and_include("tests/output/test_newtype_struct.rs", ts.render())]
+    #[check_and_include("tests/output/test_newtype_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let v = import::MyString("hello".to_string());
         assert_eq!(serde_json::to_string(&v).unwrap(), r#""hello""#);
@@ -560,7 +561,7 @@ fn test_type_alias() {
         )
         .unwrap();
 
-    #[check_and_include("tests/output/test_type_alias.rs", ts.render())]
+    #[check_and_include("tests/output/test_type_alias.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let v: import::MyAlias = "hello".to_string();
         assert_eq!(v, "hello");
@@ -638,7 +639,7 @@ fn test_struct_serde_rename_flatten() {
         )
         .unwrap();
 
-    #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", ts.render())]
+    #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let v: import::Outer =
             serde_json::from_str(r#"{"my-field": "hello", "value": 42}"#).unwrap();
@@ -689,7 +690,7 @@ fn test_native_type() {
         )
         .unwrap();
 
-    #[check_and_include("tests/output/test_native_type.rs", ts.render())]
+    #[check_and_include("tests/output/test_native_type.rs", ts.to_codespace().into_stream())]
     fn inner() {}
 }
 
@@ -962,7 +963,7 @@ fn test_compound_field_types() {
         )
         .unwrap();
 
-    #[check_and_include("tests/output/test_compound_field_types.rs", ts.render())]
+    #[check_and_include("tests/output/test_compound_field_types.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let v: import::All = serde_json::from_value(serde_json::json!({
             "a_bool": true,
@@ -1160,7 +1161,7 @@ fn test_cycles() {
         .finalize(TypespaceSettings::default(), |_: &i32| next())
         .expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_cycles.rs", ts.render())]
+    #[check_and_include("tests/output/test_cycles.rs", ts.to_codespace().into_stream())]
     fn inner() {
         let value = serde_json::json!({
             "a": {

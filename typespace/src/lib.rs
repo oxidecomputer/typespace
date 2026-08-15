@@ -552,10 +552,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
         }
         .render()
     }
-
-    pub fn render(&self) -> proc_macro2::TokenStream {
-        self.to_codespace().into_stream()
-    }
 }
 
 pub(crate) struct TypespaceRenderer<'a, Id> {
