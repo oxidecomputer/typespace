@@ -4,22 +4,27 @@ Semantic model of Rust types for code generation.
 
 ## What it is
 
-- Models Rust types semantically: structs, enums, newtypes, tuple structs, type aliases, native/container types.
+- Models Rust types semantically: structs, enums, newtypes, tuple structs, type
+  aliases, native/container types.
 - NOT a general Rust AST--just the vocabulary a schema-driven generator needs.
 
 ## Workflow
 
 - Construct `Type<Id>` values; the caller picks the `Id` type.
 - Insert fully-named types into a `TypespaceBuilder`.
-- `finalize(settings, make_box_id)` validates the graph, breaks containment cycles by boxing, propagates trait requirements.
-- `to_codespace()` emits into a `codespace::Codespace`; from there, tokens or files.
+- `finalize(settings, make_box_id)` validates the graph, breaks containment
+  cycles by boxing, propagates trait requirements.
+- `to_codespace()` emits into a `codespace::Codespace`; from there, tokens or
+  files.
 
 ## Principles
 
 - Names come from outside; typespace never invents identifiers.
 - The only output is a `Codespace`--token emission is codespace's job.
-- Type-to-module layout is a settings axis with multiple strategies (everything in one mod; custom impls routed to submods such as a serde mod; ...).
-- Generated code is faithful to JSON semantics: absent vs `null`, tuple rest fields, newtype constraints enforced at deserialization.
+- Type-to-module layout is a settings axis with multiple strategies (everything
+  in one mod; custom impls routed to submods such as a serde mod; ...).
+- Generated code is faithful to JSON semantics: absent vs `null`, tuple rest
+  fields, newtype constraints enforced at deserialization.
 - Caller-input problems are `TypespaceError`; panics are typespace bugs.
 - Deterministic output.
 
@@ -32,12 +37,15 @@ Semantic model of Rust types for code generation.
 ## Status
 
 - Pre-publication; API unstable.
-- Part of the typify/progenitor code-generation stack being extracted from oxidecomputer/typify.
+- Part of the typify/progenitor code-generation stack being extracted from
+  oxidecomputer/typify.
 
 ## Open questions
 
-- Trait/derive configurability: required-of-types vs emitted-derives--deliberately unresolved.
-- Whether generated code keeps the json-serde runtime dep or inlines helpers--to be settled before crates.io publish.
+- Trait/derive configurability: required-of-types vs
+  emitted-derives--deliberately unresolved.
+- Whether generated code keeps the json-serde runtime dep or inlines helpers--to
+  be settled before crates.io publish.
 
 ## TODO
 
