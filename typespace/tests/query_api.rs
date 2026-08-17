@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use quote::{format_ident, quote};
 use typespace::{
     no_cycles, EnumTagType, EnumVariant, StructProperty, StructPropertySerde, StructPropertyState,

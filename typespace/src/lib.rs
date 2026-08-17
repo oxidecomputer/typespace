@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 mod error;
 mod type_alias;
 mod type_common;

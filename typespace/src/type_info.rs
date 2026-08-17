@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use proc_macro2::TokenStream;
 use quote::quote;
 

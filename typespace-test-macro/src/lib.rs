@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use std::str::FromStr;
 
 use proc_macro::TokenStream;

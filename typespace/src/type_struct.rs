@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use log::debug;
 use quote::{format_ident, quote};
 use syn::Ident;

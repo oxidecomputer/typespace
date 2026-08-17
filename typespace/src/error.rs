@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use crate::TypespaceTrait;
 
 /// Errors that arise from an invalid type graph provided to the

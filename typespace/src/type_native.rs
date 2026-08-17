@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use crate::{TypespaceTrait, TypespaceTraitSet};
 
 #[derive(Debug, Clone)]

@@ -1,3 +1,5 @@
+// Copyright 2026 Oxide Computer Company
+
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::{
@@ -989,7 +991,7 @@ fn test_compound_field_types() {
         assert_eq!(*v.a_box_string, "boxed");
         assert_eq!(*v.a_box_vec, vec!["p", "q"]);
 
-        // All fields omitted - each should take its intrinsic default.
+        // All fields omitted--each should take its intrinsic default.
         let d: import::Defaults = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(d.a_bool, false);
         assert_eq!(d.an_int, 0u32);
