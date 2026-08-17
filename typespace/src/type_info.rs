@@ -180,7 +180,7 @@ pub enum TypeDetails<'a, Id> {
     String,
 }
 
-// ── Struct view ──────────────────────────────────────────────────────────────
+// -- Struct view --------------------------------------------------------------
 
 /// A view of a struct type's properties.
 pub struct TypeStructInfo<'a, Id> {
@@ -217,7 +217,7 @@ pub struct TypeStructPropInfo<'a, Id> {
     pub type_id: Id,
 }
 
-// ── Enum view ─────────────────────────────────────────────────────────────────
+// -- Enum view -----------------------------------------------------------------
 
 /// A view of an enum type's variants.
 pub struct TypeEnumInfo<'a, Id> {
@@ -271,7 +271,7 @@ pub enum TypeEnumVariant<Id> {
     Struct(Vec<(String, Id)>),
 }
 
-// ── Newtype view ──────────────────────────────────────────────────────────────
+// -- Newtype view --------------------------------------------------------------
 
 /// A view of a newtype struct's inner type.
 pub struct TypeNewtypeInfo<'a, Id> {

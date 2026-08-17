@@ -163,7 +163,7 @@ fn test_struct_field_serde() {
     fn inner() {
         use serde::Deserialize;
 
-        // optional_string absent → None
+        // optional_string absent -> None
         let v: import::ConflatedAsAbsent =
             serde_json::from_str(r#"{"required_option": null}"#).unwrap();
         assert!(v.optional_string.is_none());
@@ -171,12 +171,12 @@ fn test_struct_field_serde() {
         assert_eq!(v.peanut_string, "peanuts");
         assert_eq!(v.peanut_option, Some("peanuts".to_string()));
 
-        // optional_string present → Some
+        // optional_string present -> Some
         let v: import::ConflatedAsAbsent =
             serde_json::from_str(r#"{"required_option": null, "optional_string": "hi"}"#).unwrap();
         assert_eq!(v.optional_string, Some("hi".to_string()));
 
-        // DoubleOption: optional_option absent → None, present-null → Some(None)
+        // DoubleOption: optional_option absent -> None, present-null -> Some(None)
         let v: import::DoubleOption = serde_json::from_str(r#"{"required_option": null}"#).unwrap();
         assert!(v.optional_option.is_none());
 
@@ -989,7 +989,7 @@ fn test_compound_field_types() {
         assert_eq!(*v.a_box_string, "boxed");
         assert_eq!(*v.a_box_vec, vec!["p", "q"]);
 
-        // All fields omitted — each should take its intrinsic default.
+        // All fields omitted - each should take its intrinsic default.
         let d: import::Defaults = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(d.a_bool, false);
         assert_eq!(d.an_int, 0u32);
