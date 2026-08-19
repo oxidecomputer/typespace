@@ -141,6 +141,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
         let trait_ = match impl_name {
             TypeSpaceImpl::Display => TypespaceTrait::Display,
             TypeSpaceImpl::FromStr => TypespaceTrait::FromStr,
+            TypeSpaceImpl::Eq => TypespaceTrait::Eq,
+            TypeSpaceImpl::Ord => TypespaceTrait::Ord,
+            TypeSpaceImpl::Hash => TypespaceTrait::Hash,
         };
         match self.typ {
             build::Type::Native(n) => n.impls.contains(&trait_),

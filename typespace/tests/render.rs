@@ -10,7 +10,8 @@ use typespace::{
     },
     no_cycles,
     settings::{OptionalNullable, Settings, Std},
-    TypespaceBuilder, TypespaceError,
+    OffenderReason, RequirementOrigin, TypespaceBuilder, TypespaceError, TypespaceTrait,
+    TypespaceTraitSet,
 };
 use typespace_test_macro::check_and_include;
 
@@ -1011,14 +1012,33 @@ fn test_map_key_struct_with_float() {
         .insert("map".to_string(), Type::Map(key_id, value_id))
         .unwrap();
 
-    let Err(err) = builder.finalize(no_cycles) else {
-        panic!("expected finalize to fail");
+    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
     };
-    assert!(matches!(
-        err,
-        TypespaceError::FloatTraits { ref type_id, ref name, .. }
-            if type_id == "float" && name == "f64"
-    ));
+
+    // Of the map-key requirements (Eq, PartialEq, Ord, PartialOrd), floats
+    // can satisfy the partial comparisons but not Eq and Ord.
+    assert_eq!(conflicts.len(), 2);
+    for conflict in &conflicts {
+        assert_eq!(conflict.offender, "float");
+        assert!(matches!(
+            &conflict.origin,
+            RequirementOrigin::MapKey(id) if id == "map"
+        ));
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::Primitive { type_name } if type_name == "f64"
+        ));
+    }
+    assert!(matches!(conflicts[0].required, TypespaceTrait::Eq));
+    assert!(matches!(conflicts[1].required, TypespaceTrait::Ord));
+
+    assert_eq!(
+        conflicts[0].to_string(),
+        "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
+         required because `key` passes the requirement to its field `value`\n    \
+         required because keys of map `map` must implement `Eq`"
+    );
 }
 
 // Inserting two types with the same ID is a caller error.
@@ -1486,14 +1506,22 @@ fn test_trait_impls_conflict() {
         )
         .unwrap();
 
-    let Err(err) = builder.finalize(no_cycles) else {
-        panic!("expected finalize to fail");
+    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
     };
-    assert!(matches!(
-        err,
-        TypespaceError::FloatTraits { ref type_id, ref name, .. }
-            if type_id == "float" && name == "f64"
-    ));
+
+    // The requested Eq propagates into Holder's field and fails there.
+    assert_eq!(conflicts.len(), 1);
+    let conflict = &conflicts[0];
+    assert!(matches!(conflict.required, TypespaceTrait::Eq));
+    assert!(matches!(conflict.origin, RequirementOrigin::Requested));
+    assert_eq!(conflict.offender, "float");
+    assert_eq!(
+        conflict.to_string(),
+        "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
+         required because `Holder` passes the requirement to its field `value`\n    \
+         required because settings request `Eq` for all types"
+    );
 }
 
 // An extra derive that isn't a valid Rust path is rejected at finalize.
@@ -1570,4 +1598,160 @@ fn test_json_serde_crate_override() {
         assert_eq!(r.0, "head");
         assert_eq!(r.1, vec!["a", "b"]);
     }
+}
+
+// The acceptance test for conflict path rendering: a set whose elements are
+// structs containing Vec<f64>. The comparison requirements imposed on set
+// elements propagate through the struct and the vec to the float, and the
+// reported chain names every hop.
+#[test]
+fn test_set_element_float_path() {
+    let mut builder = TypespaceBuilder::default();
+
+    let float_id = "float".to_string();
+    builder
+        .insert(float_id.clone(), Type::Float("f64".to_string()))
+        .unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec(float_id.clone()))
+        .unwrap();
+
+    let sample_id = "Sample".to_string();
+    builder
+        .insert(
+            sample_id.clone(),
+            Type::Struct(Struct::new(
+                "Sample",
+                None,
+                vec![StructProperty::new(
+                    format_ident!("values"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Required,
+                    None,
+                    vec_id.clone(),
+                )],
+                false,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert("set".to_string(), Type::Set(sample_id.clone()))
+        .unwrap();
+
+    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
+    };
+
+    assert_eq!(conflicts.len(), 2);
+    assert!(matches!(conflicts[0].required, TypespaceTrait::Eq));
+    assert!(matches!(conflicts[1].required, TypespaceTrait::Ord));
+    assert_eq!(
+        conflicts[0].to_string(),
+        "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
+         required because `vec` passes the requirement to its element type\n    \
+         required because `Sample` passes the requirement to its field `values`\n    \
+         required because elements of set `set` must implement `Eq`"
+    );
+}
+
+// A native type used as a map key must declare the comparison traits; a
+// missing declaration is a reportable, fixable conflict rather than a
+// panic. validate() reports the same conflicts without consuming the
+// builder.
+#[test]
+fn test_native_map_key() {
+    // chrono::NaiveDate does implement Ord and friends, but this consumer
+    // neglected to declare them.
+    let undeclared = [
+        TypespaceTrait::Clone,
+        TypespaceTrait::Debug,
+        TypespaceTrait::Serialize,
+        TypespaceTrait::Deserialize,
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+    ]
+    .into_iter()
+    .collect::<TypespaceTraitSet>();
+
+    let mut builder = TypespaceBuilder::default();
+    builder
+        .insert(
+            "date".to_string(),
+            Type::Native(Native::new("chrono::NaiveDate", undeclared, Vec::new())),
+        )
+        .unwrap();
+    builder.insert("value".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "map".to_string(),
+            Type::Map("date".to_string(), "value".to_string()),
+        )
+        .unwrap();
+
+    // validate() reports the conflicts and leaves the builder usable.
+    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.validate() else {
+        panic!("expected validate to fail with trait conflicts");
+    };
+    assert_eq!(conflicts.len(), 4);
+    for conflict in &conflicts {
+        assert_eq!(conflict.offender, "date");
+        assert!(matches!(
+            &conflict.origin,
+            RequirementOrigin::MapKey(id) if id == "map"
+        ));
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::NativeMissingImpl { type_name } if type_name == "chrono::NaiveDate"
+        ));
+        assert!(conflict.path.is_empty());
+    }
+    assert_eq!(
+        conflicts[0].to_string(),
+        "native type `chrono::NaiveDate` (id `date`) does not declare the \
+         required trait `Eq`\n    \
+         required because keys of map `map` must implement `Eq`"
+    );
+
+    // finalize reports the same failure.
+    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
+    };
+    assert_eq!(conflicts.len(), 4);
+
+    // Declaring the comparison impls fixes the conflict.
+    let declared = [
+        TypespaceTrait::Clone,
+        TypespaceTrait::Debug,
+        TypespaceTrait::Serialize,
+        TypespaceTrait::Deserialize,
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+        TypespaceTrait::Eq,
+        TypespaceTrait::PartialEq,
+        TypespaceTrait::Ord,
+        TypespaceTrait::PartialOrd,
+    ]
+    .into_iter()
+    .collect::<TypespaceTraitSet>();
+
+    let mut builder = TypespaceBuilder::default();
+    builder
+        .insert(
+            "date".to_string(),
+            Type::Native(Native::new("chrono::NaiveDate", declared, Vec::new())),
+        )
+        .unwrap();
+    builder.insert("value".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "map".to_string(),
+            Type::Map("date".to_string(), "value".to_string()),
+        )
+        .unwrap();
+
+    builder.validate().expect("validate passes");
+    builder.finalize(no_cycles).expect("finalize passes");
 }

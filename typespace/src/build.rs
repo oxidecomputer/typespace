@@ -225,6 +225,82 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
+    /// The contained children paired with the relation reaching each.
+    ///
+    /// Mirrors [`Type::contained_children_mut`]--the same children, in
+    /// the same order--labeled for trait-requirement propagation paths;
+    /// keep the two functions in sync. Container types that trait
+    /// propagation handles directly (box, vec, map, set) report no
+    /// children here, exactly as `contained_children_mut` does.
+    pub(crate) fn contained_children_related(&self) -> Vec<(crate::Relation, Id)> {
+        use crate::Relation;
+        match self {
+            Type::Enum(Enum { variants, .. }) => {
+                let mut out = Vec::new();
+                for variant in variants {
+                    let relation = || Relation::Variant(variant.rust_name.clone());
+                    match &variant.details {
+                        VariantDetails::Unit => {}
+                        VariantDetails::Item(id) => out.push((relation(), id.clone())),
+                        VariantDetails::Tuple(ids) => {
+                            out.extend(ids.iter().map(|id| (relation(), id.clone())));
+                        }
+                        VariantDetails::Struct(props) => {
+                            out.extend(props.iter().map(|prop| (relation(), prop.type_id.clone())));
+                        }
+                    }
+                }
+                out
+            }
+            Type::Struct(Struct { properties, .. }) => properties
+                .iter()
+                .map(|prop| {
+                    (
+                        Relation::Field(prop.rust_name.to_string()),
+                        prop.type_id.clone(),
+                    )
+                })
+                .collect(),
+
+            Type::UnitStruct(_) => Vec::new(),
+            Type::TupleStruct(TupleStruct { fields, rest, .. }) => {
+                let mut out = fields
+                    .iter()
+                    .map(|id| (Relation::Element, id.clone()))
+                    .collect::<Vec<_>>();
+                if let Some(rest) = rest {
+                    out.push((Relation::Element, rest.clone()));
+                }
+                out
+            }
+            Type::NewtypeStruct(NewtypeStruct { inner, .. }) => {
+                vec![(Relation::Inner, inner.clone())]
+            }
+            Type::TypeAlias(alias_info) => {
+                vec![(Relation::Target, alias_info.target.clone())]
+            }
+
+            Type::Option(id) => vec![(Relation::Element, id.clone())],
+            Type::Array(id, _) => vec![(Relation::Element, id.clone())],
+            Type::Tuple(items) => items
+                .iter()
+                .map(|id| (Relation::Element, id.clone()))
+                .collect(),
+
+            Type::Native(_) => Vec::new(),
+            Type::Box(_)
+            | Type::Vec(_)
+            | Type::Map(_, _)
+            | Type::Set(_)
+            | Type::Unit
+            | Type::Boolean
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String
+            | Type::JsonValue => Vec::new(),
+        }
+    }
+
     /// Whether this is a named type--one that renders as its own item
     /// (struct, enum, unit struct, tuple struct, newtype struct, or type
     /// alias)--as opposed to a built-in or container type. Named types

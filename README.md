@@ -107,13 +107,13 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 
 ## Future direction
 
-- `push_traits` is incomplete: `Display`/`FromStr` requirements on
-  container types hit `todo!()`, and a native type missing a required
-  trait is not yet a structured error.
-- Trait propagation does not account for container overrides: a map
-  key requires `Ord` even when the configured map type is a hash map,
-  and a set imposes no element requirements even when the configured
-  set type is an ordered set.
+- Trait propagation does not account for container overrides: map keys
+  and set elements require the ordered-comparison traits (`Eq`, `Ord`,
+  and friends) regardless of the configured container types, though a
+  hash map wants `Hash` and `Eq` instead.
+- Trait conflicts are reported exhaustively but without root-cause
+  deduplication: one offending type reachable along many requirement
+  paths produces one conflict per path.
 - Newtype constraints: `build::NewtypeConstraints` is accepted but not yet
   rendered; constraints should be enforced at deserialization.
 - `build::TypeCommon::default` is never rendered; it should drive a generated
@@ -123,8 +123,6 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
   serde mod; ...).
 - Whether generated code keeps the json-serde runtime dep or inlines
   helpers--to be settled before crates.io publish.
-- Test coverage for trait validation error cases beyond
-  float-as-map-key.
 
 ## Status
 

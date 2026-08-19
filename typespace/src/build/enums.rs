@@ -118,14 +118,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         let name_ident = format_ident!("{name}");
 
         // Serialize and Deserialize are always derived; propagated traits
-        // are realized as additional derives.
+        // are realized as additional derives. Default is excluded: its
+        // derive form requires a #[default] variant attribute, so a
+        // required Default on an enum awaits a hand-written impl.
         let derive_attr = typespace.render_derives(
             &[
                 quote! { ::serde::Deserialize },
                 quote! { ::serde::Serialize },
             ],
             traits,
-            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
+            &[
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+                TypespaceTrait::Default,
+            ],
         );
 
         quote! {

@@ -17,10 +17,12 @@ where
         type_id: Id,
     },
 
-    /// A named type (struct, enum, newtype struct, unit struct, tuple
-    /// struct, or type alias) was inserted with an empty name. Names come
-    /// from the caller; rendering interpolates them into identifiers and
-    /// cannot tolerate an empty string.
+    /// A named type was inserted with an empty name.
+    ///
+    /// Applies to structs, enums, newtype structs, unit structs, tuple
+    /// structs, and type aliases. Names come from the caller; rendering
+    /// interpolates them into identifiers and cannot tolerate an empty
+    /// string.
     #[error("the type with id `{type_id}` has an empty name")]
     EmptyTypeName {
         /// The ID of the type whose name is empty.
@@ -53,33 +55,193 @@ where
         child_id: Id,
     },
 
-    /// A floating-point type is required to implement traits that
-    /// floating-point types cannot implement, for example because it is
-    /// used--directly or transitively--as a map key.
-    #[error(
-        "the float type `{name}` with id `{type_id}` is required to \
-         implement {missing:?}, which floating-point types cannot implement"
-    )]
-    FloatTraits {
-        /// The ID of the offending float type.
-        type_id: Id,
-        /// The Rust name of the float type (e.g. `f64`).
-        name: String,
-        /// The required traits that floating-point types cannot implement.
-        missing: Vec<TypespaceTrait>,
+    /// Trait requirements that types in the graph cannot satisfy.
+    ///
+    /// Every conflict found during propagation is collected; the list
+    /// is not deduplicated, so one root cause (a float inside a widely
+    /// shared type, say) can appear once per requirement path that
+    /// reaches it. Collapsing such cascades to their root cause is a
+    /// planned improvement.
+    #[error("{}", format_conflicts(conflicts))]
+    TraitConflicts {
+        /// The conflicts, in the order propagation found them.
+        conflicts: Vec<TraitConflict<Id>>,
     },
+}
 
-    /// A JSON value type is required to implement traits that
-    /// `serde_json::Value` does not implement, for example because it is
-    /// used--directly or transitively--as a map key.
-    #[error(
-        "the JSON value type with id `{type_id}` is required to implement \
-         {missing:?}, which `serde_json::Value` does not implement"
-    )]
-    JsonValueTraits {
-        /// The ID of the offending JSON value type.
-        type_id: Id,
-        /// The required traits that `serde_json::Value` does not implement.
-        missing: Vec<TypespaceTrait>,
+fn format_conflicts<Id: std::fmt::Display>(conflicts: &[TraitConflict<Id>]) -> String {
+    conflicts
+        .iter()
+        .map(|conflict| conflict.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A trait requirement that a type cannot satisfy.
+///
+/// Produced during finalization when a requirement--structural (a map
+/// key must be `Ord`) or requested via settings--propagates to a type
+/// that cannot provide the trait. The conflict records where the
+/// requirement came from ([`RequirementOrigin`]), every propagation hop
+/// it took ([`PathStep`]), the type that failed (`offender`), and why
+/// it failed ([`OffenderReason`]). Its `Display` form renders the chain
+/// one line per hop, innermost first.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct TraitConflict<Id> {
+    /// The trait that could not be satisfied.
+    pub required: TypespaceTrait,
+    /// Where the requirement originated.
+    pub origin: RequirementOrigin<Id>,
+    /// The propagation hops from the origin to the offender, in
+    /// propagation order (the origin's requirement target first).
+    pub path: Vec<PathStep<Id>>,
+    /// The ID of the type that cannot satisfy the requirement.
+    pub offender: Id,
+    /// Why the offender cannot satisfy the requirement.
+    pub reason: OffenderReason,
+}
+
+impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            required,
+            origin,
+            path,
+            offender,
+            reason,
+        } = self;
+        match reason {
+            OffenderReason::Primitive { type_name } => write!(
+                f,
+                "type `{type_name}` (id `{offender}`) cannot implement \
+                 the required trait `{required}`"
+            )?,
+            OffenderReason::NativeMissingImpl { type_name } => write!(
+                f,
+                "native type `{type_name}` (id `{offender}`) does not \
+                 declare the required trait `{required}`"
+            )?,
+        }
+        // Render the chain innermost first, rustc style: each hop names
+        // the type that passed the requirement along and the relation it
+        // used; the origin comes last.
+        for PathStep { type_id, relation } in path.iter().rev() {
+            write!(
+                f,
+                "\n    required because `{type_id}` passes the requirement \
+                 to {relation}"
+            )?;
+        }
+        match origin {
+            RequirementOrigin::MapKey(id) => {
+                write!(
+                    f,
+                    "\n    required because keys of map `{id}` must \
+                     implement `{required}`"
+                )
+            }
+            RequirementOrigin::SetElement(id) => {
+                write!(
+                    f,
+                    "\n    required because elements of set `{id}` must \
+                     implement `{required}`"
+                )
+            }
+            RequirementOrigin::Requested => {
+                write!(
+                    f,
+                    "\n    required because settings request `{required}` \
+                     for all types"
+                )
+            }
+        }
+    }
+}
+
+/// Where a trait requirement originated.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum RequirementOrigin<Id> {
+    /// The requirement applies to the key type of the map with this ID.
+    MapKey(Id),
+    /// The requirement applies to the element type of the set with this
+    /// ID.
+    SetElement(Id),
+    /// The requirement was requested for all named types via
+    /// [`Settings::with_trait_impl`](crate::settings::Settings::with_trait_impl).
+    Requested,
+}
+
+/// One hop in a trait requirement's propagation path.
+///
+/// Reads as: the type with `type_id` passed the requirement along to
+/// the child reached via `relation`.
+#[derive(Debug, Clone)]
+pub struct PathStep<Id> {
+    /// The type the requirement passed through.
+    pub type_id: Id,
+    /// How the requirement left that type.
+    pub relation: Relation,
+}
+
+/// The relation by which a trait requirement moves from a type to one
+/// of the types it contains.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Relation {
+    /// A struct property with the given Rust name.
+    Field(String),
+    /// An enum variant with the given Rust name; covers the variant's
+    /// payload whether it is an item, a tuple, or a struct-shaped set
+    /// of fields.
+    Variant(String),
+    /// The element type of a vec, set, array, tuple, or option.
+    Element,
+    /// The key type of a map.
+    Key,
+    /// The value type of a map.
+    Value,
+    /// The type inside a box.
+    Boxed,
+    /// The type inside a newtype struct.
+    Inner,
+    /// The target of a type alias.
+    Target,
+}
+
+impl std::fmt::Display for Relation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Relation::Field(name) => write!(f, "its field `{name}`"),
+            Relation::Variant(name) => write!(f, "its variant `{name}`"),
+            Relation::Element => write!(f, "its element type"),
+            Relation::Key => write!(f, "its key type"),
+            Relation::Value => write!(f, "its value type"),
+            Relation::Boxed => write!(f, "its boxed type"),
+            Relation::Inner => write!(f, "its inner type"),
+            Relation::Target => write!(f, "its target type"),
+        }
+    }
+}
+
+/// Why a type cannot satisfy a trait requirement.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum OffenderReason {
+    /// A built-in type that is incapable of implementing the trait: a
+    /// float required to be `Ord`, a JSON value required to be `Hash`,
+    /// or a container required to be `Display`.
+    Primitive {
+        /// The rendered name of the built-in type (`f64`, say).
+        type_name: String,
+    },
+    /// A native type that does not list the trait among its declared
+    /// impls. Unlike [`OffenderReason::Primitive`], this is fixable:
+    /// declare the impl on the [`Native`](crate::build::Native) if the
+    /// underlying Rust type provides it.
+    NativeMissingImpl {
+        /// The Rust type path of the native type.
+        type_name: String,
     },
 }

@@ -63,7 +63,9 @@ pub mod settings;
 pub(crate) mod value_tokens;
 pub mod view;
 
-pub use error::TypespaceError;
+pub use error::{
+    OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict, TypespaceError,
+};
 
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque};
 
@@ -132,9 +134,32 @@ pub enum TypespaceTrait {
     Ord,
     PartialOrd,
     Hash,
+    Default,
+    /// A `FromStr` implementation that cannot fail for any input string.
+    ///
+    /// This is a marker, not a Rust trait: `String` satisfies it, and a
+    /// native type may declare it when its `FromStr` accepts every
+    /// string. Consumers use it to decide, for example, whether an
+    /// untagged enum with a string variant can implement `FromStr`
+    /// without a failure case. It is never emitted as a derive.
+    FromStringIrrefutable,
 }
 
 impl TypespaceTrait {
+    /// Whether the trait can be realized with a std-style derive.
+    ///
+    /// `Display` and `FromStr` have no derive form, and
+    /// `FromStringIrrefutable` is a marker rather than a trait; none of
+    /// them may appear in a derive attribute.
+    pub(crate) fn is_derivable(&self) -> bool {
+        !matches!(
+            self,
+            TypespaceTrait::Display
+                | TypespaceTrait::FromStr
+                | TypespaceTrait::FromStringIrrefutable
+        )
+    }
+
     pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
         if settings.std == Std::FullyQualified {
             match self {
@@ -150,6 +175,10 @@ impl TypespaceTrait {
                 TypespaceTrait::Hash => quote! { ::std::hash::Hash },
                 TypespaceTrait::Display => quote! { ::std::fmt::Display },
                 TypespaceTrait::FromStr => quote! { ::std::str::FromStr },
+                TypespaceTrait::Default => quote! { ::std::default::Default },
+                TypespaceTrait::FromStringIrrefutable => {
+                    unreachable!("markers are filtered by is_derivable")
+                }
             }
         } else {
             match self {
@@ -165,8 +194,34 @@ impl TypespaceTrait {
                 TypespaceTrait::Hash => quote! { Hash },
                 TypespaceTrait::Display => quote! { Display },
                 TypespaceTrait::FromStr => quote! { FromStr },
+                TypespaceTrait::Default => quote! { Default },
+                TypespaceTrait::FromStringIrrefutable => {
+                    unreachable!("markers are filtered by is_derivable")
+                }
             }
         }
+    }
+}
+
+impl std::fmt::Display for TypespaceTrait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            TypespaceTrait::Clone => "Clone",
+            TypespaceTrait::Debug => "Debug",
+            TypespaceTrait::Serialize => "Serialize",
+            TypespaceTrait::Deserialize => "Deserialize",
+            TypespaceTrait::JsonSchema => "JsonSchema",
+            TypespaceTrait::Display => "Display",
+            TypespaceTrait::FromStr => "FromStr",
+            TypespaceTrait::Eq => "Eq",
+            TypespaceTrait::PartialEq => "PartialEq",
+            TypespaceTrait::Ord => "Ord",
+            TypespaceTrait::PartialOrd => "PartialOrd",
+            TypespaceTrait::Hash => "Hash",
+            TypespaceTrait::Default => "Default",
+            TypespaceTrait::FromStringIrrefutable => "FromStringIrrefutable",
+        };
+        f.write_str(name)
     }
 }
 
@@ -220,11 +275,22 @@ impl TypespaceTraitSet {
 }
 
 /// Identifies a trait implementation that typespace is aware of.
+///
+/// This is the query vocabulary for
+/// [`view::Type::has_impl`](crate::view::Type::has_impl). The
+/// comparison and hashing entries let a consumer ask whether a type is
+/// usable as a map key--and let converters declare that capability for
+/// native types (via [`build::Native`] impls) so that a native type
+/// used as a map key without declaring `Ord` is a reportable conflict
+/// rather than a mystery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TypeSpaceImpl {
     Display,
     FromStr,
+    Eq,
+    Ord,
+    Hash,
 }
 
 /// Accumulates the type graph prior to finalization.
@@ -296,6 +362,58 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         self.types.contains_key(id)
     }
 
+    /// Validate the type graph without consuming the builder.
+    ///
+    /// Runs the same checks as [`finalize`](Self::finalize)--settings
+    /// validity, dangling references, and trait-requirement
+    /// propagation--and reports the same errors, including every
+    /// [`TraitConflict`] collected. Containment cycles are not broken
+    /// (that requires minting box IDs), so conflict paths lack the
+    /// `Boxed` hops that finalization would introduce; requirements
+    /// propagate identically either way because a box only forwards
+    /// them.
+    pub fn validate(&self) -> Result<(), TypespaceError<Id>> {
+        self.check_derives()?;
+        self.check_references()?;
+
+        // Trait propagation writes into each type's built state, so run
+        // it on a disposable copy of the graph.
+        let mut types = self.types.clone();
+        build_commons(&mut types);
+        push_traits(&mut types, &self.settings)?;
+        Ok(())
+    }
+
+    /// Reject unparseable extra derives so that rendering--which is
+    /// infallible--can rely on them parsing.
+    fn check_derives(&self) -> Result<(), TypespaceError<Id>> {
+        for derive in &self.settings.extra_derives {
+            if let Err(err) = syn::parse_str::<syn::Path>(derive) {
+                return Err(TypespaceError::InvalidDerive {
+                    derive: derive.clone(),
+                    message: err.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify that every type ID referenced by a type is actually
+    /// present; later steps rely on lookups of child IDs succeeding.
+    fn check_references(&self) -> Result<(), TypespaceError<Id>> {
+        for (type_id, typ) in &self.types {
+            for child_id in typ.children() {
+                if !self.types.contains_key(&child_id) {
+                    return Err(TypespaceError::UnknownTypeId {
+                        type_id: type_id.clone(),
+                        child_id,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Finalize the typespace.
     ///
     /// Verifies that every ID referenced by a type names an inserted
@@ -303,8 +421,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// [`TypespaceError::UnknownTypeId`]), breaks containment cycles by
     /// inserting `Box` types, and propagates trait requirements through
     /// the graph--a type used as a map key must be `Ord`, and so must
-    /// everything it contains. A trait requirement that a type cannot
-    /// satisfy is an error naming the offending ID.
+    /// everything it contains. Trait requirements that types cannot
+    /// satisfy are collected--all of them, not just the first--into
+    /// [`TypespaceError::TraitConflicts`].
     ///
     /// `make_box_id` is called to generate a fresh ID for each `Box<T>`
     /// wrapper inserted to break a containment cycle. The argument is the ID
@@ -319,34 +438,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // 2. Propagate trait impls
         // 3. Type-specific finalization
 
+        self.check_derives()?;
+        self.check_references()?;
+
         let Self {
             mut types,
             settings,
         } = self;
-
-        // Reject unparseable extra derives here so that rendering--which
-        // is infallible--can rely on them parsing.
-        for derive in &settings.extra_derives {
-            if let Err(err) = syn::parse_str::<syn::Path>(derive) {
-                return Err(TypespaceError::InvalidDerive {
-                    derive: derive.clone(),
-                    message: err.to_string(),
-                });
-            }
-        }
-
-        // Verify that every type ID referenced by another type is actually
-        // present; subsequent steps rely on lookups of child IDs succeeding.
-        for (type_id, typ) in &types {
-            for child_id in typ.children() {
-                if !types.contains_key(&child_id) {
-                    return Err(TypespaceError::UnknownTypeId {
-                        type_id: type_id.clone(),
-                        child_id,
-                    });
-                }
-            }
-        }
 
         build_commons(&mut types);
         break_cycles(&mut types, make_box_id);
@@ -478,8 +576,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     /// `base` holds the derives a shape always emits, first and
     /// verbatim. The type's propagated trait set follows, except for
     /// the traits in `skip`--those covered by `base` or realized as
-    /// hand-written impls--and for `Display` and `FromStr`, which have
-    /// no derive form. Extra derives from
+    /// hand-written impls--and for the traits with no derive form (see
+    /// [`TypespaceTrait::is_derivable`]). Extra derives from
     /// [`settings::Settings::with_derive`] come last, parsed but
     /// otherwise emitted as given. Returns `None` when there is nothing
     /// to derive.
@@ -494,7 +592,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             traits
                 .iter()
                 .filter(|tt| !skip.contains(tt))
-                .filter(|tt| !matches!(tt, TypespaceTrait::Display | TypespaceTrait::FromStr))
+                .filter(|tt| tt.is_derivable())
                 .map(|tt| tt.render(self.settings)),
         );
         derives.extend(self.settings.extra_derives.iter().map(|derive| {
@@ -1060,28 +1158,47 @@ fn push_traits<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    /// A pending trait requirement: `traits` are required of `target`,
+    /// tracing back to `origin` along the hops in `path`.
+    struct WorkItem<Id> {
+        target: Id,
+        traits: TypespaceTraitSet,
+        origin: RequirementOrigin<Id>,
+        path: Vec<PathStep<Id>>,
+    }
+
+    // The traits demanded of a type used for lookup: as a map key or a
+    // set element.
+    let lookup_traits = || {
+        [
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+            TypespaceTrait::Ord,
+            TypespaceTrait::PartialOrd,
+        ]
+        .into_iter()
+        .collect::<TypespaceTraitSet>()
+    };
+
     // First, look through all types to determine what traits are required of
     // various children.
     let mut work = types
-        .values()
-        .filter_map(|ty| match ty {
+        .iter()
+        .filter_map(|(type_id, ty)| match ty {
             // TODO 3/31/2026
             // need to check map settings
-            Type::Map(key_schema_ref, _) => Some((
-                key_schema_ref.clone(),
-                [
-                    TypespaceTrait::Eq,
-                    TypespaceTrait::PartialEq,
-                    TypespaceTrait::Ord,
-                    TypespaceTrait::PartialOrd,
-                ]
-                .into_iter()
-                .collect::<TypespaceTraitSet>(),
-            )),
-            // TODO 3/31/2026
-            // This is going to depend on what specific type we're using for a
-            // set.
-            // Type::Set(_) => todo!(),
+            Type::Map(key_schema_ref, _) => Some(WorkItem {
+                target: key_schema_ref.clone(),
+                traits: lookup_traits(),
+                origin: RequirementOrigin::MapKey(type_id.clone()),
+                path: Vec::new(),
+            }),
+            Type::Set(element_schema_ref) => Some(WorkItem {
+                target: element_schema_ref.clone(),
+                traits: lookup_traits(),
+                origin: RequirementOrigin::SetElement(type_id.clone()),
+                path: Vec::new(),
+            }),
             _ => None,
         })
         .collect::<VecDeque<_>>();
@@ -1096,9 +1213,49 @@ where
             types
                 .iter()
                 .filter(|(_, ty)| ty.is_named())
-                .map(|(type_id, _)| (type_id.clone(), settings.trait_impls.clone())),
+                .map(|(type_id, _)| WorkItem {
+                    target: type_id.clone(),
+                    traits: settings.trait_impls.clone(),
+                    origin: RequirementOrigin::Requested,
+                    path: Vec::new(),
+                }),
         );
     }
+
+    let mut conflicts = Vec::<TraitConflict<Id>>::new();
+
+    // Split `traits` into those present in `unsupported` and the rest.
+    let split = |traits: &TypespaceTraitSet, unsupported: &[TypespaceTrait]| {
+        let bad = traits
+            .iter()
+            .filter(|tt| unsupported.contains(tt))
+            .copied()
+            .collect::<Vec<_>>();
+        let rest = traits
+            .iter()
+            .filter(|tt| !unsupported.contains(tt))
+            .copied()
+            .collect::<TypespaceTraitSet>();
+        (bad, rest)
+    };
+
+    // Drop Default from a requirement set: used at containers (vec, map,
+    // set, option) that implement Default regardless of their element
+    // types.
+    let strip_default = |traits: TypespaceTraitSet| {
+        traits
+            .iter()
+            .filter(|tt| !matches!(tt, TypespaceTrait::Default))
+            .copied()
+            .collect::<TypespaceTraitSet>()
+    };
+
+    // Traits no container can provide.
+    const CONTAINER_UNSUPPORTED: &[TypespaceTrait] = &[
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+        TypespaceTrait::FromStringIrrefutable,
+    ];
 
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means adding the
@@ -1108,8 +1265,35 @@ where
     // can't), we'll produce an error. We don't stop on the first failure, but
     // want to identify as many, distinct failures as is reasonable and as
     // would be useful for a consumer.
-    while let Some((schema_ref, traits)) = work.pop_front() {
-        let ty = types.get_mut(&schema_ref).unwrap();
+    while let Some(WorkItem {
+        target,
+        traits,
+        origin,
+        path,
+    }) = work.pop_front()
+    {
+        let ty = types.get_mut(&target).unwrap();
+
+        // Record one conflict per unsatisfiable trait at this type.
+        let mut conflict = |bad: Vec<TypespaceTrait>, reason: OffenderReason| {
+            conflicts.extend(bad.into_iter().map(|required| TraitConflict {
+                required,
+                origin: origin.clone(),
+                path: path.clone(),
+                offender: target.clone(),
+                reason: reason.clone(),
+            }));
+        };
+
+        // Extend the path with a hop leaving the current type.
+        let hop = |relation: Relation| {
+            let mut next = path.clone();
+            next.push(PathStep {
+                type_id: target.clone(),
+                relation,
+            });
+            next
+        };
 
         // Every named type absorbs requirements into its built trait set;
         // requirements then flow onward to its contained children. For a
@@ -1139,8 +1323,13 @@ where
             }
 
             if !new_traits.is_empty() {
-                for child_id in ty.contained_children_mut() {
-                    work.push_back((child_id.clone(), new_traits.clone()));
+                for (relation, child_id) in ty.contained_children_related() {
+                    work.push_back(WorkItem {
+                        target: child_id,
+                        traits: new_traits.clone(),
+                        origin: origin.clone(),
+                        path: hop(relation),
+                    });
                 }
             }
         } else {
@@ -1153,113 +1342,224 @@ where
                 | Type::TypeAlias(_) => unreachable!(),
 
                 Type::Native(Native { name, impls, .. }) => {
-                    let missing_traits = traits
-                        .difference(impls)
-                        .cloned()
-                        .collect::<TypespaceTraitSet>();
-                    if !missing_traits.is_empty() {
-                        todo!(
-                            "missing traits {:#?} for native type {name}",
-                            missing_traits,
-                        );
-                    }
+                    let missing_traits = traits.difference(impls).copied().collect::<Vec<_>>();
+                    let reason = OffenderReason::NativeMissingImpl {
+                        type_name: name.clone(),
+                    };
+                    conflict(missing_traits, reason);
                 }
 
-                // Pass the buck...
-                Type::Option(schema_ref) | Type::Box(schema_ref) => {
-                    work.push_back((schema_ref.clone(), traits));
+                // Pass the buck... except for Default, which Option<T>
+                // implements no matter what T is.
+                Type::Option(schema_ref) => {
+                    let pass = strip_default(traits);
+                    if !pass.is_empty() {
+                        work.push_back(WorkItem {
+                            target: schema_ref.clone(),
+                            traits: pass,
+                            origin,
+                            path: hop(Relation::Element),
+                        });
+                    }
+                }
+                Type::Box(schema_ref) => {
+                    work.push_back(WorkItem {
+                        target: schema_ref.clone(),
+                        traits,
+                        origin,
+                        path: hop(Relation::Boxed),
+                    });
                 }
 
                 // Vec<T> and arrays impl everything we care about--except for
-                // Display and FromStr--as long as T implemented them.
-                Type::Vec(schema_ref) | Type::Array(schema_ref, _) => {
-                    if traits.contains(&TypespaceTrait::Display)
-                        || traits.contains(&TypespaceTrait::FromStr)
-                    {
-                        todo!();
+                // Display and FromStr--as long as T implemented them. Vec<T>
+                // additionally implements Default unconditionally.
+                Type::Vec(schema_ref) => {
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "Vec".to_string(),
+                        },
+                    );
+                    let pass = strip_default(rest);
+                    if !pass.is_empty() {
+                        work.push_back(WorkItem {
+                            target: schema_ref.clone(),
+                            traits: pass,
+                            origin,
+                            path: hop(Relation::Element),
+                        });
                     }
-                    work.push_back((schema_ref.clone(), traits));
+                }
+                Type::Array(schema_ref, _) => {
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "array".to_string(),
+                        },
+                    );
+                    if !rest.is_empty() {
+                        work.push_back(WorkItem {
+                            target: schema_ref.clone(),
+                            traits: rest,
+                            origin,
+                            path: hop(Relation::Element),
+                        });
+                    }
                 }
                 // Tuples implement everything except for Display and FromStr
                 // as long as all their component types do as well.
                 Type::Tuple(schema_refs) => {
-                    if traits.contains(&TypespaceTrait::Display)
-                        || traits.contains(&TypespaceTrait::FromStr)
-                    {
-                        todo!();
-                    }
-                    for schema_ref in schema_refs {
-                        work.push_back((schema_ref.clone(), traits.clone()));
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "tuple".to_string(),
+                        },
+                    );
+                    if !rest.is_empty() {
+                        for schema_ref in schema_refs {
+                            work.push_back(WorkItem {
+                                target: schema_ref.clone(),
+                                traits: rest.clone(),
+                                origin: origin.clone(),
+                                path: hop(Relation::Element),
+                            });
+                        }
                     }
                 }
 
                 // Like Vec, the map and set containers implement the traits
                 // we care about--except for Display and FromStr--as long as
-                // their key/value/element types do.
+                // their key/value/element types do; both implement Default
+                // unconditionally.
                 Type::Map(key_ref, value_ref) => {
-                    if traits.contains(&TypespaceTrait::Display)
-                        || traits.contains(&TypespaceTrait::FromStr)
-                    {
-                        todo!();
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "map".to_string(),
+                        },
+                    );
+                    let pass = strip_default(rest);
+                    if !pass.is_empty() {
+                        work.push_back(WorkItem {
+                            target: key_ref.clone(),
+                            traits: pass.clone(),
+                            origin: origin.clone(),
+                            path: hop(Relation::Key),
+                        });
+                        work.push_back(WorkItem {
+                            target: value_ref.clone(),
+                            traits: pass,
+                            origin,
+                            path: hop(Relation::Value),
+                        });
                     }
-                    work.push_back((key_ref.clone(), traits.clone()));
-                    work.push_back((value_ref.clone(), traits));
                 }
                 Type::Set(element_ref) => {
-                    if traits.contains(&TypespaceTrait::Display)
-                        || traits.contains(&TypespaceTrait::FromStr)
-                    {
-                        todo!();
-                    }
-                    work.push_back((element_ref.clone(), traits));
-                }
-
-                // TODO 3/31/2026
-                // Comment and do better
-                Type::Float(name) => {
-                    let missing = [
-                        TypespaceTrait::Ord,
-                        TypespaceTrait::Eq,
-                        TypespaceTrait::Hash,
-                    ]
-                    .into_iter()
-                    .filter(|tt| traits.contains(tt))
-                    .collect::<Vec<_>>();
-                    if !missing.is_empty() {
-                        return Err(TypespaceError::FloatTraits {
-                            type_id: schema_ref,
-                            name: name.clone(),
-                            missing,
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "set".to_string(),
+                        },
+                    );
+                    let pass = strip_default(rest);
+                    if !pass.is_empty() {
+                        work.push_back(WorkItem {
+                            target: element_ref.clone(),
+                            traits: pass,
+                            origin,
+                            path: hop(Relation::Element),
                         });
                     }
                 }
 
-                // These all implement all the traits we care about so there's
-                // nothing to do.
-                Type::Unit | Type::Boolean | Type::Integer(_) | Type::String => (),
+                // Floating-point types have no total ordering, no equality
+                // relation, and no hash; their FromStr is refutable.
+                Type::Float(name) => {
+                    let (bad, _) = split(
+                        &traits,
+                        &[
+                            TypespaceTrait::Ord,
+                            TypespaceTrait::Eq,
+                            TypespaceTrait::Hash,
+                            TypespaceTrait::FromStringIrrefutable,
+                        ],
+                    );
+                    let reason = OffenderReason::Primitive {
+                        type_name: name.clone(),
+                    };
+                    conflict(bad, reason);
+                }
+
+                // Integers and booleans implement every trait except the
+                // irrefutable-FromStr marker: their FromStr rejects
+                // non-numeric (respectively non-boolean) input.
+                Type::Integer(name) => {
+                    let (bad, _) = split(&traits, &[TypespaceTrait::FromStringIrrefutable]);
+                    let reason = OffenderReason::Primitive {
+                        type_name: name.clone(),
+                    };
+                    conflict(bad, reason);
+                }
+                Type::Boolean => {
+                    let (bad, _) = split(&traits, &[TypespaceTrait::FromStringIrrefutable]);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "bool".to_string(),
+                        },
+                    );
+                }
+
+                // The unit type implements everything except Display and
+                // FromStr (and, a fortiori, the irrefutable marker).
+                Type::Unit => {
+                    let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "()".to_string(),
+                        },
+                    );
+                }
+
+                // String implements every trait we track, including the
+                // irrefutable-FromStr marker.
+                Type::String => (),
 
                 // JsonValue implements everything except for Eq, Ord,
-                // PartialOrd, and Hash.
+                // PartialOrd, and Hash; its FromStr (JSON parsing) is
+                // refutable.
                 Type::JsonValue => {
-                    let missing = [
-                        TypespaceTrait::Eq,
-                        TypespaceTrait::Ord,
-                        TypespaceTrait::PartialOrd,
-                        TypespaceTrait::Hash,
-                    ]
-                    .into_iter()
-                    .filter(|tt| traits.contains(tt))
-                    .collect::<Vec<_>>();
-                    if !missing.is_empty() {
-                        return Err(TypespaceError::JsonValueTraits {
-                            type_id: schema_ref,
-                            missing,
-                        });
-                    }
+                    let (bad, _) = split(
+                        &traits,
+                        &[
+                            TypespaceTrait::Eq,
+                            TypespaceTrait::Ord,
+                            TypespaceTrait::PartialOrd,
+                            TypespaceTrait::Hash,
+                            TypespaceTrait::FromStringIrrefutable,
+                        ],
+                    );
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "serde_json::Value".to_string(),
+                        },
+                    );
                 }
             }
         }
     }
 
-    Ok(())
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(TypespaceError::TraitConflicts { conflicts })
+    }
 }
