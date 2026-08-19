@@ -8,22 +8,17 @@ Semantic model of Rust types for code generation
 
 ## Overview
 
-A code generator that turns schemas into Rust types needs a
-representation for those types while it works--not source text, which is
-too late to analyze, and not a general Rust AST, which is far more than
-it needs. `typespace` models just the vocabulary a schema-driven
-generator uses: structs, enums, newtype structs, tuple structs (with an
-optional "rest" field), unit structs, and type aliases, along with the
-built-in, container, and native (externally defined) types they refer
-to.
+`typespace` allows consumer to model complex Rust types and render them as code. It not only handles the basic construction of types, it also implemnents desired traits, deals with breaking containment cycles via boxing, propogates required traits, and identifies unsatisfiable constructions. It's intermediate representation of types can be queried ("does this type have this trait?") or rendered a text or a `TokenStream` (via the `codespace` crate).
 
-Types form a graph of `Type<Id>` values keyed by a caller-chosen `Id`.
-Names come from outside: typespace never invents identifiers, applies
-casing, or resolves collisions. The caller inserts fully-named types
-into a `TypespaceBuilder` and calls `finalize`, which validates the
-graph (dangling references are errors), breaks containment cycles by
-inserting `Box` types, and propagates trait requirements--a type used as
-a map key must be `Ord`, and so must everything it contains.
+It fell out of the `typify` and `progenitor` crates. The former converts JSON Schema into Rust types; the latter generates SDKs from OpenAPI documents--for which JSON Schema is a subset (more or less...). `typespace` has been made more generic, and individually testable to both better serve those code generators and for use by other code generation libraries.
+
+Types form a graph of `Type<Id>` values keyed by a caller-chosen `Id` type.
+Names come from the consumer: `typespace` never invents identifiers, applies
+casing, or resolves collisions. Consumers insert types
+into a `TypespaceBuilder` and call `finalize()`. This validates the
+type graph (dangling references are errors), breaks containment cycles by
+inserting `Box` types, and propagates trait requirements (e.g. a type used as
+a `BTreeMap` key must be `Ord`).
 
 ```rust
 use quote::format_ident;
@@ -59,47 +54,35 @@ let ts = builder
 let tokens = ts.to_codespace().into_stream();
 ```
 
+TODO should we show the output?
+
 Caller-input problems--duplicate IDs, dangling references, impossible
 trait requirements--are reported as `TypespaceError`; any panic is a
-typespace bug.
+`typespace` bug (please file an issue!).
 
 ## Output
 
-A finalized `Typespace` renders with `to_codespace` into a
-[codespace](https://github.com/oxidecomputer/codespace) `Codespace`--
-token emission is codespace's job--with one item per named type and
-helper functions (serde default functions, for example) routed to their
-own modules. From there the caller flattens to a single `TokenStream` or
-splits into per-module files. Output is deterministic and unformatted.
-Generated code is faithful to JSON semantics: absent vs `null` fields
-(with several configurable modelings, including double-`Option` and
-custom wrapper types), required-but-nullable fields, and tuple rest
-fields all round-trip.
-
-Generated code has runtime dependencies of its own: serde always, and
-serde_json or json-serde for particular constructs, plus whatever
-crates back the native type paths the caller supplied. Cargo cannot
-surface these; the crate docs section "Dependencies of generated code"
-gives the exact conditions.
+Consumers render a finalized `Typespace` via the
+[`codespace`](https://github.com/oxidecomputer/codespace) crate. Generated code
+includes runtime dependencies on crates; the crate docs section "Dependencies
+of generated code" gives the exact conditions.
 
 Finalized types can also be inspected without rendering: `get_type` and
 `iter_types` return `TypeInfo` views exposing names, identifiers,
-structural details, and trait impls--for consumers like progenitor that
-generate code referring to the generated types.
+structural details, and trait impls. This allows additional code generation to properly interact with these generated types.
 
-typespace has no JSON Schema, OpenAPI, or IDL awareness; mapping a
-schema onto these types is the caller's job (typify's, for instance). It
-emits no files and runs no formatter. See the crate docs for details.
+`typespace` has no JSON Schema, OpenAPI, or IDL awareness; mapping a
+schema onto these types is the caller's job (`typify`'s, for instance). It
+emits no files (that's `codespace`'s job) and runs no formatter (such as the  `prettyplease` crate). See the crate docs for details.
 
 ## Alternatives
 
 [codegen](https://docs.rs/codegen) is a builder API for Rust items--
-modules, structs, enums, functions--rendered to strings. It competes at
-the same semantic item-builder altitude, but has no notion of type
+modules, structs, enums, functions--rendered to strings. It also operates at
+the semantic item-builder level, but has no notion of type
 identity or a type graph: no references between types, no cycle breaking
 via boxing, no trait-requirement propagation, and no JSON/serde fidelity
-(attribute selection, absent-vs-null handling). It is also effectively
-dormant.
+(attribute selection, absent-vs-null handling).
 
 ## Future direction
 
@@ -130,5 +113,4 @@ dormant.
 ## Status
 
 - Pre-publication; API unstable.
-- Part of the typify/progenitor code-generation stack being extracted
-  from oxidecomputer/typify.
+- Part of the typify/progenitor code-generation stack.
