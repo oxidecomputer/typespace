@@ -174,6 +174,23 @@ impl<Id> Enum<Id> {
     pub fn get_deny_unknown_fields(&self) -> bool {
         self.deny_unknown_fields
     }
+
+    /// Whether every variant is a unit variant (and the enum is
+    /// nonempty and neither untagged nor missing its tag type).
+    ///
+    /// Such enums are value-like: they can derive `Copy`, `Eq`, `Ord`,
+    /// and `Hash`, and admit bespoke `Display` and `FromStr` impls that
+    /// map variants to and from their serialized names.
+    pub fn all_simple_variants(&self) -> bool {
+        self.tag_type
+            .as_ref()
+            .is_some_and(|tag_type| *tag_type != EnumTagType::Untagged)
+            && !self.variants.is_empty()
+            && self
+                .variants
+                .iter()
+                .all(|variant| matches!(variant.details, VariantDetails::Unit))
+    }
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
@@ -387,6 +404,15 @@ impl<Id> EnumVariant<Id> {
     /// name.
     pub fn rename(&self) -> Option<&str> {
         self.rename.as_deref()
+    }
+
+    /// The serialized (JSON) name of the variant.
+    ///
+    /// The rename if one is present, the Rust name otherwise; anything
+    /// that checks serialized data against the enum (validating a
+    /// schema-supplied default value, say) needs this name back.
+    pub fn json_name(&self) -> &str {
+        self.rename.as_deref().unwrap_or(&self.rust_name)
     }
 
     /// The description (doc comment source), if any.

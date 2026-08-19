@@ -206,7 +206,7 @@ impl std::fmt::Display for TypespaceTrait {
 /// Used, for example, for the traits a [`build::Native`] type declares
 /// that it implements. Build one with [`TypespaceTraitSet::empty`] and
 /// [`TypespaceTraitSet::add`], or collect from an iterator of traits.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 
 impl FromIterator<TypespaceTrait> for TypespaceTraitSet {
@@ -333,6 +333,70 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Whether a type has already been inserted under the given ID.
     pub fn contains_type(&self, id: &Id) -> bool {
         self.types.contains_key(id)
+    }
+
+    /// Render the Rust identifier of an inserted type before
+    /// finalization.
+    ///
+    /// Rendering honors the builder's settings (container overrides,
+    /// `std` spelling). Finalization-only effects are necessarily
+    /// absent: no cycle-breaking boxes exist yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id`--or any type ID it references transitively
+    /// through container types--has not been inserted.
+    pub fn ident(&self, id: &Id) -> TokenStream {
+        self.renderer().render_ident(id)
+    }
+
+    /// Like [`TypespaceBuilder::ident`], with named types qualified by
+    /// the module `scope`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`TypespaceBuilder::ident`].
+    pub fn ident_in(&self, id: &Id, scope: &str) -> TokenStream {
+        self.renderer().render_ident_with_scope(id, Some(scope))
+    }
+
+    /// Render the identifier of an inserted type as a function
+    /// parameter type, before finalization.
+    ///
+    /// Complex owned types are prefixed with `&`; simple types
+    /// (primitives and options) are unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`TypespaceBuilder::ident`].
+    pub fn parameter_ident(&self, id: &Id) -> TokenStream {
+        self.parameter(id, self.ident(id))
+    }
+
+    /// Like [`TypespaceBuilder::parameter_ident`], with named types
+    /// qualified by the module `scope`.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same conditions as [`TypespaceBuilder::ident`].
+    pub fn parameter_ident_in(&self, id: &Id, scope: &str) -> TokenStream {
+        self.parameter(id, self.ident_in(id, scope))
+    }
+
+    fn parameter(&self, id: &Id, ident: TokenStream) -> TokenStream {
+        let typ = self.types.get(id).expect("invalid type id");
+        if typ.is_simple() {
+            ident
+        } else {
+            quote! { &#ident }
+        }
+    }
+
+    fn renderer(&self) -> TypespaceRenderer<'_, Id> {
+        TypespaceRenderer {
+            types: &self.types,
+            settings: &self.settings,
+        }
     }
 
     /// Validate the type graph without consuming the builder.
@@ -933,11 +997,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
         });
         let vis_pub = vis_pub.then(|| quote! { pub });
+        let rust_name_ident = format_ident!("{rust_name}");
 
         quote! {
             #description
             #serde
-            #vis_pub #rust_name: #prop_ty_ident
+            #vis_pub #rust_name_ident: #prop_ty_ident
         }
     }
 

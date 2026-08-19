@@ -30,7 +30,6 @@ inserting `Box` types, and propagates trait requirements (e.g. a type used as
 a map key must be `Ord`).
 
 ```rust
-use quote::format_ident;
 use typespace::{
     build::{Struct, StructProperty, Type},
     no_cycles,
@@ -47,7 +46,7 @@ builder
             .name("Thing")
             .description("A named thing.")
             .properties([StructProperty::new(
-                format_ident!("name"),
+                "name",
                 "string".to_string(),
             )])
             .build()

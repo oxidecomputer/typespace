@@ -1,9 +1,9 @@
 // Copyright 2026 Oxide Computer Company
 
-use quote::{format_ident, quote};
+use quote::quote;
 use typespace::{
     build::{
-        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertyState, Type,
+        Enum, EnumTagType, EnumVariant, Native, Struct, StructProperty, StructPropertyState, Type,
         VariantDetails,
     },
     no_cycles,
@@ -39,10 +39,10 @@ fn make_typespace() -> typespace::Typespace<String> {
                 .name("MyStruct")
                 .description("A sample struct".to_string())
                 .properties(vec![
-                    StructProperty::new(format_ident!("name"), str_id.clone())
+                    StructProperty::new("name", str_id.clone())
                         .with_description("The name field".to_string()),
-                    StructProperty::new(format_ident!("count"), u32_id.clone()),
-                    StructProperty::new(format_ident!("label"), opt_str_id.clone())
+                    StructProperty::new("count", u32_id.clone()),
+                    StructProperty::new("label", opt_str_id.clone())
                         .with_state(StructPropertyState::Optional),
                 ])
                 .build()
@@ -129,7 +129,7 @@ fn enum_variants_via_get_type() {
     assert_eq!(variants.len(), 3);
 
     let nothing = variants.iter().find(|v| v.name == "Nothing").unwrap();
-    assert!(matches!(nothing.details, view::VariantDetails::Simple));
+    assert!(matches!(nothing.details, view::VariantDetails::Unit));
 
     let single = variants.iter().find(|v| v.name == "Single").unwrap();
     assert!(
@@ -166,4 +166,201 @@ fn has_impl_false_for_plain_types() {
     let ti = ts.get_type(&"MyStruct".to_string());
     assert!(!ti.has_impl(TypeSpaceImpl::Display));
     assert!(!ti.has_impl(TypeSpaceImpl::FromStr));
+}
+
+// Chunk-5 query additions on the build side: names, naming contexts,
+// dedup keys, defaults, and enum analyses.
+#[test]
+fn build_side_queries() {
+    let str_id = "str".to_string();
+
+    // Type::name is Some for named types, None for the rest.
+    let named = Struct::<String>::new().name("Widget").build().unwrap();
+    assert_eq!(named.name(), Some("Widget"));
+    assert_eq!(Type::<String>::String.name(), None);
+    assert_eq!(Type::Option(str_id.clone()).name(), None);
+
+    // set_default is the post-construction counterpart of the fluent
+    // default methods.
+    let mut named = named;
+    named.set_default(Some(typespace::build::JsonValue::new(
+        serde_json::json!({}),
+    )));
+
+    // children_with_context: naming contexts per child.
+    let typ = Struct::new()
+        .name("S")
+        .properties(vec![
+            StructProperty::new("alpha", "a".to_string()),
+            StructProperty::new("beta", "b".to_string()),
+        ])
+        .build()
+        .unwrap();
+    assert_eq!(
+        typ.children_with_context(),
+        vec![
+            ("a".to_string(), "alpha".to_string()),
+            ("b".to_string(), "beta".to_string()),
+        ]
+    );
+
+    let typ = Enum::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![
+            EnumVariant::new("Unit", VariantDetails::Unit),
+            EnumVariant::new("One", VariantDetails::Item("a".to_string())),
+            EnumVariant::new(
+                "Pair",
+                VariantDetails::Tuple(vec!["a".to_string(), "b".to_string()]),
+            ),
+            EnumVariant::new(
+                "Named",
+                VariantDetails::Struct(vec![StructProperty::new("x", "a".to_string())]),
+            ),
+        ])
+        .build()
+        .unwrap();
+    assert_eq!(
+        typ.children_with_context(),
+        vec![
+            ("a".to_string(), "One".to_string()),
+            ("a".to_string(), "Pair.0".to_string()),
+            ("b".to_string(), "Pair.1".to_string()),
+            ("a".to_string(), "Named.x".to_string()),
+        ]
+    );
+
+    assert_eq!(
+        Type::Map("k".to_string(), "v".to_string()).children_with_context(),
+        vec![
+            ("k".to_string(), "key".to_string()),
+            ("v".to_string(), "value".to_string()),
+        ]
+    );
+    assert_eq!(
+        Type::Option("o".to_string()).children_with_context(),
+        vec![("o".to_string(), "".to_string())]
+    );
+
+    // dedup_key: structural identity for unnamed types only.
+    let vec_a = Type::Vec("a".to_string());
+    let vec_a2 = Type::Vec("a".to_string());
+    let vec_b = Type::Vec("b".to_string());
+    assert_eq!(vec_a.dedup_key(), vec_a2.dedup_key());
+    assert_ne!(vec_a.dedup_key(), vec_b.dedup_key());
+    assert!(vec_a.dedup_key().is_some());
+    assert!(named.dedup_key().is_none());
+
+    // Native types differing only in declared impls must not conflate.
+    let n1 = Type::<String>::Native(Native::new_string_like("uuid::Uuid"));
+    let n2 = Type::<String>::Native(Native::new(
+        "uuid::Uuid",
+        typespace::TypespaceTraitSet::empty(),
+        Vec::new(),
+    ));
+    assert_ne!(n1.dedup_key(), n2.dedup_key());
+
+    // json_name: the wire name of a variant.
+    let plain = EnumVariant::<String>::new("Alpha", VariantDetails::Unit);
+    assert_eq!(plain.json_name(), "Alpha");
+    let renamed = EnumVariant::<String>::new("Alpha", VariantDetails::Unit).with_rename("alpha");
+    assert_eq!(renamed.json_name(), "alpha");
+
+    // all_simple_variants: nonempty, tagged, all-unit enums only.
+    let simple = Enum::<String>::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![
+            EnumVariant::new("A", VariantDetails::Unit),
+            EnumVariant::new("B", VariantDetails::Unit),
+        ]);
+    assert!(simple.all_simple_variants());
+
+    let untagged = Enum::<String>::new()
+        .name("E")
+        .tag_type(EnumTagType::Untagged)
+        .variants(vec![EnumVariant::new("A", VariantDetails::Unit)]);
+    assert!(!untagged.all_simple_variants());
+
+    let empty = Enum::<String>::new()
+        .name("E")
+        .tag_type(EnumTagType::External);
+    assert!(!empty.all_simple_variants());
+
+    let data = Enum::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![EnumVariant::new(
+            "A",
+            VariantDetails::Item("a".to_string()),
+        )]);
+    assert!(!data.all_simple_variants());
+}
+
+// Scoped identifier rendering on the view side, and the pre-finalize
+// equivalents on the builder.
+#[test]
+fn scoped_and_prefinalize_idents() {
+    let mut builder =
+        TypespaceBuilder::new(Settings::default().with_std(typespace::settings::Std::Unqualified));
+
+    let str_id = "str".to_string();
+    builder.insert(str_id.clone(), Type::String).unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec("MyStruct".to_string()))
+        .unwrap();
+
+    let struct_id = "MyStruct".to_string();
+    builder
+        .insert(
+            struct_id.clone(),
+            Struct::new()
+                .name("MyStruct")
+                .properties(vec![StructProperty::new("name", str_id.clone())])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Pre-finalize rendering on the builder.
+    assert_eq!(
+        builder.ident(&struct_id).to_string(),
+        quote! { MyStruct }.to_string()
+    );
+    assert_eq!(
+        builder.ident_in(&struct_id, "types").to_string(),
+        quote! { types::MyStruct }.to_string()
+    );
+    assert_eq!(
+        builder.ident_in(&vec_id, "types").to_string(),
+        quote! { Vec<types::MyStruct> }.to_string()
+    );
+    assert_eq!(
+        builder.parameter_ident(&struct_id).to_string(),
+        quote! { &MyStruct }.to_string()
+    );
+    assert_eq!(
+        builder.parameter_ident_in(&vec_id, "types").to_string(),
+        quote! { &Vec<types::MyStruct> }.to_string()
+    );
+    assert_eq!(
+        builder.parameter_ident(&str_id).to_string(),
+        quote! { String }.to_string()
+    );
+
+    // The same queries after finalization, on the view.
+    let ts = builder.finalize(no_cycles).unwrap();
+    let ti = ts.get_type(&struct_id);
+    assert_eq!(
+        ti.ident_in("types").to_string(),
+        quote! { types::MyStruct }.to_string()
+    );
+    let vi = ts.get_type(&vec_id);
+    assert_eq!(
+        vi.parameter_ident_in("types").to_string(),
+        quote! { &Vec<types::MyStruct> }.to_string()
+    );
 }

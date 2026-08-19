@@ -71,6 +71,29 @@ pub enum Type<Id> {
 }
 
 impl<Id> Type<Id> {
+    /// The name of this type, if it has one.
+    ///
+    /// Named types (see [`Type::is_named`]) that have passed `build()`
+    /// or been inserted into a
+    /// [`TypespaceBuilder`](crate::TypespaceBuilder) always report
+    /// `Some`; built-in and container types have no name.
+    pub fn name(&self) -> Option<&str> {
+        self.common().and_then(|common| common.name())
+    }
+
+    /// Set or clear the type's default value after construction.
+    ///
+    /// Consumers often learn a type's default after building it (from
+    /// the metadata of a schema that references the type, say); this is
+    /// the post-construction counterpart of the shapes' fluent
+    /// `default` methods. Has no effect on built-in and container
+    /// types, which carry no default slot.
+    pub fn set_default(&mut self, default: Option<JsonValue>) {
+        if let Some(common) = self.common_mut() {
+            common.default = default;
+        }
+    }
+
     /// The metadata common to named types: the name, description, and
     /// default value. Returns `Some` exactly when [`Type::is_named`]
     /// returns `true` (structs, enums, unit structs, tuple structs,
@@ -136,6 +159,149 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::Float(_) => Vec::new(),
             Type::JsonValue => Vec::new(),
         }
+    }
+
+    /// The IDs of every child type paired with its naming context.
+    ///
+    /// The context is the string a naming pass would use to name an
+    /// anonymous child: a property name, a variant name (with `.field`
+    /// or `.index` appended for variant payloads), a tuple index,
+    /// `"inner"`, `"item"`, `"key"`, or `"value"`. Children reached
+    /// with no context of their own (the contents of options and
+    /// boxes) report an empty string.
+    ///
+    /// The cardinality may be smaller than [`Type::children`]: a type
+    /// alias and a native type's parameters confer no naming context
+    /// and contribute nothing here.
+    pub fn children_with_context(&self) -> Vec<(Id, String)> {
+        match self {
+            Type::Enum(type_enum) => type_enum
+                .variants
+                .iter()
+                .flat_map(|variant| match &variant.details {
+                    VariantDetails::Unit => Vec::new(),
+                    VariantDetails::Item(id) => {
+                        vec![(id.clone(), variant.rust_name.clone())]
+                    }
+                    VariantDetails::Tuple(items) => items
+                        .iter()
+                        .enumerate()
+                        .map(|(ii, id)| (id.clone(), format!("{}.{}", variant.rust_name, ii)))
+                        .collect::<Vec<_>>(),
+                    VariantDetails::Struct(items) => items
+                        .iter()
+                        .map(|prop| {
+                            (
+                                prop.type_id.clone(),
+                                format!("{}.{}", variant.rust_name, prop.rust_name),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                })
+                .collect::<Vec<_>>(),
+            Type::Struct(type_struct) => type_struct
+                .properties
+                .iter()
+                .map(
+                    |StructProperty {
+                         rust_name, type_id, ..
+                     }| (type_id.clone(), rust_name.to_string()),
+                )
+                .collect::<Vec<_>>(),
+            Type::UnitStruct(_) => Vec::new(),
+            Type::TupleStruct(type_tuple_struct) => {
+                let mut children = type_tuple_struct
+                    .fields
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(ii, type_id)| (type_id, ii.to_string()))
+                    .collect::<Vec<_>>();
+
+                if let Some(rest) = &type_tuple_struct.rest {
+                    children.push((rest.clone(), type_tuple_struct.fields.len().to_string()));
+                }
+
+                children
+            }
+            Type::NewtypeStruct(NewtypeStruct { inner, .. }) => {
+                vec![(inner.clone(), "inner".to_string())]
+            }
+
+            // TODO 2/4/2026
+            // I'm not really sure what to do here; the type alias shouldn't really
+            // confer any context to the inner type. I think this is fine, but also
+            // may mean that I want to change the name of this pass/fn/concept to
+            // indicate that we should only express context insofar as we have it,
+            // and that the cardinality of this fn may be different from that of
+            // children().
+            Type::TypeAlias(TypeAlias { .. }) => Vec::new(),
+
+            Type::Native(_) => Vec::new(),
+            Type::Option(id) | Type::Box(id) => vec![(id.clone(), "".to_string())],
+            Type::Vec(id) | Type::Set(id) | Type::Array(id, _) => {
+                vec![(id.clone(), "item".to_string())]
+            }
+            Type::Map(key_id, value_id) => vec![
+                (key_id.clone(), "key".to_string()),
+                (value_id.clone(), "value".to_string()),
+            ],
+            Type::Tuple(items) => items
+                .iter()
+                .enumerate()
+                .map(|(ii, id)| (id.clone(), ii.to_string()))
+                .collect::<Vec<_>>(),
+
+            Type::Unit
+            | Type::Boolean
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String
+            | Type::JsonValue => Vec::new(),
+        }
+    }
+
+    /// A structural identity for unnamed types, used for deduplication.
+    ///
+    /// Consumers that intern types--inserting `Option<T>` twice must
+    /// map to one ID--use the key as an ordered-map key: two unnamed
+    /// types with equal keys are structurally identical (native types
+    /// compare by path, declared impls, and parameters). Named types
+    /// return `None`; they deduplicate by name, not by structure.
+    pub fn dedup_key(&self) -> Option<DedupKey<Id>> {
+        let inner = match self {
+            // Named types are deduplicated by name, not by structure.
+            Type::Enum(_)
+            | Type::Struct(_)
+            | Type::UnitStruct(_)
+            | Type::TupleStruct(_)
+            | Type::NewtypeStruct(_)
+            | Type::TypeAlias(_) => return None,
+
+            // Two native types that differ in declared impls (or the
+            // irrefutable-FromStr capability) must not be conflated.
+            Type::Native(native) => DedupKeyInner::Native(
+                native.name.clone(),
+                native.impls.clone(),
+                native.from_string_irrefutable,
+                native.parameters.clone(),
+            ),
+
+            Type::Option(id) => DedupKeyInner::Option(id.clone()),
+            Type::Box(id) => DedupKeyInner::Box(id.clone()),
+            Type::Vec(id) => DedupKeyInner::Vec(id.clone()),
+            Type::Map(key_id, value_id) => DedupKeyInner::Map(key_id.clone(), value_id.clone()),
+            Type::Set(id) => DedupKeyInner::Set(id.clone()),
+            Type::Array(id, length) => DedupKeyInner::Array(id.clone(), *length),
+            Type::Tuple(ids) => DedupKeyInner::Tuple(ids.clone()),
+            Type::Unit => DedupKeyInner::Unit,
+            Type::Boolean => DedupKeyInner::Boolean,
+            Type::Integer(name) => DedupKeyInner::Integer(name.clone()),
+            Type::Float(name) => DedupKeyInner::Float(name.clone()),
+            Type::String => DedupKeyInner::String,
+            Type::JsonValue => DedupKeyInner::JsonValue,
+        };
+        Some(DedupKey(inner))
     }
 
     /// Children that this type "contains" (i.e. cycle-breaking candidates).
@@ -317,6 +483,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         )
     }
 
+    /// Whether the type is cheap enough to pass by value as a function
+    /// parameter (primitives and options); complex owned types take a
+    /// reference instead.
+    pub(crate) fn is_simple(&self) -> bool {
+        matches!(
+            self,
+            Type::Boolean
+                | Type::Integer(_)
+                | Type::Float(_)
+                | Type::Unit
+                | Type::String
+                | Type::Option(_)
+        )
+    }
+
     /// Re-run the shape checks that `build()` applies.
     ///
     /// The shapes' `build()` methods are the intended construction door,
@@ -336,4 +517,31 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             _ => Ok(()),
         }
     }
+}
+
+/// An opaque structural identity for an unnamed type.
+///
+/// Produced by [`Type::dedup_key`]; two keys compare equal exactly when
+/// the types they came from are structurally identical. The only
+/// supported operations are comparison, ordering, hashing by `Ord`-based
+/// containers, and cloning.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DedupKey<Id>(DedupKeyInner<Id>);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DedupKeyInner<Id> {
+    Native(String, crate::TypespaceTraitSet, bool, Vec<Id>),
+    Option(Id),
+    Box(Id),
+    Vec(Id),
+    Map(Id, Id),
+    Set(Id),
+    Array(Id, usize),
+    Tuple(Vec<Id>),
+    Unit,
+    Boolean,
+    Integer(String),
+    Float(String),
+    String,
+    JsonValue,
 }

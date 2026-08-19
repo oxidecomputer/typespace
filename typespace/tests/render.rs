@@ -86,19 +86,19 @@ fn test_struct_field_serde() {
             .unwrap();
 
         let properties = vec![
-            StructProperty::new(format_ident!("optional_string"), string_id.clone())
+            StructProperty::new("optional_string", string_id.clone())
                 .with_state(StructPropertyState::Optional),
-            StructProperty::new(format_ident!("required_option"), option_id.clone()),
-            StructProperty::new(format_ident!("optional_option"), option_id.clone())
+            StructProperty::new("required_option", option_id.clone()),
+            StructProperty::new("optional_option", option_id.clone())
                 .with_state(StructPropertyState::Optional),
-            StructProperty::new(format_ident!("default_string"), string_id.clone())
+            StructProperty::new("default_string", string_id.clone())
                 .with_state(StructPropertyState::Default),
-            StructProperty::new(format_ident!("default_option"), option_id.clone())
+            StructProperty::new("default_option", option_id.clone())
                 .with_state(StructPropertyState::Default),
-            StructProperty::new(format_ident!("peanut_string"), string_id.clone()).with_state(
+            StructProperty::new("peanut_string", string_id.clone()).with_state(
                 StructPropertyState::DefaultValue(JsonValue::new(serde_json::json!("peanuts"))),
             ),
-            StructProperty::new(format_ident!("peanut_option"), option_id.clone()).with_state(
+            StructProperty::new("peanut_option", option_id.clone()).with_state(
                 StructPropertyState::DefaultValue(JsonValue::new(serde_json::json!("peanuts"))),
             ),
         ];
@@ -320,10 +320,7 @@ fn test_enums() {
                 EnumVariant::new("Unit", VariantDetails::Unit),
                 EnumVariant::new(
                     "Named",
-                    VariantDetails::Struct(vec![StructProperty::new(
-                        format_ident!("x"),
-                        int_id.clone(),
-                    )]),
+                    VariantDetails::Struct(vec![StructProperty::new("x", int_id.clone())]),
                 ),
             ],
             _ => vec![
@@ -331,10 +328,7 @@ fn test_enums() {
                 EnumVariant::new("Item", VariantDetails::Item(string_id.clone())),
                 EnumVariant::new(
                     "Named",
-                    VariantDetails::Struct(vec![StructProperty::new(
-                        format_ident!("x"),
-                        int_id.clone(),
-                    )]),
+                    VariantDetails::Struct(vec![StructProperty::new("x", int_id.clone())]),
                 ),
             ],
         };
@@ -517,10 +511,7 @@ fn test_struct_serde_rename_flatten() {
             "Inner".to_string(),
             Struct::new()
                 .name("Inner")
-                .properties(vec![StructProperty::new(
-                    format_ident!("value"),
-                    int_id.clone(),
-                )])
+                .properties(vec![StructProperty::new("value", int_id.clone())])
                 .build()
                 .unwrap(),
         )
@@ -535,9 +526,9 @@ fn test_struct_serde_rename_flatten() {
             Struct::new()
                 .name("Outer")
                 .properties(vec![
-                    StructProperty::new(format_ident!("my_field"), string_id.clone())
+                    StructProperty::new("my_field", string_id.clone())
                         .with_json_name(StructPropertySerde::Rename("my-field".to_string())),
-                    StructProperty::new(format_ident!("inner"), inner_id)
+                    StructProperty::new("inner", inner_id)
                         .with_json_name(StructPropertySerde::Flatten),
                 ])
                 .build()
@@ -578,10 +569,7 @@ fn test_native_type() {
             "Resource".to_string(),
             Struct::new()
                 .name("Resource")
-                .properties(vec![StructProperty::new(
-                    format_ident!("location"),
-                    uuid_id,
-                )])
+                .properties(vec![StructProperty::new("location", uuid_id)])
                 .build()
                 .unwrap(),
         )
@@ -665,18 +653,18 @@ fn test_compound_field_types() {
             Struct::new()
                 .name("All")
                 .properties(vec![
-                    StructProperty::new(format_ident!("a_bool"), bool_id.clone()),
-                    StructProperty::new(format_ident!("an_int"), int_id.clone()),
-                    StructProperty::new(format_ident!("a_float"), float_id.clone()),
-                    StructProperty::new(format_ident!("a_string"), string_id.clone()),
-                    StructProperty::new(format_ident!("a_json"), json_id),
-                    StructProperty::new(format_ident!("a_vec"), vec_id.clone()),
-                    StructProperty::new(format_ident!("a_map"), map_id.clone()),
-                    StructProperty::new(format_ident!("a_set"), set_id.clone()),
-                    StructProperty::new(format_ident!("an_array"), array_id.clone()),
-                    StructProperty::new(format_ident!("a_tuple"), tuple_id.clone()),
-                    StructProperty::new(format_ident!("a_box_string"), box_string_id.clone()),
-                    StructProperty::new(format_ident!("a_box_vec"), box_vec_id.clone()),
+                    StructProperty::new("a_bool", bool_id.clone()),
+                    StructProperty::new("an_int", int_id.clone()),
+                    StructProperty::new("a_float", float_id.clone()),
+                    StructProperty::new("a_string", string_id.clone()),
+                    StructProperty::new("a_json", json_id),
+                    StructProperty::new("a_vec", vec_id.clone()),
+                    StructProperty::new("a_map", map_id.clone()),
+                    StructProperty::new("a_set", set_id.clone()),
+                    StructProperty::new("an_array", array_id.clone()),
+                    StructProperty::new("a_tuple", tuple_id.clone()),
+                    StructProperty::new("a_box_string", box_string_id.clone()),
+                    StructProperty::new("a_box_vec", box_vec_id.clone()),
                 ])
                 .build()
                 .unwrap(),
@@ -691,29 +679,24 @@ fn test_compound_field_types() {
             Struct::new()
                 .name("Defaults")
                 .properties(vec![
-                    StructProperty::new(format_ident!("a_bool"), bool_id)
+                    StructProperty::new("a_bool", bool_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("an_int", int_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("a_float", float_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("an_int"), int_id)
+                    StructProperty::new("a_string", string_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_float"), float_id)
+                    StructProperty::new("a_vec", vec_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("a_map", map_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("a_set", set_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("an_array", array_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_string"), string_id)
+                    StructProperty::new("a_tuple", tuple_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_vec"), vec_id)
+                    StructProperty::new("an_option", opt_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_map"), map_id)
+                    StructProperty::new("a_box_string", box_string_id)
                         .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_set"), set_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("an_array"), array_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_tuple"), tuple_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("an_option"), opt_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_box_string"), box_string_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_box_vec"), box_vec_id)
+                    StructProperty::new("a_box_vec", box_vec_id)
                         .with_state(StructPropertyState::Default),
                 ])
                 .build()
@@ -788,7 +771,7 @@ fn test_map_key_struct_with_float() {
             key_id.clone(),
             Struct::new()
                 .name("Key")
-                .properties(vec![StructProperty::new(format_ident!("value"), float_id)])
+                .properties(vec![StructProperty::new("value", float_id)])
                 .build()
                 .unwrap(),
         )
@@ -925,8 +908,8 @@ fn test_duplicate_item_names() {
     let err = Struct::new()
         .name("S")
         .properties(vec![
-            StructProperty::new(format_ident!("x"), "t".to_string()),
-            StructProperty::new(format_ident!("x"), "t".to_string()),
+            StructProperty::new("x", "t".to_string()),
+            StructProperty::new("x", "t".to_string()),
         ])
         .build()
         .unwrap_err();
@@ -940,8 +923,8 @@ fn test_duplicate_item_names() {
     let err = Struct::new()
         .name("S")
         .properties(vec![
-            StructProperty::new(format_ident!("x"), "t".to_string()),
-            StructProperty::new(format_ident!("y"), "t".to_string())
+            StructProperty::new("x", "t".to_string()),
+            StructProperty::new("y", "t".to_string())
                 .with_json_name(StructPropertySerde::Rename("x".to_string())),
         ])
         .build()
@@ -1120,8 +1103,9 @@ fn test_cycles() {
             struct_a_id,
             Struct::new()
                 .name("A")
-                .properties(vec![StructProperty::new(format_ident!("a"), struct_a_id)
-                    .with_state(StructPropertyState::Optional)])
+                .properties(vec![
+                    StructProperty::new("a", struct_a_id).with_state(StructPropertyState::Optional)
+                ])
                 .build()
                 .unwrap(),
         )
@@ -1134,8 +1118,9 @@ fn test_cycles() {
             b_id,
             Struct::new()
                 .name("B")
-                .properties(vec![StructProperty::new(format_ident!("c"), c_id)
-                    .with_state(StructPropertyState::Optional)])
+                .properties(vec![
+                    StructProperty::new("c", c_id).with_state(StructPropertyState::Optional)
+                ])
                 .build()
                 .unwrap(),
         )
@@ -1145,8 +1130,9 @@ fn test_cycles() {
             c_id,
             Struct::new()
                 .name("C")
-                .properties(vec![StructProperty::new(format_ident!("b"), b_id)
-                    .with_state(StructPropertyState::Optional)])
+                .properties(vec![
+                    StructProperty::new("b", b_id).with_state(StructPropertyState::Optional)
+                ])
                 .build()
                 .unwrap(),
         )
@@ -1251,10 +1237,10 @@ fn test_container_overrides() {
             Struct::new()
                 .name("Containers")
                 .properties(vec![
-                    StructProperty::new(format_ident!("a_map"), map_id.clone()),
-                    StructProperty::new(format_ident!("a_set"), set_id.clone()),
-                    StructProperty::new(format_ident!("a_vec"), vec_id.clone()),
-                    StructProperty::new(format_ident!("an_obj"), obj_id.clone()),
+                    StructProperty::new("a_map", map_id.clone()),
+                    StructProperty::new("a_set", set_id.clone()),
+                    StructProperty::new("a_vec", vec_id.clone()),
+                    StructProperty::new("an_obj", obj_id.clone()),
                 ])
                 .build()
                 .unwrap(),
@@ -1269,14 +1255,10 @@ fn test_container_overrides() {
             Struct::new()
                 .name("ContainerDefaults")
                 .properties(vec![
-                    StructProperty::new(format_ident!("a_map"), map_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_set"), set_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("a_vec"), vec_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new(format_ident!("an_obj"), obj_id)
-                        .with_state(StructPropertyState::Default),
+                    StructProperty::new("a_map", map_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("a_set", set_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("a_vec", vec_id).with_state(StructPropertyState::Default),
+                    StructProperty::new("an_obj", obj_id).with_state(StructPropertyState::Default),
                 ])
                 .build()
                 .unwrap(),
@@ -1342,8 +1324,8 @@ fn test_trait_impls() {
             Struct::new()
                 .name("Widget")
                 .properties(vec![
-                    StructProperty::new(format_ident!("name"), string_id.clone()),
-                    StructProperty::new(format_ident!("tags"), vec_id.clone()),
+                    StructProperty::new("name", string_id.clone()),
+                    StructProperty::new("tags", vec_id.clone()),
                 ])
                 .build()
                 .unwrap(),
@@ -1449,7 +1431,7 @@ fn test_trait_impls_conflict() {
             "Holder".to_string(),
             Struct::new()
                 .name("Holder")
-                .properties(vec![StructProperty::new(format_ident!("value"), float_id)])
+                .properties(vec![StructProperty::new("value", float_id)])
                 .build()
                 .unwrap(),
         )
@@ -1510,11 +1492,8 @@ fn test_json_serde_crate_override() {
             "Options".to_string(),
             Struct::new()
                 .name("Options")
-                .properties(vec![StructProperty::new(
-                    format_ident!("maybe"),
-                    string_id.clone(),
-                )
-                .with_state(StructPropertyState::Optional)])
+                .properties(vec![StructProperty::new("maybe", string_id.clone())
+                    .with_state(StructPropertyState::Optional)])
                 .build()
                 .unwrap(),
         )
@@ -1570,10 +1549,7 @@ fn test_set_element_float_path() {
             sample_id.clone(),
             Struct::new()
                 .name("Sample")
-                .properties(vec![StructProperty::new(
-                    format_ident!("values"),
-                    vec_id.clone(),
-                )])
+                .properties(vec![StructProperty::new("values", vec_id.clone())])
                 .build()
                 .unwrap(),
         )

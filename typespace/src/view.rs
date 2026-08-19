@@ -45,6 +45,21 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
         .render_ident(self.id)
     }
 
+    /// The Rust identifier for this type qualified by the module
+    /// `scope`.
+    ///
+    /// Named types render as `scope::Name`; container and built-in
+    /// types thread the scope through to any named types they mention.
+    /// Rendering honors the typespace's settings (container overrides,
+    /// `std` spelling).
+    pub fn ident_in(&self, scope: &str) -> TokenStream {
+        TypespaceRenderer {
+            types: &self.typespace.types,
+            settings: &self.typespace.settings,
+        }
+        .render_ident_with_scope(self.id, Some(scope))
+    }
+
     /// The Rust identifier suitable for use as a function parameter type.
     ///
     /// Complex owned types (structs, enums, Vec, Map, etc.) are prefixed with
@@ -54,6 +69,17 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             self.ident()
         } else {
             let ident = self.ident();
+            quote! { &#ident }
+        }
+    }
+
+    /// Like [`Type::parameter_ident`], with named types qualified by
+    /// the module `scope`.
+    pub fn parameter_ident_in(&self, scope: &str) -> TokenStream {
+        if self.is_simple() {
+            self.ident_in(scope)
+        } else {
+            let ident = self.ident_in(scope);
             quote! { &#ident }
         }
     }
@@ -72,15 +98,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     }
 
     fn is_simple(&self) -> bool {
-        matches!(
-            self.typ,
-            build::Type::Boolean
-                | build::Type::Integer(_)
-                | build::Type::Float(_)
-                | build::Type::Unit
-                | build::Type::String
-                | build::Type::Option(_)
-        )
+        self.typ.is_simple()
     }
 
     /// The description (doc comment source) for this type, if any.
@@ -252,7 +270,7 @@ impl<'a, Id: Clone> Enum<'a, Id> {
 
 fn variant_details_to_info<Id: Clone>(details: &build::VariantDetails<Id>) -> VariantDetails<Id> {
     match details {
-        build::VariantDetails::Unit => VariantDetails::Simple,
+        build::VariantDetails::Unit => VariantDetails::Unit,
         build::VariantDetails::Item(id) => VariantDetails::Tuple(vec![id.clone()]),
         build::VariantDetails::Tuple(ids) => VariantDetails::Tuple(ids.clone()),
         build::VariantDetails::Struct(props) => VariantDetails::Struct(
@@ -278,7 +296,7 @@ pub struct EnumVariant<'a, Id> {
 #[non_exhaustive]
 pub enum VariantDetails<Id> {
     /// A unit variant with no associated data.
-    Simple,
+    Unit,
     /// A variant with one or more unnamed values of the given types.
     Tuple(Vec<Id>),
     /// A struct-like variant with named fields.

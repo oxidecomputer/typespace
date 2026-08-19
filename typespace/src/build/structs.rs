@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use log::debug;
 use quote::{format_ident, quote};
-use syn::Ident;
 
 use crate::build::{validate_ident, JsonValue, Type, TypeCommon, TypeCommonBuilt};
 use crate::error::{Error, NameAxis};
@@ -135,7 +134,7 @@ where
     let mut rust_names = BTreeSet::new();
     let mut wire_names = BTreeSet::new();
     for property in properties {
-        let rust_name = property.rust_name.to_string();
+        let rust_name = property.rust_name.clone();
         validate_ident("property", &rust_name)?;
         let wire_name = match &property.json_name {
             StructPropertySerde::None => Some(rust_name.clone()),
@@ -227,7 +226,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub struct StructProperty<Id> {
-    pub(crate) rust_name: Ident,
+    pub(crate) rust_name: String,
     pub(crate) json_name: StructPropertySerde,
     pub(crate) state: StructPropertyState,
     pub(crate) description: Option<String>,
@@ -239,10 +238,11 @@ impl<Id> StructProperty<Id> {
     ///
     /// The property starts [`StructPropertyState::Required`], with no
     /// serde renaming and no description; adjust with the `with_`
-    /// methods.
-    pub fn new(rust_name: Ident, type_id: Id) -> Self {
+    /// methods. The name is validated--as a plain, non-keyword, non-raw
+    /// Rust identifier--when the containing shape is built.
+    pub fn new(rust_name: impl Into<String>, type_id: Id) -> Self {
         Self {
-            rust_name,
+            rust_name: rust_name.into(),
             json_name: StructPropertySerde::None,
             state: StructPropertyState::Required,
             description: None,
@@ -270,7 +270,7 @@ impl<Id> StructProperty<Id> {
     }
 
     /// The Rust field name.
-    pub fn rust_name(&self) -> &Ident {
+    pub fn rust_name(&self) -> &str {
         &self.rust_name
     }
 
