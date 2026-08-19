@@ -2,9 +2,12 @@
 name = "typespace"
 version = "0.0.1-alpha.1"
 edition = "2021"
+rust-version = "1.97"
 license = "Apache-2.0"
 repository = "https://github.com/oxidecomputer/typespace"
 description = "Model Rust types for code generation"
+keywords = ["codegen", "json-schema", "serde", "types"]
+categories = ["encoding"]
 readme = "../README.md"
 
 [dependencies]

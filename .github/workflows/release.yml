@@ -1,0 +1,43 @@
+# Publishing uses a crates.io token (stored as the CARGO_REGISTRY_TOKEN
+# repo secret); scope the token to this crate with only
+# publish-new/publish-update.
+
+name: Publish release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'oxidecomputer'
+    permissions:
+      # for creating the GitHub release
+      contents: write
+    steps:
+      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Check that the tag matches the crate version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "typespace") | .version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match crate version $version" >&2
+            exit 1
+          fi
+      - run: cargo publish -p typespace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - uses: taiki-e/create-gh-release-action@72d65cee1f8033ef0c8b5d79eaf0c45c7c578ce3 # v1
+        with:
+          changelog: CHANGELOG.md
+          title: typespace $version
+          branch: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

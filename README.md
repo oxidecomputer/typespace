@@ -1,5 +1,9 @@
 # typespace
 
+[![typespace on crates.io](https://img.shields.io/crates/v/typespace)](https://crates.io/crates/typespace)
+[![Documentation (latest release)](https://img.shields.io/badge/docs-latest%20version-brightgreen.svg)](https://docs.rs/typespace)
+[![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
+
 Semantic model of Rust types for code generation
 
 ## Overview
