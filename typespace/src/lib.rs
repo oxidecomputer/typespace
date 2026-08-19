@@ -165,10 +165,11 @@ impl TypespaceTrait {
     }
 }
 
-/// An unordered collection of [`TypespaceTrait`] values, such as the
-/// traits a [`build::Native`] type declares that it implements. Build
-/// one with [`TypespaceTraitSet::empty`] and [`TypespaceTraitSet::add`],
-/// or collect from an iterator of traits.
+/// An unordered collection of [`TypespaceTrait`] values.
+///
+/// Used, for example, for the traits a [`build::Native`] type declares
+/// that it implements. Build one with [`TypespaceTraitSet::empty`] and
+/// [`TypespaceTraitSet::add`], or collect from an iterator of traits.
 #[derive(Debug, Clone)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 

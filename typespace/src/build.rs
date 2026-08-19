@@ -1,8 +1,9 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Construction-side vocabulary: the types a consumer assembles and
-//! inserts into a [`TypespaceBuilder`](crate::TypespaceBuilder).
+//! Construction-side vocabulary for assembling a typespace.
 //!
+//! These are the types a consumer assembles and inserts into a
+//! [`TypespaceBuilder`](crate::TypespaceBuilder).
 //! [`Type`] is the sum of every kind of type a typespace can hold; the
 //! shape types ([`Struct`], [`Enum`], [`NewtypeStruct`], and friends)
 //! describe named types in detail. Types refer to one another by ID,
