@@ -81,6 +81,14 @@ impl<Id> Type<Id> {
         self.common().and_then(|common| common.name())
     }
 
+    /// The type's default value, if any.
+    ///
+    /// Always `None` for built-in and container types, which carry no
+    /// default slot.
+    pub fn default(&self) -> Option<&serde_json::Value> {
+        self.common().and_then(|common| common.default())
+    }
+
     /// Set or clear the type's default value after construction.
     ///
     /// Consumers often learn a type's default after building it (from
