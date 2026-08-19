@@ -7,10 +7,15 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-codespace = { git = "https://github.com/oxidecomputer/codespace" }
+# The codespace and json-serde repositories are not yet published; until they
+# are, build against the local checkouts. Restore the git (or version)
+# dependencies when they are available:
+#   codespace = { git = "https://github.com/oxidecomputer/codespace" }
+#   json-serde = { git = "https://github.com/oxidecomputer/json-serde" }
+codespace = { path = "../codespace" }
 expectorate = "1.2.0"
 heck = "0.5.0"
-json-serde = { git = "https://github.com/oxidecomputer/json-serde" }
+json-serde = { path = "../json-serde" }
 log = "0.4.29"
 newline-converter = "0.3.0"
 prettyplease = "0.2.37"

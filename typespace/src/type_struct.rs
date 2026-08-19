@@ -458,7 +458,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeNewtypeStruct<Id
         let inner_ident = typespace.render_ident(inner);
 
         let derive_attr = (!traits.is_empty()).then(|| {
-            let trait_idents = traits.iter().map(|tt| tt.render(&typespace.settings));
+            let trait_idents = traits.iter().map(|tt| tt.render(typespace.settings));
             quote! {
                 #[derive(#(#trait_idents),*)]
             }

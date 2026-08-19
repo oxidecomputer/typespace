@@ -1,5 +1,51 @@
 // Copyright 2026 Oxide Computer Company
 
+//! Semantic model of Rust types for code generation.
+//!
+//! # Dependencies of generated code
+//!
+//! Rendered code can reference crates that typespace itself does not
+//! depend on. Cargo cannot surface these requirements; the crate that
+//! contains the generated code must declare them. Which crates are
+//! needed depends on the constructs in the output:
+//!
+//! - [serde](https://crates.io/crates/serde), with the `derive`
+//!   feature: required by every generated struct, enum, newtype
+//!   struct, unit struct, and tuple struct; each is emitted with serde
+//!   derives or hand-written `Serialize`/`Deserialize` impls. Only
+//!   output consisting solely of type aliases avoids it.
+//! - [serde_json](https://crates.io/crates/serde_json): required if
+//!   the output contains a [`Type::JsonValue`] (rendered as
+//!   `::serde_json::Value`), a property with
+//!   [`StructPropertyState::DefaultValue`] (the generated default
+//!   function calls `::serde_json::from_value`), or a
+//!   [`TypeUnitStruct`] (its `Deserialize` impl compares input against
+//!   the fixed JSON representation).
+//! - [json-serde](https://crates.io/crates/json-serde): required if
+//!   the output contains any of:
+//!   - a property with [`StructPropertyState::Optional`] whose type is
+//!     not an `Option` (deserialized with
+//!     `::json_serde::deserialize_some`, which distinguishes an absent
+//!     field from a present one and rejects `null`);
+//!   - a property with [`StructPropertyState::Optional`] whose type is
+//!     an `Option`, when
+//!     [`TypespaceSettingsOptionalNullable::DoubleOption`] is selected
+//!     (also `::json_serde::deserialize_some`);
+//!   - a [`TypeTupleStruct`] with a `rest` field (its serde impls use
+//!     `::json_serde::FlattenedSequenceSerializer` and
+//!     `::json_serde::FlattenedSequenceDeserializer`).
+//!
+//! Generated code also reproduces, verbatim, every type path the
+//! consumer supplies: the `name` of a [`TypeNative`] (a converter
+//! might inject `uuid::Uuid` or `chrono` types for string formats or
+//! `x-rust-type` extensions, as typify does) and the wrapper named by
+//! [`TypespaceSettingsOptionalNullable::CustomType`]. The crates
+//! behind those paths are dependencies chosen by the consumer that
+//! builds the typespace, not by typespace, and the consumer should
+//! document them the way typify documents `uuid`, `chrono`, and
+//! `regress`. typespace itself emits no reference to `regress` today;
+//! that changes when constraint validation rendering lands.
+
 mod error;
 mod type_alias;
 mod type_common;
@@ -79,6 +125,7 @@ use serde::Deserialize;
 /// - `std::clone::Clone` -- XXX
 /// - `std::fmt::Display` -- XXX
 /// - `std::default::Default` -- XXX
+///
 /// XXX
 ///
 /// - Eq, Cmp and anything else that's not implemented by floating-point types.
@@ -565,7 +612,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     fn render(&self) -> codespace::Codespace {
         let mut cs = codespace::Codespace::default();
 
-        for (_, typ) in self.types.iter() {
+        for typ in self.types.values() {
             match typ {
                 Type::Struct(s) => {
                     let name = s.common.name.clone();
@@ -889,7 +936,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 self.render_struct_property_add_skip(
                     &mut serde_options,
                     type_id,
-                    &ty,
+                    ty,
                     std_opt_is_none,
                 );
 
@@ -1157,8 +1204,8 @@ where
     // First, look through all types to determine what traits are required of
     // various children.
     let mut work = types
-        .iter()
-        .filter_map(|(_, ty)| match ty {
+        .values()
+        .filter_map(|ty| match ty {
             // TODO 3/31/2026
             // need to check map settings
             Type::Map(key_schema_ref, _) => Some((

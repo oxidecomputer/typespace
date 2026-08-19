@@ -146,7 +146,7 @@ fn test_struct_field_serde() {
     for (name, sub_codespace) in outputs {
         let modname = heck::ToSnakeCase::to_snake_case(name);
         let modname_ident = format_ident!("{modname}");
-        let m = sub_codespace.into_mod();
+        let m = sub_codespace.into_root_mod();
 
         let root_mod = codespace.get_root_mod();
 
@@ -970,7 +970,7 @@ fn test_compound_field_types() {
         let v: import::All = serde_json::from_value(serde_json::json!({
             "a_bool": true,
             "an_int": 7,
-            "a_float": 3.14,
+            "a_float": 3.5,
             "a_string": "hello",
             "a_json": {"any": "thing"},
             "a_vec": ["x", "y"],
