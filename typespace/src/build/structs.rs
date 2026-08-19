@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use syn::Ident;
 
 use crate::build::{JsonValue, TypeCommon, TypeCommonBuilt};
-use crate::TypespaceRenderer;
+use crate::{TypespaceRenderer, TypespaceTrait};
 
 #[derive(Debug, Clone)]
 pub struct Struct<Id> {
@@ -43,11 +43,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                     name,
                     description,
                     default: _,
-                    built: _,
+                    built: Some(TypeCommonBuilt { traits }),
                 },
             properties,
             deny_unknown_fields: _,
-        } = self;
+        } = self
+        else {
+            unreachable!()
+        };
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let name_ident = format_ident!("{name}");
         let snake_name = heck::AsSnakeCase(name.as_str()).to_string();
@@ -57,9 +60,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             rendered_properties.push(typespace.render_struct_property(prop, true, &snake_name, cs));
         }
 
+        // Serialize and Deserialize are always derived; propagated traits
+        // are realized as additional derives.
+        let derive_attr = typespace.render_derives(
+            &[
+                quote! { ::serde::Deserialize },
+                quote! { ::serde::Serialize },
+            ],
+            traits,
+            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
+        );
+
         quote! {
             #description
-            #[derive(::serde::Deserialize, ::serde::Serialize)]
+            #derive_attr
             pub struct #name_ident {
                 #( #rendered_properties, )*
             }
@@ -152,25 +166,44 @@ impl UnitStruct {
         }
     }
 
-    pub(crate) fn render(&self) -> proc_macro2::TokenStream {
+    pub(crate) fn render<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
+        &self,
+        typespace: &TypespaceRenderer<'_, Id>,
+    ) -> proc_macro2::TokenStream {
         let Self {
             common:
                 TypeCommon {
                     name,
                     description,
-                    built: _,
+                    built: Some(TypeCommonBuilt { traits }),
                     default: _,
                 },
             repr,
-        } = self;
+        } = self
+        else {
+            unreachable!()
+        };
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
+
+        // Clone and Debug are always derived; Serialize and Deserialize are
+        // hand-written impls below, so they never appear as derives.
+        let derive_attr = typespace.render_derives(
+            &[quote! { ::std::clone::Clone }, quote! { ::std::fmt::Debug }],
+            traits,
+            &[
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+            ],
+        );
 
         let repr_tokens = crate::value_tokens::value_tokens(repr);
         let repr_string = serde_json::to_string(repr).unwrap();
         quote! {
             #description
-            #[derive(::std::clone::Clone, ::std::fmt::Debug)]
+            #derive_attr
             pub struct #name_ident;
 
             impl ::serde::Serialize for #name_ident {
@@ -239,14 +272,35 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     name,
                     description,
                     default: _,
-                    built: _,
+                    built: Some(TypeCommonBuilt { traits }),
                 },
             fields,
             rest,
-        } = self;
+        } = self
+        else {
+            unreachable!()
+        };
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
         let name_ident = format_ident!("{name}");
+
+        // Clone and Debug are always derived; Serialize and Deserialize are
+        // hand-written impls below, so they never appear as derives.
+        let derive_attr = typespace.render_derives(
+            &[quote! { ::std::clone::Clone }, quote! { ::std::fmt::Debug }],
+            traits,
+            &[
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+            ],
+        );
+
+        // The flattened-sequence helpers come from the json-serde crate,
+        // whose path is configurable.
+        let json_serde = syn::parse_str::<syn::Path>(typespace.settings.json_serde_crate())
+            .expect("invalid json-serde crate path");
 
         let field_ident = fields
             .iter()
@@ -275,7 +329,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         quote! {
             #description
-            #[derive(::std::clone::Clone, ::std::fmt::Debug)]
+            #derive_attr
             pub struct #name_ident(
                 #( pub #field_ident, )*
                 #( pub #rest_ident, )*
@@ -293,7 +347,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     )*
                     #(
                         self.#rest_index.serialize(
-                            ::json_serde::FlattenedSequenceSerializer::new(&mut seq)
+                            #json_serde::FlattenedSequenceSerializer::new(&mut seq)
                         )?;
                     )*
                     seq.end()
@@ -334,7 +388,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                             )*
                             #(
                                 let #rest_var = ::serde::Deserialize::deserialize(
-                                    ::json_serde::FlattenedSequenceDeserializer::new(&mut seq)
+                                    #json_serde::FlattenedSequenceDeserializer::new(&mut seq)
                                 )?;
                             )*
                             Ok(#name_ident(
@@ -456,12 +510,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let inner_ident = typespace.render_ident(inner);
 
-        let derive_attr = (!traits.is_empty()).then(|| {
-            let trait_idents = traits.iter().map(|tt| tt.render(typespace.settings));
-            quote! {
-                #[derive(#(#trait_idents),*)]
-            }
-        });
+        // Serialize and Deserialize are hand-written impls below, so they
+        // never appear as derives; other propagated traits are derived.
+        let derive_attr = typespace.render_derives(
+            &[],
+            traits,
+            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
+        );
 
         debug!("constraints: {constraints:#?}");
 

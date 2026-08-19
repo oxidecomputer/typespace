@@ -14,6 +14,10 @@ use typespace::{
 };
 use typespace_test_macro::check_and_include;
 
+// Alias used by test_json_serde_crate_override: generated code refers to
+// json-serde helpers through this renamed path.
+use json_serde as my_json_serde;
+
 // Stub for the user-provided type referenced by OptionalNullable::CustomType.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
@@ -70,7 +74,7 @@ fn test_struct_field_serde() {
     // - peanut_string: A string with a custom default of "peanuts"
     // - peanut_option: A string or null with a custom default of "peanuts"
     let outputs = configs.into_iter().map(|(name, settings)| {
-        let mut builder = TypespaceBuilder::default();
+        let mut builder = TypespaceBuilder::new(settings);
 
         let string_id = "string".to_string();
         builder.insert(string_id.clone(), Type::String).unwrap();
@@ -139,7 +143,7 @@ fn test_struct_field_serde() {
             )
             .unwrap();
 
-        let ts = builder.finalize(settings, no_cycles).unwrap();
+        let ts = builder.finalize(no_cycles).unwrap();
         let out = ts.to_codespace();
 
         (name, out)
@@ -231,9 +235,7 @@ fn test_unit_struct() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default(), no_cycles)
-        .expect("finalize typespace");
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
     #[check_and_include("tests/output/test_unit_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -274,9 +276,7 @@ fn test_tuple_struct() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default(), no_cycles)
-        .expect("finalize typespace");
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
     #[check_and_include("tests/output/test_tuple_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -333,7 +333,7 @@ fn test_enums() {
     ];
 
     let outputs = configs.iter().map(|(name, tag_type)| {
-        let mut builder = TypespaceBuilder::default();
+        let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
         let string_id = "string".to_string();
         builder.insert(string_id.clone(), Type::String).unwrap();
@@ -394,7 +394,7 @@ fn test_enums() {
             .unwrap();
 
         builder
-            .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
+            .finalize(no_cycles)
             .unwrap()
             .to_codespace()
             .into_stream()
@@ -451,7 +451,7 @@ fn test_enums() {
 
 #[test]
 fn test_newtype_struct() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -487,9 +487,7 @@ fn test_newtype_struct() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
-        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
 
     #[check_and_include("tests/output/test_newtype_struct.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -511,7 +509,7 @@ fn test_newtype_struct() {
 
 #[test]
 fn test_type_alias() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -539,9 +537,7 @@ fn test_type_alias() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
-        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
 
     #[check_and_include("tests/output/test_type_alias.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -555,7 +551,7 @@ fn test_type_alias() {
 
 #[test]
 fn test_struct_serde_rename_flatten() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -614,9 +610,7 @@ fn test_struct_serde_rename_flatten() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
-        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
 
     #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -634,7 +628,7 @@ fn test_struct_serde_rename_flatten() {
 
 #[test]
 fn test_native_type() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
     let uuid_id = "path".to_string();
     builder
@@ -662,9 +656,7 @@ fn test_native_type() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
-        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
 
     #[check_and_include("tests/output/test_native_type.rs", ts.to_codespace().into_stream())]
     fn inner() {}
@@ -672,7 +664,7 @@ fn test_native_type() {
 
 #[test]
 fn test_compound_field_types() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -932,9 +924,7 @@ fn test_compound_field_types() {
         )
         .unwrap();
 
-    let ts = builder
-        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
-        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
 
     #[check_and_include("tests/output/test_compound_field_types.rs", ts.to_codespace().into_stream())]
     fn inner() {
@@ -1021,7 +1011,7 @@ fn test_map_key_struct_with_float() {
         .insert("map".to_string(), Type::Map(key_id, value_id))
         .unwrap();
 
-    let Err(err) = builder.finalize(Settings::default(), no_cycles) else {
+    let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail");
     };
     assert!(matches!(
@@ -1070,7 +1060,7 @@ fn test_unknown_type_id() {
     builder
         .insert("v".to_string(), Type::Vec("missing".to_string()))
         .unwrap();
-    let Err(err) = builder.finalize(Settings::default(), no_cycles) else {
+    let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail");
     };
     assert!(matches!(
@@ -1149,7 +1139,7 @@ fn test_cycles() {
         .unwrap();
 
     let ts = builder
-        .finalize(Settings::default(), |_: &i32| next())
+        .finalize(|_: &i32| next())
         .expect("finalize typespace");
 
     #[check_and_include("tests/output/test_cycles.rs", ts.to_codespace().into_stream())]
@@ -1172,5 +1162,412 @@ fn test_cycles() {
         // B and C cycle: B with absent 'c', C with nested B with absent 'c'.
         let _b: import::B = serde_json::from_str(r#"{}"#).unwrap();
         let _c: import::C = serde_json::from_str(r#"{"b": {}}"#).unwrap();
+    }
+}
+
+// Container overrides replace the rendered map/set/vec types; a
+// string-to-JSON-value map is always ::serde_json::Map regardless of the
+// map override.
+#[test]
+fn test_container_overrides() {
+    let settings = Settings::default()
+        .with_map_type("::std::collections::HashMap")
+        .with_set_type("::std::collections::BTreeSet")
+        .with_vec_type("::std::collections::VecDeque");
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let string_id = "string".to_string();
+    builder.insert(string_id.clone(), Type::String).unwrap();
+
+    let int_id = "integer".to_string();
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
+
+    let json_id = "json".to_string();
+    builder.insert(json_id.clone(), Type::JsonValue).unwrap();
+
+    let map_id = "map".to_string();
+    builder
+        .insert(map_id.clone(), Type::Map(string_id.clone(), int_id.clone()))
+        .unwrap();
+
+    let set_id = "set".to_string();
+    builder
+        .insert(set_id.clone(), Type::Set(string_id.clone()))
+        .unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    let obj_id = "obj".to_string();
+    builder
+        .insert(
+            obj_id.clone(),
+            Type::Map(string_id.clone(), json_id.clone()),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Containers".to_string(),
+            Type::Struct(Struct::new(
+                "Containers",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("a_map"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        map_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_set"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        set_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        vec_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_obj"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        obj_id.clone(),
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
+
+    // Default-state fields exercise the is_empty path against the
+    // overridden container types (and the ::serde_json::Map special case).
+    builder
+        .insert(
+            "ContainerDefaults".to_string(),
+            Type::Struct(Struct::new(
+                "ContainerDefaults",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("a_map"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        map_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_set"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        set_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("a_vec"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        vec_id,
+                    ),
+                    StructProperty::new(
+                        format_ident!("an_obj"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Default,
+                        None,
+                        obj_id,
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_container_overrides.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let v: import::Containers = serde_json::from_value(serde_json::json!({
+            "a_map": {"k": 1},
+            "a_set": ["b", "a", "b"],
+            "a_vec": ["x", "y"],
+            "an_obj": {"any": ["thing"]},
+        }))
+        .unwrap();
+
+        let map: &std::collections::HashMap<String, u32> = &v.a_map;
+        assert_eq!(map["k"], 1);
+        let set: &std::collections::BTreeSet<String> = &v.a_set;
+        assert_eq!(set.len(), 2);
+        let vec: &std::collections::VecDeque<String> = &v.a_vec;
+        assert_eq!(vec.len(), 2);
+        let obj: &serde_json::Map<String, serde_json::Value> = &v.an_obj;
+        assert_eq!(obj["any"], serde_json::json!(["thing"]));
+
+        // All fields at their defaults serialize to an empty object.
+        let d: import::ContainerDefaults = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&d).unwrap(), serde_json::json!({}));
+    }
+}
+
+// Traits requested via with_trait_impl seed every named type and are
+// realized as derives; with_derive paths are appended opaquely.
+#[test]
+fn test_trait_impls() {
+    let settings = Settings::default()
+        .with_std(Std::Unqualified)
+        .with_trait_impl(typespace::TypespaceTrait::Clone)
+        .with_trait_impl(typespace::TypespaceTrait::Debug)
+        .with_trait_impl(typespace::TypespaceTrait::PartialEq)
+        .with_trait_impl(typespace::TypespaceTrait::Eq)
+        .with_derive("::std::hash::Hash");
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let string_id = "string".to_string();
+    builder.insert(string_id.clone(), Type::String).unwrap();
+
+    let int_id = "integer".to_string();
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    builder
+        .insert(
+            "Widget".to_string(),
+            Type::Struct(Struct::new(
+                "Widget",
+                None,
+                vec![
+                    StructProperty::new(
+                        format_ident!("name"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        string_id.clone(),
+                    ),
+                    StructProperty::new(
+                        format_ident!("tags"),
+                        StructPropertySerde::None,
+                        StructPropertyState::Required,
+                        None,
+                        vec_id.clone(),
+                    ),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Gadget".to_string(),
+            Type::Enum(Enum::new(
+                "Gadget",
+                None,
+                None,
+                EnumTagType::External,
+                vec![
+                    EnumVariant::new("Off", None, None, VariantDetails::Unit),
+                    EnumVariant::new("On", None, None, VariantDetails::Item(int_id.clone())),
+                ],
+                false,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Wrapper".to_string(),
+            Type::NewtypeStruct(NewtypeStruct::new(
+                "Wrapper",
+                None,
+                None,
+                string_id.clone(),
+                NewtypeConstraints::None,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Marker".to_string(),
+            Type::UnitStruct(UnitStruct::new("Marker", None, serde_json::json!("marker"))),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Pair".to_string(),
+            Type::TupleStruct(TupleStruct::new(
+                "Pair",
+                None,
+                vec![string_id.clone(), int_id.clone()],
+                None,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Named".to_string(),
+            Type::TypeAlias(TypeAlias::new("Named", None, string_id.clone())),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_trait_impls.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        // Clone + PartialEq/Eq from with_trait_impl; Hash from with_derive.
+        let v: import::Widget = serde_json::from_str(r#"{"name": "w", "tags": ["a"]}"#).unwrap();
+        let w = v.clone();
+        assert_eq!(v, w);
+        let mut hashset = std::collections::HashSet::new();
+        hashset.insert(v);
+
+        let g: import::Gadget = serde_json::from_str(r#"{"On": 3}"#).unwrap();
+        assert_eq!(g.clone(), g);
+        assert!(format!("{g:?}").contains("On"));
+
+        let n: import::Wrapper = serde_json::from_str(r#""hi""#).unwrap();
+        assert_eq!(n.clone(), n);
+
+        let m = import::Marker;
+        assert_eq!(m.clone(), m);
+
+        let p: import::Pair = serde_json::from_str(r#"["x", 1]"#).unwrap();
+        assert_eq!(p.clone(), p);
+    }
+}
+
+// A trait requested via with_trait_impl propagates into contained types and
+// surfaces an error when a leaf type cannot satisfy it.
+#[test]
+fn test_trait_impls_conflict() {
+    let settings = Settings::default().with_trait_impl(typespace::TypespaceTrait::Eq);
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let float_id = "float".to_string();
+    builder
+        .insert(float_id.clone(), Type::Float("f64".to_string()))
+        .unwrap();
+
+    builder
+        .insert(
+            "Holder".to_string(),
+            Type::Struct(Struct::new(
+                "Holder",
+                None,
+                vec![StructProperty::new(
+                    format_ident!("value"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Required,
+                    None,
+                    float_id,
+                )],
+                false,
+            )),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail");
+    };
+    assert!(matches!(
+        err,
+        TypespaceError::FloatTraits { ref type_id, ref name, .. }
+            if type_id == "float" && name == "f64"
+    ));
+}
+
+// An extra derive that isn't a valid Rust path is rejected at finalize.
+#[test]
+fn test_invalid_derive() {
+    let settings = Settings::default().with_derive("not a path!");
+    let builder = TypespaceBuilder::<String>::new(settings);
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail");
+    };
+    assert!(matches!(
+        err,
+        TypespaceError::InvalidDerive { ref derive, .. } if derive == "not a path!"
+    ));
+}
+
+// The json-serde crate path override changes both the deserialize_some
+// attribute paths and the flattened-sequence impls.
+#[test]
+fn test_json_serde_crate_override() {
+    let settings = Settings::default()
+        .with_std(Std::Unqualified)
+        .with_json_serde_crate("my_json_serde");
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let string_id = "string".to_string();
+    builder.insert(string_id.clone(), Type::String).unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    builder
+        .insert(
+            "Options".to_string(),
+            Type::Struct(Struct::new(
+                "Options",
+                None,
+                vec![StructProperty::new(
+                    format_ident!("maybe"),
+                    StructPropertySerde::None,
+                    StructPropertyState::Optional,
+                    None,
+                    string_id.clone(),
+                )],
+                false,
+            )),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "Rest".to_string(),
+            Type::TupleStruct(TupleStruct::new(
+                "Rest",
+                None,
+                vec![string_id.clone()],
+                Some(vec_id),
+            )),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_json_serde_crate_override.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let v: import::Options = serde_json::from_str(r#"{"maybe": "yes"}"#).unwrap();
+        assert_eq!(v.maybe, Some("yes".to_string()));
+        assert!(serde_json::from_str::<import::Options>(r#"{"maybe": null}"#).is_err());
+
+        let r: import::Rest = serde_json::from_str(r#"["head", "a", "b"]"#).unwrap();
+        assert_eq!(r.0, "head");
+        assert_eq!(r.1, vec!["a", "b"]);
     }
 }

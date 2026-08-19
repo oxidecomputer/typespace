@@ -4,16 +4,18 @@
 
 use serde::Deserialize;
 
+use crate::{TypespaceTrait, TypespaceTraitSet};
+
 // TODO 7/18/2025
 // I wanted to get this started to think through various settings that we might
 // eventually want...
 /// Modify how types are processed and generated.
 ///
 /// Settings are supplied to
-/// [`TypespaceBuilder::finalize`](crate::TypespaceBuilder::finalize) and
-/// govern rendering. Start from [`Settings::default`] and adjust with
-/// the `with_` methods; the type also implements `Deserialize` so
-/// settings can come from configuration data.
+/// [`TypespaceBuilder::new`](crate::TypespaceBuilder::new) and govern
+/// finalization and rendering. Start from [`Settings::default`] and
+/// adjust with the `with_` methods; the type also implements
+/// `Deserialize` so settings can come from configuration data.
 #[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     /// When set to `FullyQualified`, (the default), types in the `std` crate's
@@ -35,8 +37,34 @@ pub struct Settings {
     /// typical of Rust code.
     #[serde(default)]
     pub(crate) optional_nullable: OptionalNullable,
-    // map_type: Option<()>,
-    // set_type: Option<()>,
+
+    /// The container type used to render [`Type::Map`](crate::build::Type),
+    /// in place of the default `::std::collections::BTreeMap`.
+    #[serde(default)]
+    pub(crate) map_type: Option<ContainerType>,
+
+    /// The container type used to render [`Type::Set`](crate::build::Type),
+    /// in place of the default `Vec`.
+    #[serde(default)]
+    pub(crate) set_type: Option<ContainerType>,
+
+    /// The container type used to render [`Type::Vec`](crate::build::Type),
+    /// in place of the default `Vec`.
+    #[serde(default)]
+    pub(crate) vec_type: Option<ContainerType>,
+
+    /// Traits every named type is required to implement; requirements
+    /// propagate to contained types during finalization.
+    #[serde(default)]
+    pub(crate) trait_impls: TypespaceTraitSet,
+
+    /// Opaque derive paths appended to every generated derive attribute.
+    #[serde(default)]
+    pub(crate) extra_derives: Vec<String>,
+
+    /// The crate path used in place of `::json_serde` in generated code.
+    #[serde(default)]
+    pub(crate) json_serde_crate: Option<String>,
 }
 
 impl Settings {
@@ -53,6 +81,174 @@ impl Settings {
     pub fn with_optional_nullable(mut self, optional_nullable: OptionalNullable) -> Self {
         self.optional_nullable = optional_nullable;
         self
+    }
+
+    /// Set the container type used to render [`Type::Map`](crate::build::Type).
+    ///
+    /// The default is `::std::collections::BTreeMap`. The type named by
+    /// `map_type` is emitted verbatim with the key and value types as
+    /// its two generic arguments, so it must:
+    ///
+    /// - take two generic parameters, `K` and `V`;
+    /// - have an `is_empty` method that returns a boolean;
+    /// - implement `Default`, `Clone`, `Debug`,
+    ///   [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html),
+    ///   and
+    ///   [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html).
+    ///
+    /// A map whose key type is a string and whose value type is
+    /// [`Type::JsonValue`](crate::build::Type) is rendered as
+    /// `::serde_json::Map` regardless of this setting, matching the map
+    /// type inside `::serde_json::Value` itself.
+    pub fn with_map_type<T: Into<ContainerType>>(mut self, map_type: T) -> Self {
+        self.map_type = Some(map_type.into());
+        self
+    }
+
+    /// Set the container type used to render [`Type::Set`](crate::build::Type).
+    ///
+    /// The default is `Vec` (deduplication is not enforced). The type
+    /// named by `set_type` is emitted verbatim with the element type as
+    /// its single generic argument, so it must:
+    ///
+    /// - take one generic parameter, `T`;
+    /// - have an `is_empty` method that returns a boolean;
+    /// - implement `Default`, `Clone`, `Debug`,
+    ///   [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html),
+    ///   and
+    ///   [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html).
+    pub fn with_set_type<T: Into<ContainerType>>(mut self, set_type: T) -> Self {
+        self.set_type = Some(set_type.into());
+        self
+    }
+
+    /// Set the container type used to render [`Type::Vec`](crate::build::Type).
+    ///
+    /// The default is `Vec`. The type named by `vec_type` is emitted
+    /// verbatim with the element type as its single generic argument,
+    /// so it must:
+    ///
+    /// - take one generic parameter, `T`;
+    /// - have an `is_empty` method that returns a boolean;
+    /// - implement `Default`, `Clone`, `Debug`,
+    ///   [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html),
+    ///   and
+    ///   [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html).
+    pub fn with_vec_type<T: Into<ContainerType>>(mut self, vec_type: T) -> Self {
+        self.vec_type = Some(vec_type.into());
+        self
+    }
+
+    /// Require every named type to implement the given trait.
+    ///
+    /// The requirement seeds each named type's trait set during
+    /// finalization and propagates to contained types exactly like a
+    /// structural requirement (a map key needing `Ord`, say); a type
+    /// that cannot satisfy it is a
+    /// [`TypespaceError`](crate::TypespaceError). Whether the trait is
+    /// realized as a derive or a hand-written impl is rendering's
+    /// decision.
+    pub fn with_trait_impl(mut self, trait_impl: TypespaceTrait) -> Self {
+        self.trait_impls.add(trait_impl);
+        self
+    }
+
+    /// Append an opaque derive path to every generated derive attribute.
+    ///
+    /// The path is emitted verbatim and is invisible to trait
+    /// propagation: typespace cannot check that contained types satisfy
+    /// whatever the derive requires, and the derived trait is not
+    /// reported by trait queries. Prefer
+    /// [`Settings::with_trait_impl`] for traits typespace models.
+    pub fn with_derive<S: Into<String>>(mut self, derive: S) -> Self {
+        self.extra_derives.push(derive.into());
+        self
+    }
+
+    /// Set the crate path emitted in place of `::json_serde`.
+    ///
+    /// Generated code references the
+    /// [json-serde](https://crates.io/crates/json-serde) crate for some
+    /// constructs (see the crate docs section "Dependencies of generated
+    /// code"). Like serde's `crate` rename attribute, this override
+    /// supports consumers that re-export json-serde under another path;
+    /// the path is emitted verbatim.
+    pub fn with_json_serde_crate<S: Into<String>>(mut self, json_serde_crate: S) -> Self {
+        self.json_serde_crate = Some(json_serde_crate.into());
+        self
+    }
+
+    /// The crate path emitted for json-serde references.
+    pub(crate) fn json_serde_crate(&self) -> &str {
+        self.json_serde_crate.as_deref().unwrap_or("::json_serde")
+    }
+}
+
+/// A container type path used in place of a built-in container render.
+///
+/// Wraps the Rust path of a container type (`::std::collections::HashMap`,
+/// say). Rendering emits the path verbatim and appends the generic
+/// arguments appropriate to the container being rendered; the
+/// `Settings::with_*_type` methods document what each container
+/// requires of the type.
+#[derive(Clone, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ContainerType(pub(crate) syn::Type);
+
+impl ContainerType {
+    /// Create a new ContainerType from a [`str`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `s` cannot be parsed as a Rust type. Prefer
+    /// [`str::parse`] (via the [`FromStr`](std::str::FromStr)
+    /// implementation) to handle invalid input without panicking.
+    pub fn new(s: &str) -> Self {
+        let container_type = syn::parse_str::<syn::Type>(s).expect("valid type path");
+        Self(container_type)
+    }
+}
+
+impl std::str::FromStr for ContainerType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let container_type = syn::parse_str::<syn::Type>(s)
+            .map_err(|err| format!("invalid container type {s:?}: {err}"))?;
+        Ok(Self(container_type))
+    }
+}
+
+impl TryFrom<String> for ContainerType {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl From<syn::Type> for ContainerType {
+    fn from(t: syn::Type) -> Self {
+        Self(t)
+    }
+}
+
+impl From<&str> for ContainerType {
+    /// Parse a container type from a string path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the string cannot be parsed as a Rust type; see
+    /// [`ContainerType::new`].
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl std::fmt::Debug for ContainerType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use quote::ToTokens;
+        write!(f, "ContainerType({})", self.0.to_token_stream())
     }
 }
 

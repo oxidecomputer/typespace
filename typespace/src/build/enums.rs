@@ -3,8 +3,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::build::{JsonValue, StructProperty, TypeCommon};
-use crate::TypespaceRenderer;
+use crate::build::{JsonValue, StructProperty, TypeCommon, TypeCommonBuilt};
+use crate::{TypespaceRenderer, TypespaceTrait};
 
 #[derive(Debug, Clone)]
 pub struct Enum<Id> {
@@ -55,12 +55,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     name,
                     description,
                     default: _,
-                    built: _,
+                    built: Some(TypeCommonBuilt { traits }),
                 },
             tag_type,
             variants,
             deny_unknown_fields: _,
-        } = self;
+        } = self
+        else {
+            unreachable!()
+        };
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let serde = match tag_type {
             EnumTagType::External => TokenStream::new(),
@@ -114,10 +117,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         let name_ident = format_ident!("{name}");
 
+        // Serialize and Deserialize are always derived; propagated traits
+        // are realized as additional derives.
+        let derive_attr = typespace.render_derives(
+            &[
+                quote! { ::serde::Deserialize },
+                quote! { ::serde::Serialize },
+            ],
+            traits,
+            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
+        );
+
         quote! {
             // TODO I want to have the original unique id available
             #description
-            #[derive(::serde::Deserialize, ::serde::Serialize)]
+            #derive_attr
             #serde
             pub enum #name_ident {
                 #( #variants, )*

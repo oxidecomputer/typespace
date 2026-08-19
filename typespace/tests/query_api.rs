@@ -12,8 +12,7 @@ use typespace::{
 };
 
 fn make_typespace() -> typespace::Typespace<String> {
-    let mut builder = TypespaceBuilder::default();
-    let settings = Settings::default();
+    let mut builder = TypespaceBuilder::new(Settings::default());
 
     let str_id = "str".to_string();
     builder.insert(str_id.clone(), Type::String).unwrap();
@@ -92,7 +91,7 @@ fn make_typespace() -> typespace::Typespace<String> {
         )
         .unwrap();
 
-    builder.finalize(settings, no_cycles).unwrap()
+    builder.finalize(no_cycles).unwrap()
 }
 
 #[test]

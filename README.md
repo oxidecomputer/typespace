@@ -23,11 +23,11 @@ generators and for use by other code generation libraries.
 
 Types form a graph of `Type<Id>` values keyed by a caller-chosen `Id` type.
 Names come from the consumer: `typespace` never invents identifiers, applies
-casing, or resolves collisions. Consumers insert types
-into a `TypespaceBuilder` and call `finalize()`. This validates the
+casing, or resolves collisions. Consumers create a `TypespaceBuilder` from
+`settings::Settings`, insert types, and call `finalize()`. This validates the
 type graph (dangling references are errors), breaks containment cycles by
 inserting `Box` types, and propagates trait requirements (e.g. a type used as
-a `BTreeMap` key must be `Ord`).
+a map key must be `Ord`).
 
 ```rust
 use quote::format_ident;
@@ -61,9 +61,7 @@ builder
     )
     .unwrap();
 
-let ts = builder
-    .finalize(Settings::default(), no_cycles)
-    .unwrap();
+let ts = builder.finalize(no_cycles).unwrap();
 let tokens = ts.to_codespace().into_stream();
 ```
 
@@ -109,20 +107,15 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 
 ## Future direction
 
-- Trait/derive configurability: `#[derive(...)]` sets are hardcoded in
-  most render methods today. `TypespaceTrait` and `TypespaceTraitSet`
-  exist and should be wired into `settings::Settings` so callers control
-  both the traits *required* of generated types (driving propagation at
-  finalize time) and the traits *emitted* (at render time); how those
-  two axes relate is deliberately unresolved. Until then the trait-set
-  API stays minimal (no `remove`, no set operations, no `Display`).
-- `push_traits` is incomplete: trait requirements that route through
-  `UnitStruct`, `TupleStruct`, or `TypeAlias`, or `Display`/`FromStr`
-  requirements on container types, hit `todo!()`.
+- `push_traits` is incomplete: `Display`/`FromStr` requirements on
+  container types hit `todo!()`, and a native type missing a required
+  trait is not yet a structured error.
+- Trait propagation does not account for container overrides: a map
+  key requires `Ord` even when the configured map type is a hash map,
+  and a set imposes no element requirements even when the configured
+  set type is an ordered set.
 - Newtype constraints: `build::NewtypeConstraints` is accepted but not yet
   rendered; constraints should be enforced at deserialization.
-- Concrete map/set types: `Type::Map` always renders as `BTreeMap` and
-  `Type::Set` as `Vec`; both should be `settings::Settings` fields.
 - `build::TypeCommon::default` is never rendered; it should drive a generated
   `Default` impl.
 - Type-to-module layout as a settings axis with multiple strategies

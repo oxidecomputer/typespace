@@ -27,6 +27,20 @@ where
         type_id: Id,
     },
 
+    /// A derive path supplied via settings is not a valid Rust path.
+    ///
+    /// Extra derives come from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive)
+    /// and are emitted into every generated derive attribute; a path
+    /// that does not parse would produce unbuildable code.
+    #[error("the derive `{derive}` is not a valid Rust path: {message}")]
+    InvalidDerive {
+        /// The derive string as supplied.
+        derive: String,
+        /// The parse failure.
+        message: String,
+    },
+
     /// A type refers to a child type ID for which no type was inserted.
     #[error(
         "the type with id `{type_id}` references the id `{child_id}` \

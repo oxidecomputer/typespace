@@ -2,10 +2,10 @@
 
 //! Semantic model of Rust types for code generation.
 //!
-//! The crate is organized around the type lifecycle: consumers assemble
-//! types from the [`build`] module's vocabulary, insert them into a
-//! [`TypespaceBuilder`], and call [`TypespaceBuilder::finalize`] with
-//! [`settings::Settings`] to produce a [`Typespace`]. A finalized
+//! The crate is organized around the type lifecycle: consumers create a
+//! [`TypespaceBuilder`] from [`settings::Settings`], assemble types
+//! from the [`build`] module's vocabulary, insert them, and call
+//! [`TypespaceBuilder::finalize`] to produce a [`Typespace`]. A finalized
 //! typespace renders code via [`Typespace::to_codespace`] and answers
 //! queries through the [`view`] module's types.
 //!
@@ -41,6 +41,10 @@
 //!   - a [`build::TupleStruct`] with a `rest` field (its serde impls use
 //!     `::json_serde::FlattenedSequenceSerializer` and
 //!     `::json_serde::FlattenedSequenceDeserializer`).
+//!
+//!   The `::json_serde` path itself follows
+//!   [`settings::Settings::with_json_serde_crate`], for consumers that
+//!   re-export the crate under another name.
 //!
 //! Generated code also reproduces, verbatim, every type path the
 //! consumer supplies: the `name` of a [`build::Native`] (a converter
@@ -112,7 +116,8 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// a [`build::Native`] type must already declare the required traits
 /// among its `impls`. A requirement that a type cannot satisfy--`Ord`
 /// on a float, say--is a [`TypespaceError`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum TypespaceTrait {
     Clone,
@@ -170,7 +175,7 @@ impl TypespaceTrait {
 /// Used, for example, for the traits a [`build::Native`] type declares
 /// that it implements. Build one with [`TypespaceTraitSet::empty`] and
 /// [`TypespaceTraitSet::add`], or collect from an iterator of traits.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 
 impl FromIterator<TypespaceTrait> for TypespaceTraitSet {
@@ -224,19 +229,32 @@ pub enum TypeSpaceImpl {
 
 /// Accumulates the type graph prior to finalization.
 ///
-/// Insert every type--each named type along with every built-in and
-/// container type it references--under a caller-chosen ID with
-/// [`TypespaceBuilder::insert`], then call
+/// Create one from [`settings::Settings`] with
+/// [`TypespaceBuilder::new`] (or [`TypespaceBuilder::default`] for
+/// default settings), insert every type--each named type along with
+/// every built-in and container type it references--under a
+/// caller-chosen ID with [`TypespaceBuilder::insert`], then call
 /// [`TypespaceBuilder::finalize`] to validate the graph and produce a
 /// [`Typespace`].
 pub struct TypespaceBuilder<Id> {
     types: BTreeMap<Id, Type<Id>>,
+    settings: Settings,
 }
 
 impl<Id> Default for TypespaceBuilder<Id> {
+    /// A builder with default [`settings::Settings`].
     fn default() -> Self {
+        Self::new(Settings::default())
+    }
+}
+
+impl<Id> TypespaceBuilder<Id> {
+    /// Create a builder whose finalization and rendering are governed
+    /// by `settings`.
+    pub fn new(settings: Settings) -> Self {
         Self {
             types: Default::default(),
+            settings,
         }
     }
 }
@@ -292,11 +310,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// wrapper inserted to break a containment cycle. The argument is the ID
     /// of the inner type being wrapped. Pass [`no_cycles`] to assert
     /// that the graph contains no containment cycles.
-    pub fn finalize<F>(
-        self,
-        settings: Settings,
-        make_box_id: F,
-    ) -> Result<Typespace<Id>, TypespaceError<Id>>
+    pub fn finalize<F>(self, make_box_id: F) -> Result<Typespace<Id>, TypespaceError<Id>>
     where
         F: FnMut(&Id) -> Id,
     {
@@ -305,7 +319,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // 2. Propagate trait impls
         // 3. Type-specific finalization
 
-        let Self { mut types } = self;
+        let Self {
+            mut types,
+            settings,
+        } = self;
+
+        // Reject unparseable extra derives here so that rendering--which
+        // is infallible--can rely on them parsing.
+        for derive in &settings.extra_derives {
+            if let Err(err) = syn::parse_str::<syn::Path>(derive) {
+                return Err(TypespaceError::InvalidDerive {
+                    derive: derive.clone(),
+                    message: err.to_string(),
+                });
+            }
+        }
 
         // Verify that every type ID referenced by another type is actually
         // present; subsequent steps rely on lookups of child IDs succeeding.
@@ -322,7 +350,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
         build_commons(&mut types);
         break_cycles(&mut types, make_box_id);
-        push_traits(&mut types)?;
+        push_traits(&mut types, &settings)?;
 
         Ok(Typespace { types, settings })
     }
@@ -412,7 +440,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::UnitStruct(u) => {
                     let name = u.common.name.clone();
-                    cs.add_item(name, u.render());
+                    cs.add_item(name, u.render(self));
                 }
                 Type::TupleStruct(t) => {
                     let name = t.common.name.clone();
@@ -443,6 +471,42 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     pub(crate) fn render_raw_type(&self, id: &Id) -> TokenStream {
         self.render_ident_impl(id, None, true)
+    }
+
+    /// Render the derive attribute for a named type.
+    ///
+    /// `base` holds the derives a shape always emits, first and
+    /// verbatim. The type's propagated trait set follows, except for
+    /// the traits in `skip`--those covered by `base` or realized as
+    /// hand-written impls--and for `Display` and `FromStr`, which have
+    /// no derive form. Extra derives from
+    /// [`settings::Settings::with_derive`] come last, parsed but
+    /// otherwise emitted as given. Returns `None` when there is nothing
+    /// to derive.
+    pub(crate) fn render_derives(
+        &self,
+        base: &[TokenStream],
+        traits: &TypespaceTraitSet,
+        skip: &[TypespaceTrait],
+    ) -> Option<TokenStream> {
+        let mut derives = base.to_vec();
+        derives.extend(
+            traits
+                .iter()
+                .filter(|tt| !skip.contains(tt))
+                .filter(|tt| !matches!(tt, TypespaceTrait::Display | TypespaceTrait::FromStr))
+                .map(|tt| tt.render(self.settings)),
+        );
+        derives.extend(self.settings.extra_derives.iter().map(|derive| {
+            syn::parse_str::<syn::Path>(derive)
+                .expect("invalid derive path")
+                .to_token_stream()
+        }));
+        (!derives.is_empty()).then(|| {
+            quote! {
+                #[derive( #( #derives ),* )]
+            }
+        })
     }
 
     pub(crate) fn render_ident_impl(
@@ -531,27 +595,32 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Set(inner_id) => {
-                // TODO 3/25/2026
-                // Replace with set type
-                let vec_type = match &self.settings.std {
-                    Std::FullyQualified => quote! { ::std::vec::Vec },
-                    Std::Unqualified => quote! { Vec },
+                let set_type = match &self.settings.set_type {
+                    Some(settings::ContainerType(path)) => quote! { #path },
+                    // Without an override, a set renders as a Vec:
+                    // deduplication is not enforced, but no trait demands
+                    // are made of the element type either.
+                    None => match &self.settings.std {
+                        Std::FullyQualified => quote! { ::std::vec::Vec },
+                        Std::Unqualified => quote! { Vec },
+                    },
                 };
                 if base_type {
-                    vec_type
+                    set_type
                 } else {
                     let inner_ident = self.render_ident_with_scope(inner_id, scope);
                     quote! {
-                        #vec_type<#inner_ident>
+                        #set_type<#inner_ident>
                     }
                 }
             }
             Type::Vec(inner_id) => {
-                // TODO 3/25/2026
-                // Make configurable?
-                let vec_type = match &self.settings.std {
-                    Std::FullyQualified => quote! { ::std::vec::Vec },
-                    Std::Unqualified => quote! { Vec },
+                let vec_type = match &self.settings.vec_type {
+                    Some(settings::ContainerType(path)) => quote! { #path },
+                    None => match &self.settings.std {
+                        Std::FullyQualified => quote! { ::std::vec::Vec },
+                        Std::Unqualified => quote! { Vec },
+                    },
                 };
                 if base_type {
                     vec_type
@@ -563,9 +632,20 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Map(key_id, value_id) => {
-                // TODO 3/25/2026
-                // Configurable like typify 1
-                let map_type = quote! { ::std::collections::BTreeMap };
+                // A string-to-JSON-value map renders as ::serde_json::Map
+                // regardless of the configured map type, matching the map
+                // type inside ::serde_json::Value itself.
+                let key_ty = self.types.get(key_id).unwrap();
+                let value_ty = self.types.get(value_id).unwrap();
+                let map_type =
+                    if matches!(key_ty, Type::String) && matches!(value_ty, Type::JsonValue) {
+                        quote! { ::serde_json::Map }
+                    } else {
+                        match &self.settings.map_type {
+                            Some(settings::ContainerType(path)) => quote! { #path },
+                            None => quote! { ::std::collections::BTreeMap },
+                        }
+                    };
                 if base_type {
                     map_type
                 } else {
@@ -644,6 +724,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Std::Unqualified => quote! { Option },
         };
         let std_opt_is_none = format!("{std_opt_type}::is_none");
+        let deserialize_some = format!("{}::deserialize_some", self.settings.json_serde_crate());
 
         let prop_ty_ident = match (state, maybe_option_type) {
             // A required field needs no serde annotations.
@@ -665,7 +746,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             (StructPropertyState::Optional, None) => {
                 serde_options.push(quote! { default });
                 serde_options.push(quote! {
-                    deserialize_with = "::json_serde::deserialize_some"
+                    deserialize_with = #deserialize_some
                 });
                 serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
                 // TODO schemars schema_with
@@ -692,7 +773,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
                         serde_options.push(quote! {
-                            deserialize_with = "::json_serde::deserialize_some"
+                            deserialize_with = #deserialize_some
                         });
                         serde_options.push(quote! {
                             skip_serializing_if = #std_opt_is_none
@@ -972,7 +1053,10 @@ where
     }
 }
 
-fn push_traits<Id>(types: &mut BTreeMap<Id, Type<Id>>) -> Result<(), TypespaceError<Id>>
+fn push_traits<Id>(
+    types: &mut BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+) -> Result<(), TypespaceError<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -1002,6 +1086,20 @@ where
         })
         .collect::<VecDeque<_>>();
 
+    // Traits requested via Settings::with_trait_impl seed the trait set of
+    // every named type. We route the seeds through the normal work queue
+    // rather than writing them into TypeCommonBuilt directly so that they
+    // propagate to contained types--and are checked against native and
+    // built-in leaf types--exactly like structural requirements.
+    if !settings.trait_impls.is_empty() {
+        work.extend(
+            types
+                .iter()
+                .filter(|(_, ty)| ty.is_named())
+                .map(|(type_id, _)| (type_id.clone(), settings.trait_impls.clone())),
+        );
+    }
+
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means adding the
     // traits and pushing children. If the type is **not** generated (native or
@@ -1013,13 +1111,17 @@ where
     while let Some((schema_ref, traits)) = work.pop_front() {
         let ty = types.get_mut(&schema_ref).unwrap();
 
+        // Every named type absorbs requirements into its built trait set;
+        // requirements then flow onward to its contained children. For a
+        // type alias the "contained child" is its target, so requirements
+        // imposed on the alias reach the type it names.
         let common_built = match ty {
             Type::NewtypeStruct(NewtypeStruct { common, .. })
             | Type::Enum(Enum { common, .. })
-            | Type::Struct(Struct { common, .. }) => Some(common.built.as_mut().unwrap()),
-            Type::UnitStruct(_) => todo!(),
-            Type::TupleStruct(_) => todo!(),
-            Type::TypeAlias(_) => todo!(),
+            | Type::Struct(Struct { common, .. })
+            | Type::UnitStruct(UnitStruct { common, .. })
+            | Type::TupleStruct(TupleStruct { common, .. })
+            | Type::TypeAlias(TypeAlias { common, .. }) => Some(common.built.as_mut().unwrap()),
 
             _ => None,
         };
@@ -1091,7 +1193,26 @@ where
                     }
                 }
 
-                Type::Map(_, _) | Type::Set(_) => todo!("wtf {schema_ref} {:#?}", ty),
+                // Like Vec, the map and set containers implement the traits
+                // we care about--except for Display and FromStr--as long as
+                // their key/value/element types do.
+                Type::Map(key_ref, value_ref) => {
+                    if traits.contains(&TypespaceTrait::Display)
+                        || traits.contains(&TypespaceTrait::FromStr)
+                    {
+                        todo!();
+                    }
+                    work.push_back((key_ref.clone(), traits.clone()));
+                    work.push_back((value_ref.clone(), traits));
+                }
+                Type::Set(element_ref) => {
+                    if traits.contains(&TypespaceTrait::Display)
+                        || traits.contains(&TypespaceTrait::FromStr)
+                    {
+                        todo!();
+                    }
+                    work.push_back((element_ref.clone(), traits));
+                }
 
                 // TODO 3/31/2026
                 // Comment and do better
