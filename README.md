@@ -8,9 +8,18 @@ Semantic model of Rust types for code generation
 
 ## Overview
 
-`typespace` allows consumer to model complex Rust types and render them as code. It not only handles the basic construction of types, it also implemnents desired traits, deals with breaking containment cycles via boxing, propogates required traits, and identifies unsatisfiable constructions. It's intermediate representation of types can be queried ("does this type have this trait?") or rendered a text or a `TokenStream` (via the `codespace` crate).
+`typespace` allows consumers to model complex Rust types and render them as
+code. It not only handles the basic construction of types, it also implements
+desired traits, deals with breaking containment cycles via boxing, propagates
+required traits, and identifies unsatisfiable constructions. Its intermediate
+representation of types can be queried ("does this type implement this
+trait?") or rendered as text or a `TokenStream` (via the `codespace` crate).
 
-It fell out of the `typify` and `progenitor` crates. The former converts JSON Schema into Rust types; the latter generates SDKs from OpenAPI documents--for which JSON Schema is a subset (more or less...). `typespace` has been made more generic, and individually testable to both better serve those code generators and for use by other code generation libraries.
+It fell out of the `typify` and `progenitor` crates. The former converts JSON
+Schema into Rust types; the latter generates SDKs from OpenAPI documents--for
+which JSON Schema is a subset (more or less...). `typespace` has been made
+more generic, and individually testable to both better serve those code
+generators and for use by other code generation libraries.
 
 Types form a graph of `Type<Id>` values keyed by a caller-chosen `Id` type.
 Names come from the consumer: `typespace` never invents identifiers, applies
@@ -54,7 +63,15 @@ let ts = builder
 let tokens = ts.to_codespace().into_stream();
 ```
 
-TODO should we show the output?
+The tokens render (roughly) to:
+
+```rust
+/// A named thing.
+#[derive(::serde::Deserialize, ::serde::Serialize)]
+pub struct Thing {
+    pub name: ::std::string::String,
+}
+```
 
 Caller-input problems--duplicate IDs, dangling references, impossible
 trait requirements--are reported as `TypespaceError`; any panic is a
@@ -69,11 +86,13 @@ of generated code" gives the exact conditions.
 
 Finalized types can also be inspected without rendering: `get_type` and
 `iter_types` return `TypeInfo` views exposing names, identifiers,
-structural details, and trait impls. This allows additional code generation to properly interact with these generated types.
+structural details, and trait impls. This allows additional code generation
+to properly interact with these generated types.
 
 `typespace` has no JSON Schema, OpenAPI, or IDL awareness; mapping a
 schema onto these types is the caller's job (`typify`'s, for instance). It
-emits no files (that's `codespace`'s job) and runs no formatter (such as the  `prettyplease` crate). See the crate docs for details.
+emits no files (that's `codespace`'s job) and runs no formatter (such as the
+`prettyplease` crate). See the crate docs for details.
 
 ## Alternatives
 
