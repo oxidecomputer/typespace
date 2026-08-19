@@ -28,6 +28,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "codespace"
 version = "0.0.1-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0139fb529c7a09a69fb3b9c84266ceea20ac9c909c733a37a47a46216f788a20"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -107,6 +109,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "json-serde"
 version = "0.0.1-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65a9d0d846e2f9ddd1718ee6b1c2b648d9563e529962c5f68873f1bb07b2ac09"
 dependencies = [
  "serde_core",
 ]
