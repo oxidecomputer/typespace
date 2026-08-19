@@ -43,13 +43,13 @@ builder.insert("string".to_string(), Type::String).unwrap();
 builder
     .insert(
         "Thing".to_string(),
-        Struct::builder()
+        Struct::new()
             .name("Thing")
             .description("A named thing.")
-            .property(StructProperty::new(
+            .properties([StructProperty::new(
                 format_ident!("name"),
                 "string".to_string(),
-            ))
+            )])
             .build()
             .unwrap(),
     )
@@ -70,7 +70,7 @@ pub struct Thing {
 ```
 
 Caller-input problems--duplicate IDs, dangling references, impossible
-trait requirements--are reported as `TypespaceError`; any panic is a
+trait requirements--are reported as `error::Error`; any panic is a
 `typespace` bug (please file an issue!).
 
 ## Output

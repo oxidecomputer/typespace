@@ -8,10 +8,10 @@ use typespace::{
         StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias, UnitStruct,
         VariantDetails,
     },
+    error::{Error, NameAxis, OffenderReason, RequirementOrigin},
     no_cycles,
     settings::{OptionalNullable, Settings, Std},
-    OffenderReason, RequirementOrigin, TypespaceBuilder, TypespaceError, TypespaceTrait,
-    TypespaceTraitSet,
+    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
 };
 use typespace_test_macro::check_and_include;
 
@@ -106,7 +106,7 @@ fn test_struct_field_serde() {
         builder
             .insert(
                 "X".to_string(),
-                Struct::builder()
+                Struct::new()
                     .name(name)
                     .properties(properties)
                     .build()
@@ -198,7 +198,7 @@ fn test_unit_struct() {
     builder
         .insert(
             "MyUnitStruct".to_string(),
-            UnitStruct::builder(serde_json::json!("<<+>>"))
+            UnitStruct::new(serde_json::json!("<<+>>"))
                 .name("MyUnitStruct")
                 .build()
                 .unwrap(),
@@ -237,7 +237,7 @@ fn test_tuple_struct() {
     builder
         .insert(
             "MyTupleStruct".to_string(),
-            TupleStruct::builder()
+            TupleStruct::new()
                 .name("MyTupleStruct")
                 .fields(vec![string_id, int_id])
                 .rest(string_vec_id)
@@ -342,7 +342,7 @@ fn test_enums() {
         builder
             .insert(
                 "E".to_string(),
-                Enum::builder()
+                Enum::new()
                     .name(*name)
                     .tag_type(tag_type.clone())
                     .variants(variants)
@@ -422,7 +422,7 @@ fn test_newtype_struct() {
     builder
         .insert(
             "MyString".to_string(),
-            NewtypeStruct::builder(string_id)
+            NewtypeStruct::new(string_id)
                 .name("MyString")
                 .description("A newtype wrapping String.".to_string())
                 .build()
@@ -433,10 +433,7 @@ fn test_newtype_struct() {
     builder
         .insert(
             "MyInt".to_string(),
-            NewtypeStruct::builder(int_id)
-                .name("MyInt")
-                .build()
-                .unwrap(),
+            NewtypeStruct::new(int_id).name("MyInt").build().unwrap(),
         )
         .unwrap();
 
@@ -475,17 +472,14 @@ fn test_type_alias() {
     builder
         .insert(
             "MyAlias".to_string(),
-            TypeAlias::builder(string_id)
-                .name("MyAlias")
-                .build()
-                .unwrap(),
+            TypeAlias::new(string_id).name("MyAlias").build().unwrap(),
         )
         .unwrap();
 
     builder
         .insert(
             "StringList".to_string(),
-            TypeAlias::builder(vec_string_id)
+            TypeAlias::new(vec_string_id)
                 .name("StringList")
                 .description("A list of strings.".to_string())
                 .build()
@@ -521,7 +515,7 @@ fn test_struct_serde_rename_flatten() {
     builder
         .insert(
             "Inner".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Inner")
                 .properties(vec![StructProperty::new(
                     format_ident!("value"),
@@ -538,7 +532,7 @@ fn test_struct_serde_rename_flatten() {
     builder
         .insert(
             "Outer".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Outer")
                 .properties(vec![
                     StructProperty::new(format_ident!("my_field"), string_id.clone())
@@ -582,7 +576,7 @@ fn test_native_type() {
     builder
         .insert(
             "Resource".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Resource")
                 .properties(vec![StructProperty::new(
                     format_ident!("location"),
@@ -668,7 +662,7 @@ fn test_compound_field_types() {
     builder
         .insert(
             "All".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("All")
                 .properties(vec![
                     StructProperty::new(format_ident!("a_bool"), bool_id.clone()),
@@ -694,7 +688,7 @@ fn test_compound_field_types() {
     builder
         .insert(
             "Defaults".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Defaults")
                 .properties(vec![
                     StructProperty::new(format_ident!("a_bool"), bool_id)
@@ -792,7 +786,7 @@ fn test_map_key_struct_with_float() {
     builder
         .insert(
             key_id.clone(),
-            Struct::builder()
+            Struct::new()
                 .name("Key")
                 .properties(vec![StructProperty::new(format_ident!("value"), float_id)])
                 .build()
@@ -807,7 +801,7 @@ fn test_map_key_struct_with_float() {
         .insert("map".to_string(), Type::Map(key_id, value_id))
         .unwrap();
 
-    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
     };
 
@@ -845,26 +839,249 @@ fn test_duplicate_type_id() {
     let err = builder.insert("s".to_string(), Type::Boolean).unwrap_err();
     assert!(matches!(
         err,
-        TypespaceError::DuplicateTypeId { ref type_id } if type_id == "s"
+        Error::DuplicateTypeId { ref type_id } if type_id == "s"
     ));
 }
 
-// Building a named type without a name (or with an empty one) is a caller
-// error; names come from the caller and rendering cannot invent one.
+// Building a named type without a name is a caller error; names come from
+// the caller and rendering cannot invent one. A name that was set goes
+// through identifier validation, where the empty string fails like any
+// other garbage.
 #[test]
 fn test_missing_type_name() {
-    let err = Struct::<String>::builder().build().unwrap_err();
+    let err = Struct::<String>::new().build().unwrap_err();
     assert!(matches!(
         err,
-        TypespaceError::MissingTypeName { kind } if kind == "struct"
+        Error::MissingTypeName { kind } if kind == "struct"
     ));
 
-    // An empty name is no name at all.
-    let err = Struct::<String>::builder().name("").build().unwrap_err();
+    let err = Struct::<String>::new().name("").build().unwrap_err();
     assert!(matches!(
         err,
-        TypespaceError::MissingTypeName { kind } if kind == "struct"
+        Error::InvalidName { kind, ref name, .. } if kind == "struct" && name.is_empty()
     ));
+}
+
+// Type, property, and variant names must be plain Rust identifiers:
+// keywords (including gen, a keyword only as of edition 2024), raw
+// identifiers, and lexical garbage are all rejected at build().
+#[test]
+fn test_invalid_names() {
+    let err = Struct::<String>::new().name("type").build().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidName { kind, ref name, message }
+            if kind == "struct" && name == "type" && message.contains("keyword")
+    ));
+
+    let err = Struct::<String>::new().name("gen").build().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidName { ref name, message, .. }
+            if name == "gen" && message.contains("keyword")
+    ));
+
+    let err = Struct::<String>::new().name("r#type").build().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidName { ref name, message, .. }
+            if name == "r#type" && message.contains("raw identifiers")
+    ));
+
+    let err = Struct::<String>::new()
+        .name("not a name")
+        .build()
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidName { .. }));
+
+    let err = Enum::<String>::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![EnumVariant::new("true", VariantDetails::Unit)])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidName { kind, ref name, .. } if kind == "variant" && name == "true"
+    ));
+}
+
+// An enum's tagging scheme has no presumed default; building without one
+// is an error.
+#[test]
+fn test_missing_tag_type() {
+    let err = Enum::<String>::new().name("E").build().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::MissingTagType { ref name } if name == "E"
+    ));
+}
+
+// Property and variant names must be unique on both the Rust axis and the
+// wire axis (the serialized name after any rename).
+#[test]
+fn test_duplicate_item_names() {
+    // Two properties with the same Rust name.
+    let err = Struct::new()
+        .name("S")
+        .properties(vec![
+            StructProperty::new(format_ident!("x"), "t".to_string()),
+            StructProperty::new(format_ident!("x"), "t".to_string()),
+        ])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DuplicateItemName { kind, ref type_name, ref name, axis }
+            if kind == "property" && type_name == "S" && name == "x" && axis == NameAxis::Rust
+    ));
+
+    // Distinct Rust names colliding on the wire via a rename.
+    let err = Struct::new()
+        .name("S")
+        .properties(vec![
+            StructProperty::new(format_ident!("x"), "t".to_string()),
+            StructProperty::new(format_ident!("y"), "t".to_string())
+                .with_json_name(StructPropertySerde::Rename("x".to_string())),
+        ])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DuplicateItemName { ref name, axis, .. }
+            if name == "x" && axis == NameAxis::Wire
+    ));
+
+    // Two variants with the same Rust name.
+    let err = Enum::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![
+            EnumVariant::new("A", VariantDetails::<String>::Unit),
+            EnumVariant::new("A", VariantDetails::Unit),
+        ])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DuplicateItemName { kind, ref name, axis, .. }
+            if kind == "variant" && name == "A" && axis == NameAxis::Rust
+    ));
+
+    // Distinct variant names colliding on the wire via a rename.
+    let err = Enum::new()
+        .name("E")
+        .tag_type(EnumTagType::External)
+        .variants(vec![
+            EnumVariant::new("A", VariantDetails::<String>::Unit),
+            EnumVariant::new("B", VariantDetails::Unit).with_rename("A"),
+        ])
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::DuplicateItemName { kind, ref name, axis, .. }
+            if kind == "variant" && name == "A" && axis == NameAxis::Wire
+    ));
+}
+
+// Two types sharing a name is a converter bug caught at validate() and
+// finalize(); typespace reports rather than renames.
+#[test]
+fn test_duplicate_type_names() {
+    let mut builder = TypespaceBuilder::default();
+    builder
+        .insert(
+            "first".to_string(),
+            Struct::new().name("Twin").build().unwrap(),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "second".to_string(),
+            Struct::new().name("Twin").build().unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::DuplicateTypeName {
+        name,
+        first,
+        second,
+    }) = builder.validate()
+    else {
+        panic!("expected validate to fail with a duplicate type name");
+    };
+    assert_eq!(name, "Twin");
+    assert_eq!(first, "first");
+    assert_eq!(second, "second");
+
+    assert!(matches!(
+        builder.finalize(no_cycles),
+        Err(Error::DuplicateTypeName { .. })
+    ));
+}
+
+// Type's variants are not sealed, so an unbuilt shape can be smuggled into
+// a Type value directly; insertion re-runs the build() checks and rejects
+// it.
+#[test]
+fn test_insert_unbuilt_shape() {
+    let mut builder = TypespaceBuilder::default();
+    let err = builder
+        .insert("sneaky".to_string(), Type::Struct(Struct::new()))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::MissingTypeName { kind } if kind == "struct"
+    ));
+
+    let err = builder
+        .insert(
+            "sneakier".to_string(),
+            Type::Enum(Enum::new().name("NoTag")),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::MissingTagType { ref name } if name == "NoTag"
+    ));
+}
+
+// A configured map type carries its own key-trait demands: a hash map
+// requires Hash and Eq of its keys--not Ord--and conflicts name exactly
+// the configured traits.
+#[test]
+fn test_map_key_traits_override() {
+    let settings = Settings::default().with_map_type(
+        "::std::collections::HashMap",
+        [
+            TypespaceTrait::Hash,
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let float_id = "float".to_string();
+    builder
+        .insert(float_id.clone(), Type::Float("f64".to_string()))
+        .unwrap();
+    builder.insert("value".to_string(), Type::String).unwrap();
+    builder
+        .insert("map".to_string(), Type::Map(float_id, "value".to_string()))
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
+    };
+
+    // Floats satisfy PartialEq but neither Eq nor Hash; Ord is not
+    // demanded at all.
+    assert_eq!(conflicts.len(), 2);
+    assert!(matches!(conflicts[0].required, TypespaceTrait::Eq));
+    assert!(matches!(conflicts[1].required, TypespaceTrait::Hash));
 }
 
 // Referencing a type ID for which no type was inserted is a caller error.
@@ -880,7 +1097,7 @@ fn test_unknown_type_id() {
     };
     assert!(matches!(
         err,
-        TypespaceError::UnknownTypeId { ref type_id, ref child_id }
+        Error::UnknownTypeId { ref type_id, ref child_id }
             if type_id == "v" && child_id == "missing"
     ));
 }
@@ -901,7 +1118,7 @@ fn test_cycles() {
     builder
         .insert(
             struct_a_id,
-            Struct::builder()
+            Struct::new()
                 .name("A")
                 .properties(vec![StructProperty::new(format_ident!("a"), struct_a_id)
                     .with_state(StructPropertyState::Optional)])
@@ -915,7 +1132,7 @@ fn test_cycles() {
     builder
         .insert(
             b_id,
-            Struct::builder()
+            Struct::new()
                 .name("B")
                 .properties(vec![StructProperty::new(format_ident!("c"), c_id)
                     .with_state(StructPropertyState::Optional)])
@@ -926,7 +1143,7 @@ fn test_cycles() {
     builder
         .insert(
             c_id,
-            Struct::builder()
+            Struct::new()
                 .name("C")
                 .properties(vec![StructProperty::new(format_ident!("b"), b_id)
                     .with_state(StructPropertyState::Optional)])
@@ -967,9 +1184,30 @@ fn test_cycles() {
 // map override.
 #[test]
 fn test_container_overrides() {
+    // HashMap wants hashing of its keys, not ordering; BTreeSet keeps
+    // the ordered-comparison demands.
     let settings = Settings::default()
-        .with_map_type("::std::collections::HashMap")
-        .with_set_type("::std::collections::BTreeSet")
+        .with_map_type(
+            "::std::collections::HashMap",
+            [
+                TypespaceTrait::Hash,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .with_set_type(
+            "::std::collections::BTreeSet",
+            [
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::Ord,
+                TypespaceTrait::PartialOrd,
+            ]
+            .into_iter()
+            .collect(),
+        )
         .with_vec_type("::std::collections::VecDeque");
     let mut builder = TypespaceBuilder::new(settings);
 
@@ -1010,7 +1248,7 @@ fn test_container_overrides() {
     builder
         .insert(
             "Containers".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Containers")
                 .properties(vec![
                     StructProperty::new(format_ident!("a_map"), map_id.clone()),
@@ -1028,7 +1266,7 @@ fn test_container_overrides() {
     builder
         .insert(
             "ContainerDefaults".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("ContainerDefaults")
                 .properties(vec![
                     StructProperty::new(format_ident!("a_map"), map_id)
@@ -1101,7 +1339,7 @@ fn test_trait_impls() {
     builder
         .insert(
             "Widget".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Widget")
                 .properties(vec![
                     StructProperty::new(format_ident!("name"), string_id.clone()),
@@ -1115,8 +1353,9 @@ fn test_trait_impls() {
     builder
         .insert(
             "Gadget".to_string(),
-            Enum::builder()
+            Enum::new()
                 .name("Gadget")
+                .tag_type(EnumTagType::External)
                 .variants(vec![
                     EnumVariant::new("Off", VariantDetails::Unit),
                     EnumVariant::new("On", VariantDetails::Item(int_id.clone())),
@@ -1129,7 +1368,7 @@ fn test_trait_impls() {
     builder
         .insert(
             "Wrapper".to_string(),
-            NewtypeStruct::builder(string_id.clone())
+            NewtypeStruct::new(string_id.clone())
                 .name("Wrapper")
                 .build()
                 .unwrap(),
@@ -1139,7 +1378,7 @@ fn test_trait_impls() {
     builder
         .insert(
             "Marker".to_string(),
-            UnitStruct::builder(serde_json::json!("marker"))
+            UnitStruct::new(serde_json::json!("marker"))
                 .name("Marker")
                 .build()
                 .unwrap(),
@@ -1149,7 +1388,7 @@ fn test_trait_impls() {
     builder
         .insert(
             "Pair".to_string(),
-            TupleStruct::builder()
+            TupleStruct::new()
                 .name("Pair")
                 .fields(vec![string_id.clone(), int_id.clone()])
                 .build()
@@ -1160,7 +1399,7 @@ fn test_trait_impls() {
     builder
         .insert(
             "Named".to_string(),
-            TypeAlias::builder(string_id.clone())
+            TypeAlias::new(string_id.clone())
                 .name("Named")
                 .build()
                 .unwrap(),
@@ -1208,7 +1447,7 @@ fn test_trait_impls_conflict() {
     builder
         .insert(
             "Holder".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Holder")
                 .properties(vec![StructProperty::new(format_ident!("value"), float_id)])
                 .build()
@@ -1216,7 +1455,7 @@ fn test_trait_impls_conflict() {
         )
         .unwrap();
 
-    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
     };
 
@@ -1245,7 +1484,7 @@ fn test_invalid_derive() {
     };
     assert!(matches!(
         err,
-        TypespaceError::InvalidDerive { ref derive, .. } if derive == "not a path!"
+        Error::InvalidDerive { ref derive, .. } if derive == "not a path!"
     ));
 }
 
@@ -1269,7 +1508,7 @@ fn test_json_serde_crate_override() {
     builder
         .insert(
             "Options".to_string(),
-            Struct::builder()
+            Struct::new()
                 .name("Options")
                 .properties(vec![StructProperty::new(
                     format_ident!("maybe"),
@@ -1284,7 +1523,7 @@ fn test_json_serde_crate_override() {
     builder
         .insert(
             "Rest".to_string(),
-            TupleStruct::builder()
+            TupleStruct::new()
                 .name("Rest")
                 .fields(vec![string_id.clone()])
                 .rest(vec_id)
@@ -1329,7 +1568,7 @@ fn test_set_element_float_path() {
     builder
         .insert(
             sample_id.clone(),
-            Struct::builder()
+            Struct::new()
                 .name("Sample")
                 .properties(vec![StructProperty::new(
                     format_ident!("values"),
@@ -1344,7 +1583,7 @@ fn test_set_element_float_path() {
         .insert("set".to_string(), Type::Set(sample_id.clone()))
         .unwrap();
 
-    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
     };
 
@@ -1395,7 +1634,7 @@ fn test_native_map_key() {
         .unwrap();
 
     // validate() reports the conflicts and leaves the builder usable.
-    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.validate() else {
+    let Err(Error::TraitConflicts { conflicts }) = builder.validate() else {
         panic!("expected validate to fail with trait conflicts");
     };
     assert_eq!(conflicts.len(), 4);
@@ -1419,7 +1658,7 @@ fn test_native_map_key() {
     );
 
     // finalize reports the same failure.
-    let Err(TypespaceError::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
     };
     assert_eq!(conflicts.len(), 4);

@@ -3,11 +3,17 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::build::{CommonBuilder, Type, TypeCommon};
-use crate::{TypespaceError, TypespaceRenderer};
+use crate::build::{Type, TypeCommon};
+use crate::error::Error;
+use crate::TypespaceRenderer;
 
-/// A type alias (`pub type Name = Target;`); construct one with
-/// [`TypeAlias::builder`].
+/// A type alias (`pub type Name = Target;`).
+///
+/// A `TypeAlias` is its own builder: [`TypeAlias::new`] starts one
+/// under construction around its required target, the fluent methods
+/// fill it in, and [`TypeAlias::build`] validates it and produces the
+/// finished [`Type::TypeAlias`] value. An alias introduces no value of
+/// its own, so it carries no default slot.
 #[derive(Debug, Clone)]
 pub struct TypeAlias<Id> {
     pub(crate) common: TypeCommon,
@@ -15,43 +21,14 @@ pub struct TypeAlias<Id> {
 }
 
 impl<Id> TypeAlias<Id> {
-    /// Start building a type alias for the type `target`; see
-    /// [`TypeAliasBuilder`].
-    pub fn builder(target: Id) -> TypeAliasBuilder<Id> {
-        TypeAliasBuilder {
-            common: CommonBuilder::default(),
+    /// Start a type alias for the type `target`.
+    pub fn new(target: Id) -> Self {
+        Self {
+            common: Default::default(),
             target,
         }
     }
 
-    /// The alias's name, always nonempty.
-    pub fn name(&self) -> &str {
-        self.common.name()
-    }
-
-    /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
-        self.common.description()
-    }
-
-    /// The ID of the aliased type.
-    pub fn target(&self) -> &Id {
-        &self.target
-    }
-}
-
-/// Assembles a [`TypeAlias`]; created by [`TypeAlias::builder`].
-///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`TypeAliasBuilder::build`], which produces the
-/// finished [`Type::TypeAlias`] value.
-#[derive(Debug, Clone)]
-pub struct TypeAliasBuilder<Id> {
-    common: CommonBuilder,
-    target: Id,
-}
-
-impl<Id> TypeAliasBuilder<Id> {
     /// Set the alias's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.common.name = Some(name.into());
@@ -64,19 +41,39 @@ impl<Id> TypeAliasBuilder<Id> {
         self
     }
 
-    /// Produce the type alias as a [`Type`] value.
+    /// Validate the type alias and produce it as a [`Type`] value.
     ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    /// Fails if the name is missing or not a valid identifier.
+    pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        let Self { common, target } = self;
-        Ok(Type::TypeAlias(TypeAlias {
-            common: common.build("type alias")?,
-            target,
-        }))
+        self.validate()?;
+        Ok(Type::TypeAlias(self))
+    }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("type alias")
+    }
+
+    /// The alias's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn get_description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The ID of the aliased type.
+    pub fn get_target(&self) -> &Id {
+        &self.target
     }
 }
 
@@ -96,6 +93,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
                 },
             target: type_id,
         } = self;
+        let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 

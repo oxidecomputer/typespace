@@ -1,12 +1,17 @@
 // Copyright 2026 Oxide Computer Company
 
+//! Errors reported for invalid type graphs, shapes, and settings.
+
 use crate::TypespaceTrait;
 
-/// Errors that arise from an invalid type graph provided to the
-/// [`TypespaceBuilder`](crate::TypespaceBuilder).
+/// Errors that arise from an invalid shape, type graph, or settings.
+///
+/// Shape construction ([`build`](crate::build) `build()` methods),
+/// [`TypespaceBuilder`](crate::TypespaceBuilder) insertion, validation,
+/// and finalization all report through this type.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum TypespaceError<Id>
+pub enum Error<Id>
 where
     Id: std::fmt::Debug + std::fmt::Display,
 {
@@ -17,16 +22,78 @@ where
         type_id: Id,
     },
 
-    /// A shape builder ran to completion without a usable name.
+    /// A shape ran to completion without a name.
     ///
     /// Every named type (struct, enum, newtype struct, unit struct,
-    /// tuple struct, or type alias) must have a nonempty name before
-    /// `build()` can produce it; rendering interpolates names into
-    /// identifiers. Set one with the builder's `name` method.
+    /// tuple struct, or type alias) must have a name before `build()`
+    /// can produce it; rendering interpolates names into identifiers.
+    /// Set one with the shape's `name` method.
     #[error("cannot build the {kind}: no name was provided")]
     MissingTypeName {
         /// The kind of shape being built (`"struct"`, `"enum"`, ...).
         kind: &'static str,
+    },
+
+    /// A name is not usable as a Rust identifier.
+    ///
+    /// Applies to type names, property names, and variant names alike:
+    /// each must parse as a plain (non-raw) Rust identifier and must
+    /// not be a keyword.
+    #[error("the {kind} name `{name}` {message}")]
+    InvalidName {
+        /// What the name names (`"struct"`, `"property"`, `"variant"`,
+        /// ...).
+        kind: &'static str,
+        /// The offending name as supplied.
+        name: String,
+        /// What is wrong with it.
+        message: &'static str,
+    },
+
+    /// An enum was built without a tag type.
+    ///
+    /// The serde tagging scheme has no presumed default; set one with
+    /// the enum's `tag_type` method before `build()`.
+    #[error("cannot build the enum `{name}`: no tag type was provided")]
+    MissingTagType {
+        /// The name of the enum being built.
+        name: String,
+    },
+
+    /// Two properties or two variants of one type share a name.
+    ///
+    /// Names must be unique on both axes: the Rust name (the identifier
+    /// in generated code) and the wire name (the serialized name, after
+    /// any rename). Flattened properties have no wire name of their
+    /// own and are exempt from the wire axis.
+    #[error(
+        "in `{type_name}`, the {axis} name `{name}` is used by more \
+         than one {kind}"
+    )]
+    DuplicateItemName {
+        /// What collided: `"property"` or `"variant"`.
+        kind: &'static str,
+        /// The name of the type containing the collision.
+        type_name: String,
+        /// The colliding name.
+        name: String,
+        /// Which axis collided.
+        axis: NameAxis,
+    },
+
+    /// Two types in the typespace share a name.
+    ///
+    /// Names come from the consumer, which is responsible for
+    /// collision-free naming; typespace never renames. This check backs
+    /// up converter naming logic at finalization and validation.
+    #[error("the types with ids `{first}` and `{second}` are both named `{name}`")]
+    DuplicateTypeName {
+        /// The shared name.
+        name: String,
+        /// The ID of the first type encountered with the name.
+        first: Id,
+        /// The ID of the second type encountered with the name.
+        second: Id,
     },
 
     /// A derive path supplied via settings is not a valid Rust path.
@@ -67,6 +134,24 @@ where
         /// The conflicts, in the order propagation found them.
         conflicts: Vec<TraitConflict<Id>>,
     },
+}
+
+/// The axis on which a name collision occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameAxis {
+    /// The Rust identifier in generated code.
+    Rust,
+    /// The serialized (wire) name, after any rename.
+    Wire,
+}
+
+impl std::fmt::Display for NameAxis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NameAxis::Rust => f.write_str("Rust"),
+            NameAxis::Wire => f.write_str("wire"),
+        }
+    }
 }
 
 fn format_conflicts<Id: std::fmt::Display>(conflicts: &[TraitConflict<Id>]) -> String {

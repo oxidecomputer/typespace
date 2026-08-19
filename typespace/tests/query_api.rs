@@ -2,7 +2,10 @@
 
 use quote::{format_ident, quote};
 use typespace::{
-    build::{Enum, EnumVariant, Struct, StructProperty, StructPropertyState, Type, VariantDetails},
+    build::{
+        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertyState, Type,
+        VariantDetails,
+    },
     no_cycles,
     settings::Settings,
     view, TypeSpaceImpl, TypespaceBuilder,
@@ -32,7 +35,7 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             struct_id.clone(),
-            Struct::builder()
+            Struct::new()
                 .name("MyStruct")
                 .description("A sample struct".to_string())
                 .properties(vec![
@@ -52,9 +55,10 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             enum_id.clone(),
-            Enum::builder()
+            Enum::new()
                 .name("MyEnum")
                 .description("A sample enum".to_string())
+                .tag_type(EnumTagType::External)
                 .variants(vec![
                     EnumVariant::new("Nothing", VariantDetails::Unit),
                     EnumVariant::new("Single", VariantDetails::Item(str_id.clone())),

@@ -1,13 +1,21 @@
 // Copyright 2026 Oxide Computer Company
 
+use std::collections::BTreeSet;
+
 use log::debug;
 use quote::{format_ident, quote};
 use syn::Ident;
 
-use crate::build::{CommonBuilder, JsonValue, Type, TypeCommon, TypeCommonBuilt};
-use crate::{TypespaceError, TypespaceRenderer, TypespaceTrait};
+use crate::build::{validate_ident, JsonValue, Type, TypeCommon, TypeCommonBuilt};
+use crate::error::{Error, NameAxis};
+use crate::{TypespaceRenderer, TypespaceTrait};
 
-/// A struct with named fields; construct one with [`Struct::builder`].
+/// A struct with named fields.
+///
+/// A `Struct` is its own builder: [`Struct::new`] starts one under
+/// construction, the fluent methods fill it in ([`Struct::name`] may
+/// come at any point), and [`Struct::build`] validates it and produces
+/// the finished [`Type::Struct`] value.
 #[derive(Debug, Clone)]
 pub struct Struct<Id> {
     pub(crate) common: TypeCommon,
@@ -15,55 +23,22 @@ pub struct Struct<Id> {
     pub(crate) deny_unknown_fields: bool,
 }
 
+impl<Id> Default for Struct<Id> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Id> Struct<Id> {
-    /// Start building a struct; see [`StructBuilder`].
-    pub fn builder() -> StructBuilder<Id> {
-        StructBuilder {
-            common: CommonBuilder::default(),
+    /// Start a struct under construction.
+    pub fn new() -> Self {
+        Self {
+            common: Default::default(),
             properties: Vec::new(),
             deny_unknown_fields: false,
         }
     }
 
-    /// The struct's name, always nonempty.
-    pub fn name(&self) -> &str {
-        self.common.name()
-    }
-
-    /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
-        self.common.description()
-    }
-
-    /// The default value, if any.
-    pub fn default(&self) -> Option<&serde_json::Value> {
-        self.common.default()
-    }
-
-    /// The struct's properties, in declaration order.
-    pub fn properties(&self) -> &[StructProperty<Id>] {
-        &self.properties
-    }
-
-    /// Whether deserialization rejects unknown fields.
-    pub fn deny_unknown_fields(&self) -> bool {
-        self.deny_unknown_fields
-    }
-}
-
-/// Assembles a [`Struct`]; created by [`Struct::builder`].
-///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`StructBuilder::build`], which produces the finished
-/// [`Type::Struct`] value.
-#[derive(Debug, Clone)]
-pub struct StructBuilder<Id> {
-    common: CommonBuilder,
-    properties: Vec<StructProperty<Id>>,
-    deny_unknown_fields: bool,
-}
-
-impl<Id> StructBuilder<Id> {
     /// Set the struct's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.common.name = Some(name.into());
@@ -82,13 +57,7 @@ impl<Id> StructBuilder<Id> {
         self
     }
 
-    /// Append one property.
-    pub fn property(mut self, property: StructProperty<Id>) -> Self {
-        self.properties.push(property);
-        self
-    }
-
-    /// Append any number of properties.
+    /// Append properties.
     pub fn properties(mut self, properties: impl IntoIterator<Item = StructProperty<Id>>) -> Self {
         self.properties.extend(properties);
         self
@@ -100,25 +69,99 @@ impl<Id> StructBuilder<Id> {
         self
     }
 
-    /// Produce the struct as a [`Type`] value.
+    /// Validate the struct and produce it as a [`Type`] value.
     ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    /// Fails if the name is missing or not a valid identifier, if any
+    /// property name is not a valid identifier, or if two properties
+    /// collide on either name axis (see
+    /// [`Error::DuplicateItemName`]).
+    pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        let Self {
-            common,
-            properties,
-            deny_unknown_fields,
-        } = self;
-        Ok(Type::Struct(Struct {
-            common: common.build("struct")?,
-            properties,
-            deny_unknown_fields,
-        }))
+        self.validate()?;
+        Ok(Type::Struct(self))
     }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("struct")?;
+        check_properties(self.common.built_name(), &self.properties)
+    }
+
+    /// The struct's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn get_description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The default value, if any.
+    pub fn get_default(&self) -> Option<&serde_json::Value> {
+        self.common.default()
+    }
+
+    /// The struct's properties, in declaration order.
+    pub fn get_properties(&self) -> &[StructProperty<Id>] {
+        &self.properties
+    }
+
+    /// Whether deserialization rejects unknown fields.
+    pub fn get_deny_unknown_fields(&self) -> bool {
+        self.deny_unknown_fields
+    }
+}
+
+/// Check property names for validity and uniqueness.
+///
+/// Every Rust name must be a valid identifier, and names must be unique
+/// on both axes: the Rust name and the wire name (the serialized name
+/// after any rename). Flattened properties have no wire name of their
+/// own and are exempt from the wire axis.
+pub(crate) fn check_properties<Id>(
+    type_name: &str,
+    properties: &[StructProperty<Id>],
+) -> Result<(), Error<Id>>
+where
+    Id: std::fmt::Debug + std::fmt::Display,
+{
+    let mut rust_names = BTreeSet::new();
+    let mut wire_names = BTreeSet::new();
+    for property in properties {
+        let rust_name = property.rust_name.to_string();
+        validate_ident("property", &rust_name)?;
+        let wire_name = match &property.json_name {
+            StructPropertySerde::None => Some(rust_name.clone()),
+            StructPropertySerde::Rename(rename) => Some(rename.clone()),
+            StructPropertySerde::Flatten => None,
+        };
+        if !rust_names.insert(rust_name.clone()) {
+            return Err(Error::DuplicateItemName {
+                kind: "property",
+                type_name: type_name.to_string(),
+                name: rust_name,
+                axis: NameAxis::Rust,
+            });
+        }
+        if let Some(wire_name) = wire_name {
+            if !wire_names.insert(wire_name.clone()) {
+                return Err(Error::DuplicateItemName {
+                    kind: "property",
+                    type_name: type_name.to_string(),
+                    name: wire_name,
+                    axis: NameAxis::Wire,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
@@ -141,9 +184,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         else {
             unreachable!()
         };
+        let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let name_ident = format_ident!("{name}");
-        let snake_name = heck::AsSnakeCase(name.as_str()).to_string();
+        let snake_name = heck::AsSnakeCase(name).to_string();
 
         let mut rendered_properties = Vec::new();
         for prop in properties {
@@ -278,8 +322,12 @@ pub enum StructPropertyState {
     DefaultValue(JsonValue),
 }
 
-/// A fieldless struct with a fixed JSON representation; construct one
-/// with [`UnitStruct::builder`].
+/// A fieldless struct with a fixed JSON representation.
+///
+/// A `UnitStruct` is its own builder: [`UnitStruct::new`] starts one
+/// under construction around its required representation, the fluent
+/// methods fill it in, and [`UnitStruct::build`] validates it and
+/// produces the finished [`Type::UnitStruct`] value.
 #[derive(Debug, Clone)]
 pub struct UnitStruct {
     pub(crate) common: TypeCommon,
@@ -287,33 +335,70 @@ pub struct UnitStruct {
     pub(crate) repr: serde_json::Value,
 }
 impl UnitStruct {
-    /// Start building a unit struct that serializes as `repr`; see
-    /// [`UnitStructBuilder`].
-    pub fn builder(repr: serde_json::Value) -> UnitStructBuilder {
-        UnitStructBuilder {
-            common: CommonBuilder::default(),
+    /// Start a unit struct that serializes as `repr`.
+    pub fn new(repr: serde_json::Value) -> Self {
+        Self {
+            common: Default::default(),
             repr,
         }
     }
 
-    /// The unit struct's name, always nonempty.
-    pub fn name(&self) -> &str {
+    /// Set the unit struct's name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.common.name = Some(name.into());
+        self
+    }
+
+    /// Set the description (doc comment source).
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.common.description = Some(description.into());
+        self
+    }
+
+    /// Set the default value.
+    pub fn default(mut self, default: impl Into<JsonValue>) -> Self {
+        self.common.default = Some(default.into());
+        self
+    }
+
+    /// Validate the unit struct and produce it as a [`Type`] value.
+    ///
+    /// Fails if the name is missing or not a valid identifier.
+    pub fn build<Id>(self) -> Result<Type<Id>, Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.validate()?;
+        Ok(Type::UnitStruct(self))
+    }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate<Id>(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("unit struct")
+    }
+
+    /// The unit struct's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
         self.common.name()
     }
 
     /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
+    pub fn get_description(&self) -> Option<&str> {
         self.common.description()
     }
 
     /// The default value, if any.
-    pub fn default(&self) -> Option<&serde_json::Value> {
+    pub fn get_default(&self) -> Option<&serde_json::Value> {
         self.common.default()
     }
 
     /// The fixed JSON value the unit struct serializes to and
     /// deserializes from.
-    pub fn repr(&self) -> &serde_json::Value {
+    pub fn get_repr(&self) -> &serde_json::Value {
         &self.repr
     }
 
@@ -334,6 +419,7 @@ impl UnitStruct {
         else {
             unreachable!()
         };
+        let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
@@ -387,54 +473,12 @@ impl UnitStruct {
     }
 }
 
-/// Assembles a [`UnitStruct`]; created by [`UnitStruct::builder`].
+/// A struct with unnamed, positional fields.
 ///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`UnitStructBuilder::build`], which produces the
-/// finished [`Type::UnitStruct`] value.
-#[derive(Debug, Clone)]
-pub struct UnitStructBuilder {
-    common: CommonBuilder,
-    repr: serde_json::Value,
-}
-
-impl UnitStructBuilder {
-    /// Set the unit struct's name.
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.common.name = Some(name.into());
-        self
-    }
-
-    /// Set the description (doc comment source).
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.common.description = Some(description.into());
-        self
-    }
-
-    /// Set the default value.
-    pub fn default(mut self, default: impl Into<JsonValue>) -> Self {
-        self.common.default = Some(default.into());
-        self
-    }
-
-    /// Produce the unit struct as a [`Type`] value.
-    ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build<Id>(self) -> Result<Type<Id>, TypespaceError<Id>>
-    where
-        Id: std::fmt::Debug + std::fmt::Display,
-    {
-        let Self { common, repr } = self;
-        Ok(Type::UnitStruct(UnitStruct {
-            common: common.build("unit struct")?,
-            repr,
-        }))
-    }
-}
-
-/// A struct with unnamed, positional fields; construct one with
-/// [`TupleStruct::builder`].
+/// A `TupleStruct` is its own builder: [`TupleStruct::new`] starts one
+/// under construction, the fluent methods fill it in, and
+/// [`TupleStruct::build`] validates it and produces the finished
+/// [`Type::TupleStruct`] value.
 #[derive(Debug, Clone)]
 pub struct TupleStruct<Id> {
     pub(crate) common: TypeCommon,
@@ -445,56 +489,23 @@ pub struct TupleStruct<Id> {
     /// items beyond those in `fields`.
     pub(crate) rest: Option<Id>,
 }
+
+impl<Id> Default for TupleStruct<Id> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Id> TupleStruct<Id> {
-    /// Start building a tuple struct; see [`TupleStructBuilder`].
-    pub fn builder() -> TupleStructBuilder<Id> {
-        TupleStructBuilder {
-            common: CommonBuilder::default(),
+    /// Start a tuple struct under construction.
+    pub fn new() -> Self {
+        Self {
+            common: Default::default(),
             fields: Vec::new(),
             rest: None,
         }
     }
 
-    /// The tuple struct's name, always nonempty.
-    pub fn name(&self) -> &str {
-        self.common.name()
-    }
-
-    /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
-        self.common.description()
-    }
-
-    /// The default value, if any.
-    pub fn default(&self) -> Option<&serde_json::Value> {
-        self.common.default()
-    }
-
-    /// The fields of the tuple, in order.
-    pub fn fields(&self) -> &[Id] {
-        &self.fields
-    }
-
-    /// The type, necessarily array-shaped, holding items beyond those
-    /// in [`TupleStruct::fields`], if any.
-    pub fn rest(&self) -> Option<&Id> {
-        self.rest.as_ref()
-    }
-}
-
-/// Assembles a [`TupleStruct`]; created by [`TupleStruct::builder`].
-///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`TupleStructBuilder::build`], which produces the
-/// finished [`Type::TupleStruct`] value.
-#[derive(Debug, Clone)]
-pub struct TupleStructBuilder<Id> {
-    common: CommonBuilder,
-    fields: Vec<Id>,
-    rest: Option<Id>,
-}
-
-impl<Id> TupleStructBuilder<Id> {
     /// Set the tuple struct's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.common.name = Some(name.into());
@@ -513,13 +524,7 @@ impl<Id> TupleStructBuilder<Id> {
         self
     }
 
-    /// Append one positional field.
-    pub fn field(mut self, field: Id) -> Self {
-        self.fields.push(field);
-        self
-    }
-
-    /// Append any number of positional fields.
+    /// Append positional fields.
     pub fn fields(mut self, fields: impl IntoIterator<Item = Id>) -> Self {
         self.fields.extend(fields);
         self
@@ -532,24 +537,50 @@ impl<Id> TupleStructBuilder<Id> {
         self
     }
 
-    /// Produce the tuple struct as a [`Type`] value.
+    /// Validate the tuple struct and produce it as a [`Type`] value.
     ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    /// Fails if the name is missing or not a valid identifier.
+    pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        let Self {
-            common,
-            fields,
-            rest,
-        } = self;
-        Ok(Type::TupleStruct(TupleStruct {
-            common: common.build("tuple struct")?,
-            fields,
-            rest,
-        }))
+        self.validate()?;
+        Ok(Type::TupleStruct(self))
+    }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("tuple struct")
+    }
+
+    /// The tuple struct's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn get_description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The default value, if any.
+    pub fn get_default(&self) -> Option<&serde_json::Value> {
+        self.common.default()
+    }
+
+    /// The fields of the tuple, in order.
+    pub fn get_fields(&self) -> &[Id] {
+        &self.fields
+    }
+
+    /// The type, necessarily array-shaped, holding items beyond the
+    /// positional fields, if any.
+    pub fn get_rest(&self) -> Option<&Id> {
+        self.rest.as_ref()
     }
 }
 
@@ -569,6 +600,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         else {
             unreachable!()
         };
+        let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
         let name_ident = format_ident!("{name}");
@@ -713,8 +745,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
     }
 }
 
-/// A single-field wrapper struct; construct one with
-/// [`NewtypeStruct::builder`].
+/// A single-field wrapper struct.
+///
+/// A `NewtypeStruct` is its own builder: [`NewtypeStruct::new`] starts
+/// one under construction around its required inner type, the fluent
+/// methods fill it in, and [`NewtypeStruct::build`] validates it and
+/// produces the finished [`Type::NewtypeStruct`] value.
 #[derive(Debug, Clone)]
 pub struct NewtypeStruct<Id> {
     pub(crate) common: TypeCommon,
@@ -723,55 +759,15 @@ pub struct NewtypeStruct<Id> {
 }
 
 impl<Id> NewtypeStruct<Id> {
-    /// Start building a newtype struct wrapping the type `inner`; see
-    /// [`NewtypeStructBuilder`].
-    pub fn builder(inner: Id) -> NewtypeStructBuilder<Id> {
-        NewtypeStructBuilder {
-            common: CommonBuilder::default(),
+    /// Start a newtype struct wrapping the type `inner`.
+    pub fn new(inner: Id) -> Self {
+        Self {
+            common: Default::default(),
             inner,
             constraints: NewtypeConstraints::None,
         }
     }
 
-    /// The newtype's name, always nonempty.
-    pub fn name(&self) -> &str {
-        self.common.name()
-    }
-
-    /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
-        self.common.description()
-    }
-
-    /// The default value, if any.
-    pub fn default(&self) -> Option<&serde_json::Value> {
-        self.common.default()
-    }
-
-    /// The ID of the wrapped type.
-    pub fn inner(&self) -> &Id {
-        &self.inner
-    }
-
-    /// The constraints on the wrapped value.
-    pub fn constraints(&self) -> &NewtypeConstraints {
-        &self.constraints
-    }
-}
-
-/// Assembles a [`NewtypeStruct`]; created by [`NewtypeStruct::builder`].
-///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`NewtypeStructBuilder::build`], which produces the
-/// finished [`Type::NewtypeStruct`] value.
-#[derive(Debug, Clone)]
-pub struct NewtypeStructBuilder<Id> {
-    common: CommonBuilder,
-    inner: Id,
-    constraints: NewtypeConstraints,
-}
-
-impl<Id> NewtypeStructBuilder<Id> {
     /// Set the newtype's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.common.name = Some(name.into());
@@ -797,24 +793,49 @@ impl<Id> NewtypeStructBuilder<Id> {
         self
     }
 
-    /// Produce the newtype struct as a [`Type`] value.
+    /// Validate the newtype struct and produce it as a [`Type`] value.
     ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    /// Fails if the name is missing or not a valid identifier.
+    pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        let Self {
-            common,
-            inner,
-            constraints,
-        } = self;
-        Ok(Type::NewtypeStruct(NewtypeStruct {
-            common: common.build("newtype struct")?,
-            inner,
-            constraints,
-        }))
+        self.validate()?;
+        Ok(Type::NewtypeStruct(self))
+    }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("newtype struct")
+    }
+
+    /// The newtype's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn get_description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The default value, if any.
+    pub fn get_default(&self) -> Option<&serde_json::Value> {
+        self.common.default()
+    }
+
+    /// The ID of the wrapped type.
+    pub fn get_inner(&self) -> &Id {
+        &self.inner
+    }
+
+    /// The constraints on the wrapped value.
+    pub fn get_constraints(&self) -> &NewtypeConstraints {
+        &self.constraints
     }
 }
 
@@ -874,6 +895,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             unreachable!()
         };
 
+        let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 

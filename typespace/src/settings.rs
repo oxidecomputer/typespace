@@ -16,7 +16,7 @@ use crate::{TypespaceTrait, TypespaceTraitSet};
 /// finalization and rendering. Start from [`Settings::default`] and
 /// adjust with the `with_` methods; the type also implements
 /// `Deserialize` so settings can come from configuration data.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     /// When set to `FullyQualified`, (the default), types in the `std` crate's
     /// prelude are fully qualified. For example, the `Option` type is rendered
@@ -43,10 +43,18 @@ pub struct Settings {
     #[serde(default)]
     pub(crate) map_type: Option<ContainerType>,
 
+    /// The traits the configured map type requires of its key type.
+    #[serde(default = "ordered_lookup_traits")]
+    pub(crate) map_key_traits: TypespaceTraitSet,
+
     /// The container type used to render [`Type::Set`](crate::build::Type),
     /// in place of the default `Vec`.
     #[serde(default)]
     pub(crate) set_type: Option<ContainerType>,
+
+    /// The traits the configured set type requires of its element type.
+    #[serde(default = "ordered_lookup_traits")]
+    pub(crate) set_element_traits: TypespaceTraitSet,
 
     /// The container type used to render [`Type::Vec`](crate::build::Type),
     /// in place of the default `Vec`.
@@ -67,6 +75,40 @@ pub struct Settings {
     pub(crate) json_serde_crate: Option<String>,
 }
 
+impl Default for Settings {
+    /// Built-in containers with their trait demands: maps and sets use
+    /// ordered lookup, so keys and elements require the `Ord` family.
+    fn default() -> Self {
+        Self {
+            std: Std::default(),
+            optional_nullable: OptionalNullable::default(),
+            map_type: None,
+            map_key_traits: ordered_lookup_traits(),
+            set_type: None,
+            set_element_traits: ordered_lookup_traits(),
+            vec_type: None,
+            trait_impls: TypespaceTraitSet::default(),
+            extra_derives: Vec::new(),
+            json_serde_crate: None,
+        }
+    }
+}
+
+/// The traits an ordered-lookup container (`BTreeMap`, or the ordered
+/// treatment of sets) demands of its key or element type. This is the
+/// default requirement set for maps and sets; container overrides
+/// supply their own.
+fn ordered_lookup_traits() -> TypespaceTraitSet {
+    [
+        TypespaceTrait::Eq,
+        TypespaceTrait::PartialEq,
+        TypespaceTrait::Ord,
+        TypespaceTrait::PartialOrd,
+    ]
+    .into_iter()
+    .collect()
+}
+
 impl Settings {
     /// Set how types from the `std` prelude are spelled in generated
     /// code; see [`Std`]. The default is [`Std::FullyQualified`].
@@ -85,7 +127,11 @@ impl Settings {
 
     /// Set the container type used to render [`Type::Map`](crate::build::Type).
     ///
-    /// The default is `::std::collections::BTreeMap`. The type named by
+    /// The default is `::std::collections::BTreeMap`, which requires
+    /// its keys to implement the `Ord` family. `key_traits` states what
+    /// the configured container requires of its key type instead (for a
+    /// hash map: `Hash`, `Eq`, and `PartialEq`); finalization imposes
+    /// exactly those requirements on every map key. The type named by
     /// `map_type` is emitted verbatim with the key and value types as
     /// its two generic arguments, so it must:
     ///
@@ -100,16 +146,26 @@ impl Settings {
     /// [`Type::JsonValue`](crate::build::Type) is rendered as
     /// `::serde_json::Map` regardless of this setting, matching the map
     /// type inside `::serde_json::Value` itself.
-    pub fn with_map_type<T: Into<ContainerType>>(mut self, map_type: T) -> Self {
+    pub fn with_map_type<T: Into<ContainerType>>(
+        mut self,
+        map_type: T,
+        key_traits: TypespaceTraitSet,
+    ) -> Self {
         self.map_type = Some(map_type.into());
+        self.map_key_traits = key_traits;
         self
     }
 
     /// Set the container type used to render [`Type::Set`](crate::build::Type).
     ///
-    /// The default is `Vec` (deduplication is not enforced). The type
-    /// named by `set_type` is emitted verbatim with the element type as
-    /// its single generic argument, so it must:
+    /// The default is `Vec` (deduplication is not enforced), though set
+    /// elements are still required to be comparable: the `Ord` family
+    /// by default. `element_traits` states what the configured
+    /// container requires of its element type instead (for a hash set:
+    /// `Hash`, `Eq`, and `PartialEq`); finalization imposes exactly
+    /// those requirements on every set element. The type named by
+    /// `set_type` is emitted verbatim with the element type as its
+    /// single generic argument, so it must:
     ///
     /// - take one generic parameter, `T`;
     /// - have an `is_empty` method that returns a boolean;
@@ -117,8 +173,13 @@ impl Settings {
     ///   [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html),
     ///   and
     ///   [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html).
-    pub fn with_set_type<T: Into<ContainerType>>(mut self, set_type: T) -> Self {
+    pub fn with_set_type<T: Into<ContainerType>>(
+        mut self,
+        set_type: T,
+        element_traits: TypespaceTraitSet,
+    ) -> Self {
         self.set_type = Some(set_type.into());
+        self.set_element_traits = element_traits;
         self
     }
 
@@ -145,7 +206,7 @@ impl Settings {
     /// finalization and propagates to contained types exactly like a
     /// structural requirement (a map key needing `Ord`, say); a type
     /// that cannot satisfy it is a
-    /// [`TypespaceError`](crate::TypespaceError). Whether the trait is
+    /// [`Error`](crate::error::Error). Whether the trait is
     /// realized as a derive or a hand-written impl is rendering's
     /// decision.
     pub fn with_trait_impl(mut self, trait_impl: TypespaceTrait) -> Self {

@@ -58,14 +58,10 @@
 //! that changes when constraint validation rendering lands.
 
 pub mod build;
-mod error;
+pub mod error;
 pub mod settings;
 pub(crate) mod value_tokens;
 pub mod view;
-
-pub use error::{
-    OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict, TypespaceError,
-};
 
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque};
 
@@ -76,6 +72,7 @@ use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct,
 };
+use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::{OptionalNullable, Settings, Std};
 
 // 6/25/2025
@@ -117,7 +114,7 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// absorb propagated requirements and emit the corresponding derives;
 /// a [`build::Native`] type must already declare the required traits
 /// among its `impls`. A requirement that a type cannot satisfy--`Ord`
-/// on a float, say--is a [`TypespaceError`].
+/// on a float, say--is a [`error::Error`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -135,29 +132,15 @@ pub enum TypespaceTrait {
     PartialOrd,
     Hash,
     Default,
-    /// A `FromStr` implementation that cannot fail for any input string.
-    ///
-    /// This is a marker, not a Rust trait: `String` satisfies it, and a
-    /// native type may declare it when its `FromStr` accepts every
-    /// string. Consumers use it to decide, for example, whether an
-    /// untagged enum with a string variant can implement `FromStr`
-    /// without a failure case. It is never emitted as a derive.
-    FromStringIrrefutable,
 }
 
 impl TypespaceTrait {
     /// Whether the trait can be realized with a std-style derive.
     ///
-    /// `Display` and `FromStr` have no derive form, and
-    /// `FromStringIrrefutable` is a marker rather than a trait; none of
-    /// them may appear in a derive attribute.
+    /// `Display` and `FromStr` have no derive form and may not appear
+    /// in a derive attribute.
     pub(crate) fn is_derivable(&self) -> bool {
-        !matches!(
-            self,
-            TypespaceTrait::Display
-                | TypespaceTrait::FromStr
-                | TypespaceTrait::FromStringIrrefutable
-        )
+        !matches!(self, TypespaceTrait::Display | TypespaceTrait::FromStr)
     }
 
     pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
@@ -176,9 +159,6 @@ impl TypespaceTrait {
                 TypespaceTrait::Display => quote! { ::std::fmt::Display },
                 TypespaceTrait::FromStr => quote! { ::std::str::FromStr },
                 TypespaceTrait::Default => quote! { ::std::default::Default },
-                TypespaceTrait::FromStringIrrefutable => {
-                    unreachable!("markers are filtered by is_derivable")
-                }
             }
         } else {
             match self {
@@ -195,9 +175,6 @@ impl TypespaceTrait {
                 TypespaceTrait::Display => quote! { Display },
                 TypespaceTrait::FromStr => quote! { FromStr },
                 TypespaceTrait::Default => quote! { Default },
-                TypespaceTrait::FromStringIrrefutable => {
-                    unreachable!("markers are filtered by is_derivable")
-                }
             }
         }
     }
@@ -219,7 +196,6 @@ impl std::fmt::Display for TypespaceTrait {
             TypespaceTrait::PartialOrd => "PartialOrd",
             TypespaceTrait::Hash => "Hash",
             TypespaceTrait::Default => "Default",
-            TypespaceTrait::FromStringIrrefutable => "FromStringIrrefutable",
         };
         f.write_str(name)
     }
@@ -330,17 +306,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// The IDs that `typ` refers to need not be present yet, but each
     /// must be inserted before [`finalize`](Self::finalize) is called.
-    /// Fails with [`TypespaceError::DuplicateTypeId`] if a type with
-    /// this ID was already inserted.
-    pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), TypespaceError<Id>> {
-        // Rendering interpolates the name of every named type into an
-        // identifier. The shape builders refuse to produce a named type
-        // without a nonempty name, so one arriving here is a typespace
-        // bug rather than a caller error.
-        debug_assert!(
-            typ.common().is_none_or(|common| !common.name.is_empty()),
-            "named types cannot be constructed without a name"
-        );
+    /// Fails with [`error::Error::DuplicateTypeId`] if a type with
+    /// this ID was already inserted, and re-runs the shape checks that
+    /// `build()` applies (rejecting, for example, a shape value smuggled
+    /// into a [`Type`] variant without being built).
+    pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), Error<Id>> {
+        // The shapes' build() methods validate names, but Type's
+        // variants are not sealed against direct construction; re-run
+        // the checks here so no unvalidated shape can enter the
+        // typespace.
+        typ.validate_built()?;
         match self.types.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(typ);
@@ -348,7 +323,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
             }
             Entry::Occupied(e) => {
                 // Duplicate insertions are a caller error.
-                Err(TypespaceError::DuplicateTypeId {
+                Err(Error::DuplicateTypeId {
                     type_id: e.key().clone(),
                 })
             }
@@ -363,16 +338,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Validate the type graph without consuming the builder.
     ///
     /// Runs the same checks as [`finalize`](Self::finalize)--settings
-    /// validity, dangling references, and trait-requirement
-    /// propagation--and reports the same errors, including every
-    /// [`TraitConflict`] collected. Containment cycles are not broken
+    /// validity, dangling references, type-name uniqueness, and
+    /// trait-requirement propagation--and reports the same errors,
+    /// including every [`TraitConflict`] collected. Containment cycles are not broken
     /// (that requires minting box IDs), so conflict paths lack the
     /// `Boxed` hops that finalization would introduce; requirements
     /// propagate identically either way because a box only forwards
     /// them.
-    pub fn validate(&self) -> Result<(), TypespaceError<Id>> {
+    pub fn validate(&self) -> Result<(), Error<Id>> {
         self.check_derives()?;
         self.check_references()?;
+        self.check_type_names()?;
 
         // Trait propagation writes into each type's built state, so run
         // it on a disposable copy of the graph.
@@ -384,10 +360,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Reject unparseable extra derives so that rendering--which is
     /// infallible--can rely on them parsing.
-    fn check_derives(&self) -> Result<(), TypespaceError<Id>> {
+    fn check_derives(&self) -> Result<(), Error<Id>> {
         for derive in &self.settings.extra_derives {
             if let Err(err) = syn::parse_str::<syn::Path>(derive) {
-                return Err(TypespaceError::InvalidDerive {
+                return Err(Error::InvalidDerive {
                     derive: derive.clone(),
                     message: err.to_string(),
                 });
@@ -398,13 +374,34 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Verify that every type ID referenced by a type is actually
     /// present; later steps rely on lookups of child IDs succeeding.
-    fn check_references(&self) -> Result<(), TypespaceError<Id>> {
+    fn check_references(&self) -> Result<(), Error<Id>> {
         for (type_id, typ) in &self.types {
             for child_id in typ.children() {
                 if !self.types.contains_key(&child_id) {
-                    return Err(TypespaceError::UnknownTypeId {
+                    return Err(Error::UnknownTypeId {
                         type_id: type_id.clone(),
                         child_id,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify that no two named types share a name.
+    ///
+    /// Names come from the consumer, which owns collision-free naming;
+    /// this backstops converter naming bugs. Typespace never renames.
+    fn check_type_names(&self) -> Result<(), Error<Id>> {
+        let mut names = BTreeMap::<&str, &Id>::new();
+        for (type_id, typ) in &self.types {
+            if let Some(common) = typ.common() {
+                let name = common.built_name();
+                if let Some(first) = names.insert(name, type_id) {
+                    return Err(Error::DuplicateTypeName {
+                        name: name.to_string(),
+                        first: first.clone(),
+                        second: type_id.clone(),
                     });
                 }
             }
@@ -416,18 +413,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// Verifies that every ID referenced by a type names an inserted
     /// type (a dangling reference is a
-    /// [`TypespaceError::UnknownTypeId`]), breaks containment cycles by
+    /// [`error::Error::UnknownTypeId`]), breaks containment cycles by
     /// inserting `Box` types, and propagates trait requirements through
     /// the graph--a type used as a map key must be `Ord`, and so must
     /// everything it contains. Trait requirements that types cannot
     /// satisfy are collected--all of them, not just the first--into
-    /// [`TypespaceError::TraitConflicts`].
+    /// [`error::Error::TraitConflicts`].
     ///
     /// `make_box_id` is called to generate a fresh ID for each `Box<T>`
     /// wrapper inserted to break a containment cycle. The argument is the ID
     /// of the inner type being wrapped. Pass [`no_cycles`] to assert
     /// that the graph contains no containment cycles.
-    pub fn finalize<F>(self, make_box_id: F) -> Result<Typespace<Id>, TypespaceError<Id>>
+    pub fn finalize<F>(self, make_box_id: F) -> Result<Typespace<Id>, Error<Id>>
     where
         F: FnMut(&Id) -> Id,
     {
@@ -438,6 +435,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
         self.check_derives()?;
         self.check_references()?;
+        self.check_type_names()?;
 
         let Self {
             mut types,
@@ -525,29 +523,29 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         for typ in self.types.values() {
             match typ {
                 Type::Struct(s) => {
-                    let name = s.common.name.clone();
+                    let name = s.common.built_name().to_string();
                     let tokens = s.render(self, &mut cs);
                     cs.add_item(name, tokens);
                 }
                 Type::Enum(e) => {
-                    let name = e.common.name.clone();
+                    let name = e.common.built_name().to_string();
                     let tokens = e.render(self, &mut cs);
                     cs.add_item(name, tokens);
                 }
                 Type::UnitStruct(u) => {
-                    let name = u.common.name.clone();
+                    let name = u.common.built_name().to_string();
                     cs.add_item(name, u.render(self));
                 }
                 Type::TupleStruct(t) => {
-                    let name = t.common.name.clone();
+                    let name = t.common.built_name().to_string();
                     cs.add_item(name, t.render(self));
                 }
                 Type::NewtypeStruct(n) => {
-                    let name = n.common.name.clone();
+                    let name = n.common.built_name().to_string();
                     cs.add_item(name, n.render(self));
                 }
                 Type::TypeAlias(a) => {
-                    let name = a.common.name.clone();
+                    let name = a.common.built_name().to_string();
                     cs.add_item(name, a.render(self));
                 }
                 _ => {}
@@ -619,7 +617,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             | Type::TupleStruct(TupleStruct { common, .. })
             | Type::NewtypeStruct(NewtypeStruct { common, .. })
             | Type::TypeAlias(TypeAlias { common, .. }) => {
-                let name = &common.name;
+                let name = common.built_name();
                 let name_ident = format_ident!("{name}");
 
                 if let Some(scope) = scope {
@@ -1149,10 +1147,7 @@ where
     }
 }
 
-fn push_traits<Id>(
-    types: &mut BTreeMap<Id, Type<Id>>,
-    settings: &Settings,
-) -> Result<(), TypespaceError<Id>>
+fn push_traits<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Settings) -> Result<(), Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -1165,35 +1160,22 @@ where
         path: Vec<PathStep<Id>>,
     }
 
-    // The traits demanded of a type used for lookup: as a map key or a
-    // set element.
-    let lookup_traits = || {
-        [
-            TypespaceTrait::Eq,
-            TypespaceTrait::PartialEq,
-            TypespaceTrait::Ord,
-            TypespaceTrait::PartialOrd,
-        ]
-        .into_iter()
-        .collect::<TypespaceTraitSet>()
-    };
-
     // First, look through all types to determine what traits are required of
-    // various children.
+    // various children. The requirement sets come from settings: the
+    // configured map and set types state what they demand of their key
+    // and element types (the built-in defaults demand the Ord family).
     let mut work = types
         .iter()
         .filter_map(|(type_id, ty)| match ty {
-            // TODO 3/31/2026
-            // need to check map settings
             Type::Map(key_schema_ref, _) => Some(WorkItem {
                 target: key_schema_ref.clone(),
-                traits: lookup_traits(),
+                traits: settings.map_key_traits.clone(),
                 origin: RequirementOrigin::MapKey(type_id.clone()),
                 path: Vec::new(),
             }),
             Type::Set(element_schema_ref) => Some(WorkItem {
                 target: element_schema_ref.clone(),
-                traits: lookup_traits(),
+                traits: settings.set_element_traits.clone(),
                 origin: RequirementOrigin::SetElement(type_id.clone()),
                 path: Vec::new(),
             }),
@@ -1249,11 +1231,8 @@ where
     };
 
     // Traits no container can provide.
-    const CONTAINER_UNSUPPORTED: &[TypespaceTrait] = &[
-        TypespaceTrait::Display,
-        TypespaceTrait::FromStr,
-        TypespaceTrait::FromStringIrrefutable,
-    ];
+    const CONTAINER_UNSUPPORTED: &[TypespaceTrait] =
+        &[TypespaceTrait::Display, TypespaceTrait::FromStr];
 
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means adding the
@@ -1477,7 +1456,7 @@ where
                 }
 
                 // Floating-point types have no total ordering, no equality
-                // relation, and no hash; their FromStr is refutable.
+                // relation, and no hash.
                 Type::Float(name) => {
                     let (bad, _) = split(
                         &traits,
@@ -1485,7 +1464,6 @@ where
                             TypespaceTrait::Ord,
                             TypespaceTrait::Eq,
                             TypespaceTrait::Hash,
-                            TypespaceTrait::FromStringIrrefutable,
                         ],
                     );
                     let reason = OffenderReason::Primitive {
@@ -1494,28 +1472,11 @@ where
                     conflict(bad, reason);
                 }
 
-                // Integers and booleans implement every trait except the
-                // irrefutable-FromStr marker: their FromStr rejects
-                // non-numeric (respectively non-boolean) input.
-                Type::Integer(name) => {
-                    let (bad, _) = split(&traits, &[TypespaceTrait::FromStringIrrefutable]);
-                    let reason = OffenderReason::Primitive {
-                        type_name: name.clone(),
-                    };
-                    conflict(bad, reason);
-                }
-                Type::Boolean => {
-                    let (bad, _) = split(&traits, &[TypespaceTrait::FromStringIrrefutable]);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "bool".to_string(),
-                        },
-                    );
-                }
+                // Integers and booleans implement every trait we track.
+                Type::Integer(_) | Type::Boolean => (),
 
                 // The unit type implements everything except Display and
-                // FromStr (and, a fortiori, the irrefutable marker).
+                // FromStr.
                 Type::Unit => {
                     let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
                     conflict(
@@ -1526,13 +1487,11 @@ where
                     );
                 }
 
-                // String implements every trait we track, including the
-                // irrefutable-FromStr marker.
+                // String implements every trait we track.
                 Type::String => (),
 
                 // JsonValue implements everything except for Eq, Ord,
-                // PartialOrd, and Hash; its FromStr (JSON parsing) is
-                // refutable.
+                // PartialOrd, and Hash.
                 Type::JsonValue => {
                     let (bad, _) = split(
                         &traits,
@@ -1541,7 +1500,6 @@ where
                             TypespaceTrait::Ord,
                             TypespaceTrait::PartialOrd,
                             TypespaceTrait::Hash,
-                            TypespaceTrait::FromStringIrrefutable,
                         ],
                     );
                     conflict(
@@ -1558,6 +1516,6 @@ where
     if conflicts.is_empty() {
         Ok(())
     } else {
-        Err(TypespaceError::TraitConflicts { conflicts })
+        Err(Error::TraitConflicts { conflicts })
     }
 }

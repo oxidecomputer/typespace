@@ -316,4 +316,24 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
                 | Type::TypeAlias(_)
         )
     }
+
+    /// Re-run the shape checks that `build()` applies.
+    ///
+    /// The shapes' `build()` methods are the intended construction door,
+    /// but `Type`'s variants are not sealed: `Type::Struct(Struct::new())`
+    /// is expressible and would smuggle an unvalidated shape past
+    /// `build()`. Insertion into the
+    /// [`TypespaceBuilder`](crate::TypespaceBuilder) calls this as
+    /// defense-in-depth so no unvalidated shape can enter a typespace.
+    pub(crate) fn validate_built(&self) -> Result<(), crate::error::Error<Id>> {
+        match self {
+            Type::Enum(type_enum) => type_enum.validate(),
+            Type::Struct(type_struct) => type_struct.validate(),
+            Type::UnitStruct(unit_struct) => unit_struct.validate(),
+            Type::TupleStruct(tuple_struct) => tuple_struct.validate(),
+            Type::NewtypeStruct(newtype_struct) => newtype_struct.validate(),
+            Type::TypeAlias(type_alias) => type_alias.validate(),
+            _ => Ok(()),
+        }
+    }
 }

@@ -26,12 +26,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// types.
     pub fn name(&self) -> String {
         match self.typ {
-            build::Type::Enum(e) => e.common.name.clone(),
-            build::Type::Struct(s) => s.common.name.clone(),
-            build::Type::UnitStruct(u) => u.common.name.clone(),
-            build::Type::TupleStruct(t) => t.common.name.clone(),
-            build::Type::NewtypeStruct(n) => n.common.name.clone(),
-            build::Type::TypeAlias(a) => a.common.name.clone(),
+            build::Type::Enum(e) => e.common.built_name().to_string(),
+            build::Type::Struct(s) => s.common.built_name().to_string(),
+            build::Type::UnitStruct(u) => u.common.built_name().to_string(),
+            build::Type::TupleStruct(t) => t.common.built_name().to_string(),
+            build::Type::NewtypeStruct(n) => n.common.built_name().to_string(),
+            build::Type::TypeAlias(a) => a.common.built_name().to_string(),
             _ => self.ident().to_string(),
         }
     }
@@ -130,8 +130,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     fn name_str(&self) -> &'a str {
         match self.typ {
             build::Type::UnitStruct(build::UnitStruct { common, .. })
-            | build::Type::TupleStruct(build::TupleStruct { common, .. }) => common.name.as_str(),
-            build::Type::TypeAlias(build::TypeAlias { common, .. }) => common.name.as_str(),
+            | build::Type::TupleStruct(build::TupleStruct { common, .. }) => common.built_name(),
+            build::Type::TypeAlias(build::TypeAlias { common, .. }) => common.built_name(),
             _ => "",
         }
     }

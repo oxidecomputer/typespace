@@ -1,78 +1,49 @@
 // Copyright 2026 Oxide Computer Company
 
+use std::collections::BTreeSet;
+
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::build::{CommonBuilder, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt};
-use crate::{TypespaceError, TypespaceRenderer, TypespaceTrait};
+use crate::build::{
+    check_properties, validate_ident, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt,
+};
+use crate::error::{Error, NameAxis};
+use crate::{TypespaceRenderer, TypespaceTrait};
 
-/// An enum; construct one with [`Enum::builder`].
+/// An enum.
+///
+/// An `Enum` is its own builder: [`Enum::new`] starts one under
+/// construction, the fluent methods fill it in ([`Enum::name`] and
+/// [`Enum::tag_type`] are both required and may come at any point), and
+/// [`Enum::build`] validates it and produces the finished
+/// [`Type::Enum`] value.
 #[derive(Debug, Clone)]
 pub struct Enum<Id> {
     pub(crate) common: TypeCommon,
 
-    pub(crate) tag_type: EnumTagType,
+    pub(crate) tag_type: Option<EnumTagType>,
     pub(crate) variants: Vec<EnumVariant<Id>>,
     pub(crate) deny_unknown_fields: bool,
 }
 
+impl<Id> Default for Enum<Id> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Id> Enum<Id> {
-    /// Start building an enum; see [`EnumBuilder`].
-    pub fn builder() -> EnumBuilder<Id> {
-        EnumBuilder {
-            common: CommonBuilder::default(),
-            tag_type: EnumTagType::External,
+    /// Start an enum under construction.
+    pub fn new() -> Self {
+        Self {
+            common: Default::default(),
+            tag_type: None,
             variants: Vec::new(),
             deny_unknown_fields: false,
         }
     }
 
-    /// The enum's name, always nonempty.
-    pub fn name(&self) -> &str {
-        self.common.name()
-    }
-
-    /// The description (doc comment source), if any.
-    pub fn description(&self) -> Option<&str> {
-        self.common.description()
-    }
-
-    /// The default value, if any.
-    pub fn default(&self) -> Option<&serde_json::Value> {
-        self.common.default()
-    }
-
-    /// The serde tagging scheme.
-    pub fn tag_type(&self) -> &EnumTagType {
-        &self.tag_type
-    }
-
-    /// The enum's variants, in declaration order.
-    pub fn variants(&self) -> &[EnumVariant<Id>] {
-        &self.variants
-    }
-
-    /// Whether deserialization rejects unknown fields.
-    pub fn deny_unknown_fields(&self) -> bool {
-        self.deny_unknown_fields
-    }
-}
-
-/// Assembles an [`Enum`]; created by [`Enum::builder`].
-///
-/// The name is the one required ingredient and may be supplied at any
-/// point before [`EnumBuilder::build`], which produces the finished
-/// [`Type::Enum`] value. Tagging starts as [`EnumTagType::External`]
-/// (serde's default).
-#[derive(Debug, Clone)]
-pub struct EnumBuilder<Id> {
-    common: CommonBuilder,
-    tag_type: EnumTagType,
-    variants: Vec<EnumVariant<Id>>,
-    deny_unknown_fields: bool,
-}
-
-impl<Id> EnumBuilder<Id> {
     /// Set the enum's name.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.common.name = Some(name.into());
@@ -92,18 +63,15 @@ impl<Id> EnumBuilder<Id> {
     }
 
     /// Set the serde tagging scheme; see [`EnumTagType`].
+    ///
+    /// There is no presumed default: an enum cannot be built until its
+    /// tagging scheme has been chosen.
     pub fn tag_type(mut self, tag_type: EnumTagType) -> Self {
-        self.tag_type = tag_type;
+        self.tag_type = Some(tag_type);
         self
     }
 
-    /// Append one variant.
-    pub fn variant(mut self, variant: EnumVariant<Id>) -> Self {
-        self.variants.push(variant);
-        self
-    }
-
-    /// Append any number of variants.
+    /// Append variants.
     pub fn variants(mut self, variants: impl IntoIterator<Item = EnumVariant<Id>>) -> Self {
         self.variants.extend(variants);
         self
@@ -115,26 +83,96 @@ impl<Id> EnumBuilder<Id> {
         self
     }
 
-    /// Produce the enum as a [`Type`] value.
+    /// Validate the enum and produce it as a [`Type`] value.
     ///
-    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
-    /// name was provided.
-    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    /// Fails if the name is missing or not a valid identifier, if no
+    /// tag type was set, if any variant or variant-field name is not a
+    /// valid identifier, or if names collide on either axis (see
+    /// [`Error::DuplicateItemName`]).
+    pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        let Self {
-            common,
-            tag_type,
-            variants,
-            deny_unknown_fields,
-        } = self;
-        Ok(Type::Enum(Enum {
-            common: common.build("enum")?,
-            tag_type,
-            variants,
-            deny_unknown_fields,
-        }))
+        self.validate()?;
+        Ok(Type::Enum(self))
+    }
+
+    /// The checks `build()` applies; also run at insertion as
+    /// defense-in-depth.
+    pub(crate) fn validate(&self) -> Result<(), Error<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        self.common.validate_name("enum")?;
+        let type_name = self.common.built_name();
+        if self.tag_type.is_none() {
+            return Err(Error::MissingTagType {
+                name: type_name.to_string(),
+            });
+        }
+
+        // Variant names must be valid identifiers and unique on both
+        // the Rust and wire axes; a struct-shaped variant's fields are
+        // held to the same property rules as a struct's.
+        let mut rust_names = BTreeSet::new();
+        let mut wire_names = BTreeSet::new();
+        for variant in &self.variants {
+            validate_ident("variant", &variant.rust_name)?;
+            if !rust_names.insert(variant.rust_name.clone()) {
+                return Err(Error::DuplicateItemName {
+                    kind: "variant",
+                    type_name: type_name.to_string(),
+                    name: variant.rust_name.clone(),
+                    axis: NameAxis::Rust,
+                });
+            }
+            let wire_name = variant
+                .rename
+                .clone()
+                .unwrap_or_else(|| variant.rust_name.clone());
+            if !wire_names.insert(wire_name.clone()) {
+                return Err(Error::DuplicateItemName {
+                    kind: "variant",
+                    type_name: type_name.to_string(),
+                    name: wire_name,
+                    axis: NameAxis::Wire,
+                });
+            }
+            if let VariantDetails::Struct(properties) = &variant.details {
+                check_properties(&format!("{type_name}::{}", variant.rust_name), properties)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The enum's name, if one has been set.
+    pub fn get_name(&self) -> Option<&str> {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn get_description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The default value, if any.
+    pub fn get_default(&self) -> Option<&serde_json::Value> {
+        self.common.default()
+    }
+
+    /// The serde tagging scheme, if one has been set.
+    pub fn get_tag_type(&self) -> Option<&EnumTagType> {
+        self.tag_type.as_ref()
+    }
+
+    /// The enum's variants, in declaration order.
+    pub fn get_variants(&self) -> &[EnumVariant<Id>] {
+        &self.variants
+    }
+
+    /// Whether deserialization rejects unknown fields.
+    pub fn get_deny_unknown_fields(&self) -> bool {
+        self.deny_unknown_fields
     }
 }
 
@@ -166,6 +204,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         else {
             unreachable!()
         };
+        let name = name.as_deref().expect("validated type has a name");
+        let tag_type = tag_type.as_ref().expect("validated enum has a tag type");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let serde = match tag_type {
             EnumTagType::External => TokenStream::new(),
