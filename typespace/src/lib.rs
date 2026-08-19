@@ -107,34 +107,13 @@ use serde::Deserialize;
 // eventually want...
 /// Modify how types are processed and generated.
 ///
-/// Futures:
-///
-/// There are traits that may require special handling during type generation:
-///
-/// - `serde::Serialize` and `serde::Deserialize` -- These traits depend on the
-///   shape of the data and, while--as much as possible--generated code makes
-///   use of the derived implementations, the serialized form of some generated
-///   types may be a little different.
-///
-/// - `schemars::JsonSchema` -- As with serde traits, JsonSchema depends on the
-///   shape of data and may be customized in some circumstances. In addition,
-///   typify supports multiple version of `schemars` so additional
-///   configuration may be required to specify the version or to customize the
-///   crate name e.g. if one were to support multiple versions simultaneously.
-///
-/// - `std::clone::Clone` -- XXX
-/// - `std::fmt::Display` -- XXX
-/// - `std::default::Default` -- XXX
-///
-/// XXX
-///
-/// - Eq, Cmp and anything else that's not implemented by floating-point types.
-///
-/// Null vs Optional
-///
-/// Most of the time we want to do what serde does and not distinguish between
-/// these, but some users may want to be able to adjust this both globally and
-/// on a per-type basis... [8/29/2025: done]
+/// Settings are supplied to [`TypespaceBuilder::finalize`] and govern
+/// rendering. Start from [`TypespaceSettings::default`] and adjust with
+/// the `with_` methods; the type also implements `Deserialize` so
+/// settings can come from configuration data. Two axes exist today: how
+/// `std` prelude types are spelled ([`TypespaceSettingsStd`]) and how
+/// optional-and-nullable values are modeled
+/// ([`TypespaceSettingsOptionalNullable`]).
 #[derive(Debug, Default, Deserialize)]
 pub struct TypespaceSettings {
     /// When set to `FullyQualified`, (the default), types in the `std` crate's
@@ -161,11 +140,17 @@ pub struct TypespaceSettings {
 }
 
 impl TypespaceSettings {
+    /// Set how types from the `std` prelude are spelled in generated
+    /// code; see [`TypespaceSettingsStd`]. The default is
+    /// [`TypespaceSettingsStd::FullyQualified`].
     pub fn with_std(mut self, std: TypespaceSettingsStd) -> Self {
         self.std = std;
         self
     }
 
+    /// Set how values that may be either `null` or absent are modeled;
+    /// see [`TypespaceSettingsOptionalNullable`]. The default is
+    /// [`TypespaceSettingsOptionalNullable::ConflateAsAbsent`].
     pub fn with_optional_nullable(
         mut self,
         optional_nullable: TypespaceSettingsOptionalNullable,
@@ -175,11 +160,18 @@ impl TypespaceSettings {
     }
 }
 
+/// Specify how types in the `std` crate's prelude are spelled in
+/// generated code. Types outside the prelude, such as
+/// `std::collections::BTreeMap`, are always fully qualified.
 #[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TypespaceSettingsStd {
+    /// Fully qualify prelude types: `Option` renders as
+    /// `::std::option::Option`. This is the default.
     #[default]
     FullyQualified,
+    /// Render prelude types in their typical, auto-imported form. Useful
+    /// if generated code is a starting point for manually-edited code.
     Unqualified,
 }
 
@@ -215,8 +207,16 @@ pub enum TypespaceSettingsOptionalNullable {
     CustomType(String),
 }
 
-/// Enumeration of traits for which Typify has particular awareness.
-/// XXX write more docs
+/// A trait that typespace tracks for generated and native types.
+///
+/// Uses of a type impose trait requirements that
+/// [`TypespaceBuilder::finalize`] propagates through the graph: a type
+/// used as a map key must implement `Eq`, `PartialEq`, `Ord`, and
+/// `PartialOrd`, and so must every type it contains. Generated types
+/// absorb propagated requirements and emit the corresponding derives;
+/// a [`TypeNative`] type must already declare the required traits among
+/// its `impls`. A requirement that a type cannot satisfy--`Ord` on a
+/// float, say--is a [`TypespaceError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum TypespaceTrait {
@@ -270,6 +270,10 @@ impl TypespaceTrait {
     }
 }
 
+/// An unordered collection of [`TypespaceTrait`] values, such as the
+/// traits a [`TypeNative`] type declares that it implements. Build one
+/// with [`TypespaceTraitSet::empty`] and [`TypespaceTraitSet::add`], or
+/// collect from an iterator of traits.
 #[derive(Debug, Clone)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 
@@ -326,6 +330,12 @@ impl TypespaceTraitSet {
 // an interface.
 
 /// Represents a type in the Typespace.
+///
+/// A type refers to other types by ID, never by containment; every ID
+/// used here must have its own entry in the [`TypespaceBuilder`]. Named
+/// types (see [`Type::is_named`]) render as items; the remaining
+/// variants are built-in and container types that appear where other
+/// types reference them.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Type<Id> {
@@ -387,6 +397,9 @@ impl<Id> Type<Id> {
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
+    /// The IDs of every type this type refers to directly. Each such ID
+    /// must have a corresponding type inserted into the
+    /// [`TypespaceBuilder`] for finalization to succeed.
     pub fn children(&self) -> Vec<Id> {
         match self {
             Type::Enum(type_enum) => type_enum.children(),
@@ -503,6 +516,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
+    /// Whether this is a named type--one that renders as its own item
+    /// (struct, enum, unit struct, tuple struct, newtype struct, or type
+    /// alias)--as opposed to a built-in or container type. Named types
+    /// are exactly those for which [`Type::common`] returns `Some`.
     pub fn is_named(&self) -> bool {
         matches!(
             self,
@@ -516,6 +533,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     }
 }
 
+/// Accumulates the type graph prior to finalization.
+///
+/// Insert every type--each named type along with every built-in and
+/// container type it references--under a caller-chosen ID with
+/// [`TypespaceBuilder::insert`], then call
+/// [`TypespaceBuilder::finalize`] to validate the graph and produce a
+/// [`Typespace`].
 pub struct TypespaceBuilder<Id> {
     types: BTreeMap<Id, Type<Id>>,
 }
@@ -529,6 +553,14 @@ impl<Id> Default for TypespaceBuilder<Id> {
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id> {
+    /// Add a type under the given ID.
+    ///
+    /// The IDs that `typ` refers to need not be present yet, but each
+    /// must be inserted before [`finalize`](Self::finalize) is called.
+    /// Fails with [`TypespaceError::DuplicateTypeId`] if a type with
+    /// this ID was already inserted, and with
+    /// [`TypespaceError::EmptyTypeName`] if `typ` is a named type whose
+    /// name is empty.
     pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), TypespaceError<Id>> {
         // Rendering interpolates the name of every named type into an
         // identifier; an empty name would panic there, so reject it here
@@ -552,15 +584,25 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         }
     }
 
+    /// Whether a type has already been inserted under the given ID.
     pub fn contains_type(&self, id: &Id) -> bool {
         self.types.contains_key(id)
     }
 
     /// Finalize the typespace.
     ///
+    /// Verifies that every ID referenced by a type names an inserted
+    /// type (a dangling reference is a
+    /// [`TypespaceError::UnknownTypeId`]), breaks containment cycles by
+    /// inserting `Box` types, and propagates trait requirements through
+    /// the graph--a type used as a map key must be `Ord`, and so must
+    /// everything it contains. A trait requirement that a type cannot
+    /// satisfy is an error naming the offending ID.
+    ///
     /// `make_box_id` is called to generate a fresh ID for each `Box<T>`
     /// wrapper inserted to break a containment cycle. The argument is the ID
-    /// of the inner type being wrapped.
+    /// of the inner type being wrapped. Pass [`no_cycles`] to assert
+    /// that the graph contains no containment cycles.
     pub fn finalize<F>(
         self,
         settings: TypespaceSettings,
@@ -597,17 +639,33 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     }
 }
 
+/// A `make_box_id` argument for [`TypespaceBuilder::finalize`] that
+/// asserts the type graph contains no containment cycles: it panics if
+/// finalization ever needs to insert a `Box`.
 pub fn no_cycles<Id>(_: &Id) -> Id {
     panic!("unexpected cycle in typespace")
 }
 
+/// A finalized, validated collection of types.
+///
+/// Produced by [`TypespaceBuilder::finalize`]. Render every named type
+/// with [`Typespace::to_codespace`], or inspect individual types
+/// without rendering via [`Typespace::get_type`] and
+/// [`Typespace::iter_types`].
 pub struct Typespace<Id> {
     pub(crate) types: BTreeMap<Id, Type<Id>>,
+    /// The settings supplied at finalization, which govern rendering.
     pub settings: TypespaceSettings,
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     /// Look up a type by its id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` does not name a type in the typespace; every ID
+    /// accepted at insert time (plus the box IDs generated during
+    /// finalization) is valid.
     pub fn get_type(&self, id: &Id) -> TypeInfo<'_, Id> {
         let (id, typ) = self.types.get_key_value(id).expect("invalid type id");
         TypeInfo {
@@ -626,6 +684,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
         })
     }
 
+    /// Render every named type into a [`codespace::Codespace`].
+    ///
+    /// Each named type becomes one item keyed by its name; generated
+    /// helper functions (serde default functions, for example) are
+    /// routed to their own modules. Output is deterministic and
+    /// unformatted; turning the codespace into a token stream or files
+    /// is the caller's job from here.
     pub fn to_codespace(&self) -> codespace::Codespace {
         TypespaceRenderer {
             types: &self.types,

@@ -215,9 +215,11 @@ impl<'a, Id: Clone> TypeStructInfo<'a, Id> {
 pub struct TypeStructPropInfo<'a, Id> {
     /// The Rust field name as a string.
     pub name: String,
+    /// The description (doc comment source) for the property, if any.
     pub description: Option<&'a str>,
     /// `true` if the field must be present in the serialized form.
     pub required: bool,
+    /// The ID of the property's type.
     pub type_id: Id,
 }
 
@@ -263,16 +265,22 @@ fn variant_details_to_info<Id: Clone>(details: &VariantDetails<Id>) -> TypeEnumV
 
 /// Full information about a single enum variant.
 pub struct TypeEnumVariantInfo<'a, Id> {
+    /// The Rust name of the variant.
     pub name: &'a str,
+    /// The description (doc comment source) for the variant, if any.
     pub description: Option<&'a str>,
+    /// The shape of the variant's associated data.
     pub details: TypeEnumVariant<Id>,
 }
 
 /// The shape of an enum variant's associated data.
 #[non_exhaustive]
 pub enum TypeEnumVariant<Id> {
+    /// A unit variant with no associated data.
     Simple,
+    /// A variant with one or more unnamed values of the given types.
     Tuple(Vec<Id>),
+    /// A struct-like variant with named fields.
     Struct(Vec<(String, Id)>),
 }
 
