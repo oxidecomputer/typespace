@@ -2,20 +2,36 @@
 
 use crate::{TypespaceTrait, TypespaceTraitSet};
 
+/// An externally defined type emitted by its Rust path; construct one
+/// with [`Native::new`] or [`Native::new_string_like`].
 #[derive(Debug, Clone)]
 pub struct Native<Id> {
-    pub name: String,
+    pub(crate) name: String,
 
-    pub impls: TypespaceTraitSet,
+    pub(crate) impls: TypespaceTraitSet,
 
     // TODO from typify 1: in order to support const generics, this could be a
     // TypeOrConst enum, but note that we may some day need to disambiguate
     // char and &'static str since schemars represents a char as a string of
     // length 1.
-    pub parameters: Vec<Id>,
+    pub(crate) parameters: Vec<Id>,
 }
 
 impl<Id> Native<Id> {
+    /// The Rust type path emitted verbatim into generated code.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The traits the type is known to implement.
+    pub fn impls(&self) -> &TypespaceTraitSet {
+        &self.impls
+    }
+
+    /// The IDs of the type's generic type parameters.
+    pub fn parameters(&self) -> &[Id] {
+        &self.parameters
+    }
     /// Create a native type. `name` is the Rust type path emitted
     /// verbatim into generated code; `impls` is the set of traits the
     /// type is known to implement, consulted when trait requirements

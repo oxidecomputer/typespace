@@ -17,16 +17,16 @@ where
         type_id: Id,
     },
 
-    /// A named type was inserted with an empty name.
+    /// A shape builder ran to completion without a usable name.
     ///
-    /// Applies to structs, enums, newtype structs, unit structs, tuple
-    /// structs, and type aliases. Names come from the caller; rendering
-    /// interpolates them into identifiers and cannot tolerate an empty
-    /// string.
-    #[error("the type with id `{type_id}` has an empty name")]
-    EmptyTypeName {
-        /// The ID of the type whose name is empty.
-        type_id: Id,
+    /// Every named type (struct, enum, newtype struct, unit struct,
+    /// tuple struct, or type alias) must have a nonempty name before
+    /// `build()` can produce it; rendering interpolates names into
+    /// identifiers. Set one with the builder's `name` method.
+    #[error("cannot build the {kind}: no name was provided")]
+    MissingTypeName {
+        /// The kind of shape being built (`"struct"`, `"enum"`, ...).
+        kind: &'static str,
     },
 
     /// A derive path supplied via settings is not a valid Rust path.

@@ -32,10 +32,7 @@ a map key must be `Ord`).
 ```rust
 use quote::format_ident;
 use typespace::{
-    build::{
-        Struct, StructProperty, StructPropertySerde,
-        StructPropertyState, Type,
-    },
+    build::{Struct, StructProperty, Type},
     no_cycles,
     settings::Settings,
     TypespaceBuilder,
@@ -46,18 +43,15 @@ builder.insert("string".to_string(), Type::String).unwrap();
 builder
     .insert(
         "Thing".to_string(),
-        Type::Struct(Struct::new(
-            "Thing",
-            Some("A named thing.".to_string()),
-            vec![StructProperty::new(
+        Struct::builder()
+            .name("Thing")
+            .description("A named thing.")
+            .property(StructProperty::new(
                 format_ident!("name"),
-                StructPropertySerde::None,
-                StructPropertyState::Required,
-                None,
                 "string".to_string(),
-            )],
-            false,
-        )),
+            ))
+            .build()
+            .unwrap(),
     )
     .unwrap();
 

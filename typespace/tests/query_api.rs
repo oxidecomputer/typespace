@@ -2,10 +2,7 @@
 
 use quote::{format_ident, quote};
 use typespace::{
-    build::{
-        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertySerde,
-        StructPropertyState, Type, VariantDetails,
-    },
+    build::{Enum, EnumVariant, Struct, StructProperty, StructPropertyState, Type, VariantDetails},
     no_cycles,
     settings::Settings,
     view, TypeSpaceImpl, TypespaceBuilder,
@@ -35,34 +32,18 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             struct_id.clone(),
-            Type::Struct(Struct::new(
-                "MyStruct",
-                Some("A sample struct".to_string()),
-                vec![
-                    StructProperty::new(
-                        format_ident!("name"),
-                        StructPropertySerde::None,
-                        StructPropertyState::Required,
-                        Some("The name field".to_string()),
-                        str_id.clone(),
-                    ),
-                    StructProperty::new(
-                        format_ident!("count"),
-                        StructPropertySerde::None,
-                        StructPropertyState::Required,
-                        None,
-                        u32_id.clone(),
-                    ),
-                    StructProperty::new(
-                        format_ident!("label"),
-                        StructPropertySerde::None,
-                        StructPropertyState::Optional,
-                        None,
-                        opt_str_id.clone(),
-                    ),
-                ],
-                false,
-            )),
+            Struct::builder()
+                .name("MyStruct")
+                .description("A sample struct".to_string())
+                .properties(vec![
+                    StructProperty::new(format_ident!("name"), str_id.clone())
+                        .with_description("The name field".to_string()),
+                    StructProperty::new(format_ident!("count"), u32_id.clone()),
+                    StructProperty::new(format_ident!("label"), opt_str_id.clone())
+                        .with_state(StructPropertyState::Optional),
+                ])
+                .build()
+                .unwrap(),
         )
         .unwrap();
 
@@ -71,23 +52,19 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             enum_id.clone(),
-            Type::Enum(Enum::new(
-                "MyEnum",
-                Some("A sample enum".to_string()),
-                None,
-                EnumTagType::External,
-                vec![
-                    EnumVariant::new("Nothing", None, None, VariantDetails::Unit),
-                    EnumVariant::new("Single", None, None, VariantDetails::Item(str_id.clone())),
+            Enum::builder()
+                .name("MyEnum")
+                .description("A sample enum".to_string())
+                .variants(vec![
+                    EnumVariant::new("Nothing", VariantDetails::Unit),
+                    EnumVariant::new("Single", VariantDetails::Item(str_id.clone())),
                     EnumVariant::new(
                         "Pair",
-                        None,
-                        None,
                         VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
                     ),
-                ],
-                false,
-            )),
+                ])
+                .build()
+                .unwrap(),
         )
         .unwrap();
 

@@ -76,7 +76,7 @@ impl<Id> Type<Id> {
     /// returns `true` (structs, enums, unit structs, tuple structs,
     /// newtype structs, and type aliases); `None` for built-in and
     /// container types, which have no caller-assigned name.
-    pub fn common(&self) -> Option<&TypeCommon> {
+    pub(crate) fn common(&self) -> Option<&TypeCommon> {
         match self {
             Type::Enum(Enum { common, .. })
             | Type::Struct(Struct { common, .. })
@@ -91,7 +91,7 @@ impl<Id> Type<Id> {
     /// Exclusive-reference form of [`Type::common`]: the metadata common
     /// to named types, mutably. Returns `Some` for exactly the same
     /// variants as `common`.
-    pub fn common_mut(&mut self) -> Option<&mut TypeCommon> {
+    pub(crate) fn common_mut(&mut self) -> Option<&mut TypeCommon> {
         match self {
             Type::Enum(Enum { common, .. })
             | Type::Struct(Struct { common, .. })
@@ -304,7 +304,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// Whether this is a named type--one that renders as its own item
     /// (struct, enum, unit struct, tuple struct, newtype struct, or type
     /// alias)--as opposed to a built-in or container type. Named types
-    /// are exactly those for which [`Type::common`] returns `Some`.
+    /// are exactly those with a name, description, and default slot.
     pub fn is_named(&self) -> bool {
         matches!(
             self,

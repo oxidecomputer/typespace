@@ -331,18 +331,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// The IDs that `typ` refers to need not be present yet, but each
     /// must be inserted before [`finalize`](Self::finalize) is called.
     /// Fails with [`TypespaceError::DuplicateTypeId`] if a type with
-    /// this ID was already inserted, and with
-    /// [`TypespaceError::EmptyTypeName`] if `typ` is a named type whose
-    /// name is empty.
+    /// this ID was already inserted.
     pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), TypespaceError<Id>> {
         // Rendering interpolates the name of every named type into an
-        // identifier; an empty name would panic there, so reject it here
-        // where we can name the offending ID.
-        if let Some(common) = typ.common() {
-            if common.name.is_empty() {
-                return Err(TypespaceError::EmptyTypeName { type_id: id });
-            }
-        }
+        // identifier. The shape builders refuse to produce a named type
+        // without a nonempty name, so one arriving here is a typespace
+        // bug rather than a caller error.
+        debug_assert!(
+            typ.common().is_none_or(|common| !common.name.is_empty()),
+            "named types cannot be constructed without a name"
+        );
         match self.types.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(typ);

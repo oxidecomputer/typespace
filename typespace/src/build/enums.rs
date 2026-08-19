@@ -3,40 +3,142 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::build::{JsonValue, StructProperty, TypeCommon, TypeCommonBuilt};
-use crate::{TypespaceRenderer, TypespaceTrait};
+use crate::build::{CommonBuilder, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt};
+use crate::{TypespaceError, TypespaceRenderer, TypespaceTrait};
 
+/// An enum; construct one with [`Enum::builder`].
 #[derive(Debug, Clone)]
 pub struct Enum<Id> {
-    pub common: TypeCommon,
+    pub(crate) common: TypeCommon,
 
-    pub tag_type: EnumTagType,
-    pub variants: Vec<EnumVariant<Id>>,
-    pub deny_unknown_fields: bool,
+    pub(crate) tag_type: EnumTagType,
+    pub(crate) variants: Vec<EnumVariant<Id>>,
+    pub(crate) deny_unknown_fields: bool,
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
-    pub fn new(
-        name: impl Into<String>,
-        description: Option<String>,
-        default: Option<JsonValue>,
-        tag_type: EnumTagType,
-        variants: Vec<EnumVariant<Id>>,
-        deny_unknown_fields: bool,
-    ) -> Self {
-        Self {
-            common: TypeCommon {
-                name: name.into(),
-                description,
-                default,
-                built: None,
-            },
-            tag_type,
-            variants,
-            deny_unknown_fields,
+impl<Id> Enum<Id> {
+    /// Start building an enum; see [`EnumBuilder`].
+    pub fn builder() -> EnumBuilder<Id> {
+        EnumBuilder {
+            common: CommonBuilder::default(),
+            tag_type: EnumTagType::External,
+            variants: Vec::new(),
+            deny_unknown_fields: false,
         }
     }
 
+    /// The enum's name, always nonempty.
+    pub fn name(&self) -> &str {
+        self.common.name()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn description(&self) -> Option<&str> {
+        self.common.description()
+    }
+
+    /// The default value, if any.
+    pub fn default(&self) -> Option<&serde_json::Value> {
+        self.common.default()
+    }
+
+    /// The serde tagging scheme.
+    pub fn tag_type(&self) -> &EnumTagType {
+        &self.tag_type
+    }
+
+    /// The enum's variants, in declaration order.
+    pub fn variants(&self) -> &[EnumVariant<Id>] {
+        &self.variants
+    }
+
+    /// Whether deserialization rejects unknown fields.
+    pub fn deny_unknown_fields(&self) -> bool {
+        self.deny_unknown_fields
+    }
+}
+
+/// Assembles an [`Enum`]; created by [`Enum::builder`].
+///
+/// The name is the one required ingredient and may be supplied at any
+/// point before [`EnumBuilder::build`], which produces the finished
+/// [`Type::Enum`] value. Tagging starts as [`EnumTagType::External`]
+/// (serde's default).
+#[derive(Debug, Clone)]
+pub struct EnumBuilder<Id> {
+    common: CommonBuilder,
+    tag_type: EnumTagType,
+    variants: Vec<EnumVariant<Id>>,
+    deny_unknown_fields: bool,
+}
+
+impl<Id> EnumBuilder<Id> {
+    /// Set the enum's name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.common.name = Some(name.into());
+        self
+    }
+
+    /// Set the description (doc comment source).
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.common.description = Some(description.into());
+        self
+    }
+
+    /// Set the default value.
+    pub fn default(mut self, default: impl Into<JsonValue>) -> Self {
+        self.common.default = Some(default.into());
+        self
+    }
+
+    /// Set the serde tagging scheme; see [`EnumTagType`].
+    pub fn tag_type(mut self, tag_type: EnumTagType) -> Self {
+        self.tag_type = tag_type;
+        self
+    }
+
+    /// Append one variant.
+    pub fn variant(mut self, variant: EnumVariant<Id>) -> Self {
+        self.variants.push(variant);
+        self
+    }
+
+    /// Append any number of variants.
+    pub fn variants(mut self, variants: impl IntoIterator<Item = EnumVariant<Id>>) -> Self {
+        self.variants.extend(variants);
+        self
+    }
+
+    /// Make deserialization reject unknown fields.
+    pub fn deny_unknown_fields(mut self) -> Self {
+        self.deny_unknown_fields = true;
+        self
+    }
+
+    /// Produce the enum as a [`Type`] value.
+    ///
+    /// Fails with [`TypespaceError::MissingTypeName`] unless a nonempty
+    /// name was provided.
+    pub fn build(self) -> Result<Type<Id>, TypespaceError<Id>>
+    where
+        Id: std::fmt::Debug + std::fmt::Display,
+    {
+        let Self {
+            common,
+            tag_type,
+            variants,
+            deny_unknown_fields,
+        } = self;
+        Ok(Type::Enum(Enum {
+            common: common.build("enum")?,
+            tag_type,
+            variants,
+            deny_unknown_fields,
+        }))
+    }
+}
+
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     pub(crate) fn children(&self) -> Vec<Id> {
         self.variants
             .iter()
@@ -197,33 +299,64 @@ pub enum EnumTagType {
 // thinking about these as special, I think I'd rather generate the serde
 // implementations for all enums (or maybe all types).
 
+/// One variant of an [`Enum`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub struct EnumVariant<Id> {
-    pub rust_name: String,
-    pub rename: Option<String>,
+    pub(crate) rust_name: String,
+    pub(crate) rename: Option<String>,
     // TODO need a name for serialization?
     // pub json_name: String,
-    pub description: Option<String>,
-    pub details: VariantDetails<Id>,
+    pub(crate) description: Option<String>,
+    pub(crate) details: VariantDetails<Id>,
 }
 
 impl<Id> EnumVariant<Id> {
-    /// Create an enum variant named `rust_name`, serialized as `rename`
-    /// when that differs from the Rust name, with an optional doc comment
-    /// and the given shape of associated data.
-    pub fn new(
-        rust_name: impl Into<String>,
-        rename: Option<String>,
-        description: Option<String>,
-        details: VariantDetails<Id>,
-    ) -> Self {
+    /// Create an enum variant named `rust_name` with the given shape of
+    /// associated data.
+    ///
+    /// The variant serializes under its Rust name and has no
+    /// description; adjust with the `with_` methods.
+    pub fn new(rust_name: impl Into<String>, details: VariantDetails<Id>) -> Self {
         Self {
             rust_name: rust_name.into(),
-            rename,
-            description,
+            rename: None,
+            description: None,
             details,
         }
+    }
+
+    /// Serialize the variant as `rename` instead of its Rust name.
+    pub fn with_rename(mut self, rename: impl Into<String>) -> Self {
+        self.rename = Some(rename.into());
+        self
+    }
+
+    /// Set the description (doc comment source).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// The Rust name of the variant.
+    pub fn rust_name(&self) -> &str {
+        &self.rust_name
+    }
+
+    /// The serde rename, if the serialized name differs from the Rust
+    /// name.
+    pub fn rename(&self) -> Option<&str> {
+        self.rename.as_deref()
+    }
+
+    /// The description (doc comment source), if any.
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// The shape of the variant's associated data.
+    pub fn details(&self) -> &VariantDetails<Id> {
+        &self.details
     }
 }
 
