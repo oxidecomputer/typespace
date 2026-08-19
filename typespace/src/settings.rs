@@ -1,10 +1,6 @@
 // Copyright 2026 Oxide Computer Company
 
 //! Settings that govern how types are processed and rendered.
-//!
-//! [`Settings`] is the root: start from [`Settings::default`] and
-//! adjust with the `with_` methods, or deserialize one from
-//! configuration data.
 
 use serde::Deserialize;
 
@@ -17,9 +13,7 @@ use serde::Deserialize;
 /// [`TypespaceBuilder::finalize`](crate::TypespaceBuilder::finalize) and
 /// govern rendering. Start from [`Settings::default`] and adjust with
 /// the `with_` methods; the type also implements `Deserialize` so
-/// settings can come from configuration data. Two axes exist today: how
-/// `std` prelude types are spelled ([`Std`]) and how
-/// optional-and-nullable values are modeled ([`OptionalNullable`]).
+/// settings can come from configuration data.
 #[derive(Debug, Default, Deserialize)]
 pub struct Settings {
     /// When set to `FullyQualified`, (the default), types in the `std` crate's
