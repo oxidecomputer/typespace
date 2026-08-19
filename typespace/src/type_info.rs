@@ -10,6 +10,7 @@ use crate::{
 
 /// Identifies a trait implementation that typespace is aware of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TypeSpaceImpl {
     Display,
     FromStr,
@@ -166,6 +167,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id>
 }
 
 /// Structural details of a type. Mirrors `typify::TypeDetails<'_>`.
+#[non_exhaustive]
 pub enum TypeDetails<'a, Id> {
     Enum(TypeEnumInfo<'a, Id>),
     Struct(TypeStructInfo<'a, Id>),
@@ -267,6 +269,7 @@ pub struct TypeEnumVariantInfo<'a, Id> {
 }
 
 /// The shape of an enum variant's associated data.
+#[non_exhaustive]
 pub enum TypeEnumVariant<Id> {
     Simple,
     Tuple(Vec<Id>),

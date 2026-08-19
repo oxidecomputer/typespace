@@ -74,6 +74,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeStruct<Id> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub struct StructProperty<Id> {
     pub rust_name: Ident,
     pub json_name: StructPropertySerde,
@@ -384,6 +385,7 @@ pub struct TypeNewtypeStruct<Id> {
 // it's own, fundamentally distinct entity. However for now I'm going to just
 // shove it into the existing newtype representation.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum TypeNewtypeConstraints {
     None,
     String {

@@ -343,50 +343,35 @@ fn test_enums() {
         // types, so we use only unit and struct variants for Internal.
         let variants = match tag_type {
             EnumTagType::Internal { .. } => vec![
-                EnumVariant {
-                    rust_name: "Unit".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Unit,
-                },
-                EnumVariant {
-                    rust_name: "Named".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Struct(vec![StructProperty::new(
+                EnumVariant::new("Unit", None, None, VariantDetails::Unit),
+                EnumVariant::new(
+                    "Named",
+                    None,
+                    None,
+                    VariantDetails::Struct(vec![StructProperty::new(
                         format_ident!("x"),
                         StructPropertySerde::None,
                         StructPropertyState::Required,
                         None,
                         int_id.clone(),
                     )]),
-                },
+                ),
             ],
             _ => vec![
-                EnumVariant {
-                    rust_name: "Unit".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Unit,
-                },
-                EnumVariant {
-                    rust_name: "Item".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Item(string_id.clone()),
-                },
-                EnumVariant {
-                    rust_name: "Named".to_string(),
-                    rename: None,
-                    description: None,
-                    details: VariantDetails::Struct(vec![StructProperty::new(
+                EnumVariant::new("Unit", None, None, VariantDetails::Unit),
+                EnumVariant::new("Item", None, None, VariantDetails::Item(string_id.clone())),
+                EnumVariant::new(
+                    "Named",
+                    None,
+                    None,
+                    VariantDetails::Struct(vec![StructProperty::new(
                         format_ident!("x"),
                         StructPropertySerde::None,
                         StructPropertyState::Required,
                         None,
                         int_id.clone(),
                     )]),
-                },
+                ),
             ],
         };
 
@@ -1070,6 +1055,24 @@ fn test_duplicate_type_id() {
     assert!(matches!(
         err,
         TypespaceError::DuplicateTypeId { ref type_id } if type_id == "s"
+    ));
+}
+
+// Inserting a named type with an empty name is a caller error; names come
+// from the caller and rendering cannot invent one.
+#[test]
+fn test_empty_type_name() {
+    let mut builder = TypespaceBuilder::default();
+
+    let err = builder
+        .insert(
+            "nameless".to_string(),
+            Type::Struct(TypeStruct::new("", None, vec![], false)),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TypespaceError::EmptyTypeName { ref type_id } if type_id == "nameless"
     ));
 }
 

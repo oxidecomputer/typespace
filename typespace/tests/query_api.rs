@@ -74,24 +74,14 @@ fn make_typespace() -> typespace::Typespace<String> {
                 None,
                 EnumTagType::External,
                 vec![
-                    EnumVariant {
-                        rust_name: "Nothing".to_string(),
-                        rename: None,
-                        description: None,
-                        details: VariantDetails::Unit,
-                    },
-                    EnumVariant {
-                        rust_name: "Single".to_string(),
-                        rename: None,
-                        description: None,
-                        details: VariantDetails::Item(str_id.clone()),
-                    },
-                    EnumVariant {
-                        rust_name: "Pair".to_string(),
-                        rename: None,
-                        description: None,
-                        details: VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
-                    },
+                    EnumVariant::new("Nothing", None, None, VariantDetails::Unit),
+                    EnumVariant::new("Single", None, None, VariantDetails::Item(str_id.clone())),
+                    EnumVariant::new(
+                        "Pair",
+                        None,
+                        None,
+                        VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
+                    ),
                 ],
                 false,
             )),

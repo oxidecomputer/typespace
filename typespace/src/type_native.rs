@@ -16,6 +16,22 @@ pub struct TypeNative<Id> {
 }
 
 impl<Id> TypeNative<Id> {
+    /// Create a native type. `name` is the Rust type path emitted
+    /// verbatim into generated code; `impls` is the set of traits the
+    /// type is known to implement, consulted when trait requirements
+    /// propagate to it during finalization; `parameters` are the IDs of
+    /// its generic type parameters, if any.
+    pub fn new(name: impl ToString, impls: TypespaceTraitSet, parameters: Vec<Id>) -> Self {
+        Self {
+            name: name.to_string(),
+            impls,
+            parameters,
+        }
+    }
+
+    /// Create a native type that behaves like a string: it takes no type
+    /// parameters and implements the full complement of traits that
+    /// `String` does, including `Display` and `FromStr`.
     pub fn new_string_like(name: impl ToString) -> Self {
         Self {
             name: name.to_string(),

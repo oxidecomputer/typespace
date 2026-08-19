@@ -5,6 +5,7 @@ use crate::TypespaceTrait;
 /// Errors that arise from an invalid type graph provided to the
 /// [`TypespaceBuilder`](crate::TypespaceBuilder).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TypespaceError<Id>
 where
     Id: std::fmt::Debug + std::fmt::Display,
@@ -13,6 +14,16 @@ where
     #[error("a type with the id `{type_id}` has already been inserted")]
     DuplicateTypeId {
         /// The ID of the duplicate insertion.
+        type_id: Id,
+    },
+
+    /// A named type (struct, enum, newtype struct, unit struct, tuple
+    /// struct, or type alias) was inserted with an empty name. Names come
+    /// from the caller; rendering interpolates them into identifiers and
+    /// cannot tolerate an empty string.
+    #[error("the type with id `{type_id}` has an empty name")]
+    EmptyTypeName {
+        /// The ID of the type whose name is empty.
         type_id: Id,
     },
 

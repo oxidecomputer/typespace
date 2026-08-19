@@ -218,6 +218,7 @@ pub enum TypespaceSettingsOptionalNullable {
 /// Enumeration of traits for which Typify has particular awareness.
 /// XXX write more docs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum TypespaceTrait {
     Clone,
     Debug,
@@ -326,6 +327,7 @@ impl TypespaceTraitSet {
 
 /// Represents a type in the Typespace.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Type<Id> {
     Enum(TypeEnum<Id>),
     Struct(TypeStruct<Id>),
@@ -350,19 +352,41 @@ pub enum Type<Id> {
     JsonValue,
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
-    // fn get_common_mut(&mut self) -> Option<&mut TypeCommon> {
-    //     match self {
-    //         Type::Enum(TypeEnum { common, .. })
-    //         | Type::Struct(TypeStruct { common, .. })
-    //         | Type::UnitStruct(TypeUnitStruct { common, .. })
-    //         | Type::TupleStruct(TypeTupleStruct { common, .. })
-    //         | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-    //         | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
-    //         _ => None,
-    //     }
-    // }
+impl<Id> Type<Id> {
+    /// The metadata common to named types: the name, description, and
+    /// default value. Returns `Some` exactly when [`Type::is_named`]
+    /// returns `true` (structs, enums, unit structs, tuple structs,
+    /// newtype structs, and type aliases); `None` for built-in and
+    /// container types, which have no caller-assigned name.
+    pub fn common(&self) -> Option<&TypeCommon> {
+        match self {
+            Type::Enum(TypeEnum { common, .. })
+            | Type::Struct(TypeStruct { common, .. })
+            | Type::UnitStruct(TypeUnitStruct { common, .. })
+            | Type::TupleStruct(TypeTupleStruct { common, .. })
+            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
+            | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
+            _ => None,
+        }
+    }
 
+    /// Exclusive-reference form of [`Type::common`]: the metadata common
+    /// to named types, mutably. Returns `Some` for exactly the same
+    /// variants as `common`.
+    pub fn common_mut(&mut self) -> Option<&mut TypeCommon> {
+        match self {
+            Type::Enum(TypeEnum { common, .. })
+            | Type::Struct(TypeStruct { common, .. })
+            | Type::UnitStruct(TypeUnitStruct { common, .. })
+            | Type::TupleStruct(TypeTupleStruct { common, .. })
+            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
+            | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
+            _ => None,
+        }
+    }
+}
+
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     pub fn children(&self) -> Vec<Id> {
         match self {
             Type::Enum(type_enum) => type_enum.children(),
@@ -506,6 +530,14 @@ impl<Id> Default for TypespaceBuilder<Id> {
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id> {
     pub fn insert(&mut self, id: Id, typ: Type<Id>) -> Result<(), TypespaceError<Id>> {
+        // Rendering interpolates the name of every named type into an
+        // identifier; an empty name would panic there, so reject it here
+        // where we can name the offending ID.
+        if let Some(common) = typ.common() {
+            if common.name.is_empty() {
+                return Err(TypespaceError::EmptyTypeName { type_id: id });
+            }
+        }
         match self.types.entry(id) {
             Entry::Vacant(e) => {
                 e.insert(typ);
@@ -1063,16 +1095,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 /// Initialize `TypeCommonBuilt` for every named type before trait propagation.
 fn build_commons<Id: Clone>(types: &mut BTreeMap<Id, Type<Id>>) {
     for typ in types.values_mut() {
-        let common_opt = match typ {
-            Type::Enum(TypeEnum { common, .. })
-            | Type::Struct(TypeStruct { common, .. })
-            | Type::UnitStruct(TypeUnitStruct { common, .. })
-            | Type::TupleStruct(TypeTupleStruct { common, .. })
-            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
-            _ => None,
-        };
-        if let Some(common) = common_opt {
+        if let Some(common) = typ.common_mut() {
             common.built = Some(TypeCommonBuilt {
                 traits: TypespaceTraitSet::empty(),
             });

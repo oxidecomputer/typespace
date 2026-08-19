@@ -177,6 +177,7 @@ pub enum EnumTagType {
 // implementations for all enums (or maybe all types).
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub struct EnumVariant<Id> {
     pub rust_name: String,
     pub rename: Option<String>,
@@ -185,6 +186,26 @@ pub struct EnumVariant<Id> {
     pub description: Option<String>,
     pub details: VariantDetails<Id>,
 }
+
+impl<Id> EnumVariant<Id> {
+    /// Create an enum variant named `rust_name`, serialized as `rename`
+    /// when that differs from the Rust name, with an optional doc comment
+    /// and the given shape of associated data.
+    pub fn new(
+        rust_name: impl Into<String>,
+        rename: Option<String>,
+        description: Option<String>,
+        details: VariantDetails<Id>,
+    ) -> Self {
+        Self {
+            rust_name: rust_name.into(),
+            rename,
+            description,
+            details,
+        }
+    }
+}
+
 impl<Id: Clone> EnumVariant<Id> {
     fn children(&self) -> Vec<Id> {
         match &self.details {
