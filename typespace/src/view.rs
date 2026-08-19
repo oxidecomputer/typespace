@@ -1,39 +1,37 @@
 // Copyright 2026 Oxide Computer Company
 
+//! Query-side views of a finalized [`Typespace`].
+//!
+//! [`Typespace::get_type`] and [`Typespace::iter_types`] hand out
+//! [`Type`] values: borrowed views that answer questions about a type
+//! (its name, identifier tokens, structural details, trait impls)
+//! without exposing the underlying construction data. Names mirror the
+//! [`build`] module: [`build::EnumVariant`] is the construction form
+//! and [`EnumVariant`] the finalized-view form of the same concept.
+
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::{
-    StructPropertyState, Type, TypeEnum, TypeNewtypeStruct, TypeStruct, TypeTupleStruct,
-    TypeTypeAlias, TypeUnitStruct, Typespace, TypespaceRenderer, TypespaceTrait, VariantDetails,
-};
+use crate::{build, TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait};
 
-/// Identifies a trait implementation that typespace is aware of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TypeSpaceImpl {
-    Display,
-    FromStr,
-}
-
-/// A view of a type in a finalized [`Typespace`]. Mirrors `typify::Type<'_>`.
-pub struct TypeInfo<'a, Id> {
+/// A view of a type in a finalized [`Typespace`].
+pub struct Type<'a, Id> {
     pub(crate) typespace: &'a Typespace<Id>,
     pub(crate) id: &'a Id,
-    pub(crate) typ: &'a Type<Id>,
+    pub(crate) typ: &'a build::Type<Id>,
 }
 
-impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id> {
+impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// The name of this type, or its rendered token representation for unnamed
     /// types.
     pub fn name(&self) -> String {
         match self.typ {
-            Type::Enum(e) => e.common.name.clone(),
-            Type::Struct(s) => s.common.name.clone(),
-            Type::UnitStruct(u) => u.common.name.clone(),
-            Type::TupleStruct(t) => t.common.name.clone(),
-            Type::NewtypeStruct(n) => n.common.name.clone(),
-            Type::TypeAlias(a) => a.common.name.clone(),
+            build::Type::Enum(e) => e.common.name.clone(),
+            build::Type::Struct(s) => s.common.name.clone(),
+            build::Type::UnitStruct(u) => u.common.name.clone(),
+            build::Type::TupleStruct(t) => t.common.name.clone(),
+            build::Type::NewtypeStruct(n) => n.common.name.clone(),
+            build::Type::TypeAlias(a) => a.common.name.clone(),
             _ => self.ident().to_string(),
         }
     }
@@ -76,24 +74,24 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id>
     fn is_simple(&self) -> bool {
         matches!(
             self.typ,
-            Type::Boolean
-                | Type::Integer(_)
-                | Type::Float(_)
-                | Type::Unit
-                | Type::String
-                | Type::Option(_)
+            build::Type::Boolean
+                | build::Type::Integer(_)
+                | build::Type::Float(_)
+                | build::Type::Unit
+                | build::Type::String
+                | build::Type::Option(_)
         )
     }
 
     /// The description (doc comment source) for this type, if any.
     pub fn description(&self) -> Option<&str> {
         let common = match self.typ {
-            Type::Enum(e) => &e.common,
-            Type::Struct(s) => &s.common,
-            Type::UnitStruct(u) => &u.common,
-            Type::TupleStruct(t) => &t.common,
-            Type::NewtypeStruct(n) => &n.common,
-            Type::TypeAlias(a) => &a.common,
+            build::Type::Enum(e) => &e.common,
+            build::Type::Struct(s) => &s.common,
+            build::Type::UnitStruct(u) => &u.common,
+            build::Type::TupleStruct(t) => &t.common,
+            build::Type::NewtypeStruct(n) => &n.common,
+            build::Type::TypeAlias(a) => &a.common,
             _ => return None,
         };
         common.description.as_deref()
@@ -102,38 +100,38 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id>
     /// Structural details of this type.
     pub fn details(&self) -> TypeDetails<'a, Id> {
         match self.typ {
-            Type::Enum(e) => TypeDetails::Enum(TypeEnumInfo { inner: e }),
-            Type::Struct(s) => TypeDetails::Struct(TypeStructInfo { inner: s }),
-            Type::NewtypeStruct(n) => TypeDetails::Newtype(TypeNewtypeInfo { inner: n }),
+            build::Type::Enum(e) => TypeDetails::Enum(Enum { inner: e }),
+            build::Type::Struct(s) => TypeDetails::Struct(Struct { inner: s }),
+            build::Type::NewtypeStruct(n) => TypeDetails::Newtype(NewtypeStruct { inner: n }),
 
-            Type::Option(id) => TypeDetails::Option(id.clone()),
-            Type::Vec(id) => TypeDetails::Vec(id.clone()),
-            Type::Map(k, v) => TypeDetails::Map(k.clone(), v.clone()),
-            Type::Set(id) => TypeDetails::Set(id.clone()),
-            Type::Box(id) => TypeDetails::Box(id.clone()),
-            Type::Array(id, n) => TypeDetails::Array(id.clone(), *n),
-            Type::Tuple(ids) => TypeDetails::Tuple(Box::new(ids.clone().into_iter())),
+            build::Type::Option(id) => TypeDetails::Option(id.clone()),
+            build::Type::Vec(id) => TypeDetails::Vec(id.clone()),
+            build::Type::Map(k, v) => TypeDetails::Map(k.clone(), v.clone()),
+            build::Type::Set(id) => TypeDetails::Set(id.clone()),
+            build::Type::Box(id) => TypeDetails::Box(id.clone()),
+            build::Type::Array(id, n) => TypeDetails::Array(id.clone(), *n),
+            build::Type::Tuple(ids) => TypeDetails::Tuple(Box::new(ids.clone().into_iter())),
 
-            Type::Unit => TypeDetails::Unit,
-            Type::String => TypeDetails::String,
-            Type::Boolean => TypeDetails::Builtin("bool"),
-            Type::Integer(s) => TypeDetails::Builtin(s.as_str()),
-            Type::Float(s) => TypeDetails::Builtin(s.as_str()),
-            Type::JsonValue => TypeDetails::Builtin("::serde_json::Value"),
-            Type::Native(n) => TypeDetails::Builtin(n.name.as_str()),
+            build::Type::Unit => TypeDetails::Unit,
+            build::Type::String => TypeDetails::String,
+            build::Type::Boolean => TypeDetails::Builtin("bool"),
+            build::Type::Integer(s) => TypeDetails::Builtin(s.as_str()),
+            build::Type::Float(s) => TypeDetails::Builtin(s.as_str()),
+            build::Type::JsonValue => TypeDetails::Builtin("::serde_json::Value"),
+            build::Type::Native(n) => TypeDetails::Builtin(n.name.as_str()),
 
             // Treat these less-common named types as opaque to callers.
-            Type::UnitStruct(_) | Type::TupleStruct(_) | Type::TypeAlias(_) => {
-                TypeDetails::Builtin(self.name_str())
-            }
+            build::Type::UnitStruct(_)
+            | build::Type::TupleStruct(_)
+            | build::Type::TypeAlias(_) => TypeDetails::Builtin(self.name_str()),
         }
     }
 
     fn name_str(&self) -> &'a str {
         match self.typ {
-            Type::UnitStruct(TypeUnitStruct { common, .. })
-            | Type::TupleStruct(TypeTupleStruct { common, .. }) => common.name.as_str(),
-            Type::TypeAlias(TypeTypeAlias { common, .. }) => common.name.as_str(),
+            build::Type::UnitStruct(build::UnitStruct { common, .. })
+            | build::Type::TupleStruct(build::TupleStruct { common, .. }) => common.name.as_str(),
+            build::Type::TypeAlias(build::TypeAlias { common, .. }) => common.name.as_str(),
             _ => "",
         }
     }
@@ -145,18 +143,18 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id>
             TypeSpaceImpl::FromStr => TypespaceTrait::FromStr,
         };
         match self.typ {
-            Type::Native(n) => n.impls.contains(&trait_),
-            Type::Enum(e) => e
+            build::Type::Native(n) => n.impls.contains(&trait_),
+            build::Type::Enum(e) => e
                 .common
                 .built
                 .as_ref()
                 .is_some_and(|b| b.traits.contains(&trait_)),
-            Type::Struct(s) => s
+            build::Type::Struct(s) => s
                 .common
                 .built
                 .as_ref()
                 .is_some_and(|b| b.traits.contains(&trait_)),
-            Type::NewtypeStruct(n) => n
+            build::Type::NewtypeStruct(n) => n
                 .common
                 .built
                 .as_ref()
@@ -166,12 +164,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeInfo<'a, Id>
     }
 }
 
-/// Structural details of a type. Mirrors `typify::TypeDetails<'_>`.
+/// Structural details of a type, as reported by [`Type::details`].
 #[non_exhaustive]
 pub enum TypeDetails<'a, Id> {
-    Enum(TypeEnumInfo<'a, Id>),
-    Struct(TypeStructInfo<'a, Id>),
-    Newtype(TypeNewtypeInfo<'a, Id>),
+    Enum(Enum<'a, Id>),
+    Struct(Struct<'a, Id>),
+    Newtype(NewtypeStruct<'a, Id>),
     Option(Id),
     Vec(Id),
     Map(Id, Id),
@@ -187,11 +185,11 @@ pub enum TypeDetails<'a, Id> {
 // -- Struct view --------------------------------------------------------------
 
 /// A view of a struct type's properties.
-pub struct TypeStructInfo<'a, Id> {
-    inner: &'a TypeStruct<Id>,
+pub struct Struct<'a, Id> {
+    inner: &'a build::Struct<Id>,
 }
 
-impl<'a, Id: Clone> TypeStructInfo<'a, Id> {
+impl<'a, Id: Clone> Struct<'a, Id> {
     /// Iterate over `(property_name, type_id)` pairs.
     pub fn properties(&'a self) -> impl Iterator<Item = (String, Id)> + 'a {
         self.inner
@@ -201,18 +199,18 @@ impl<'a, Id: Clone> TypeStructInfo<'a, Id> {
     }
 
     /// Iterate over full property information.
-    pub fn properties_info(&'a self) -> impl Iterator<Item = TypeStructPropInfo<'a, Id>> {
-        self.inner.properties.iter().map(|p| TypeStructPropInfo {
+    pub fn properties_info(&'a self) -> impl Iterator<Item = StructProperty<'a, Id>> {
+        self.inner.properties.iter().map(|p| StructProperty {
             name: p.rust_name.to_string(),
             description: p.description.as_deref(),
-            required: matches!(p.state, StructPropertyState::Required),
+            required: matches!(p.state, build::StructPropertyState::Required),
             type_id: p.type_id.clone(),
         })
     }
 }
 
 /// Information about a single struct property.
-pub struct TypeStructPropInfo<'a, Id> {
+pub struct StructProperty<'a, Id> {
     /// The Rust field name as a string.
     pub name: String,
     /// The description (doc comment source) for the property, if any.
@@ -226,13 +224,13 @@ pub struct TypeStructPropInfo<'a, Id> {
 // -- Enum view -----------------------------------------------------------------
 
 /// A view of an enum type's variants.
-pub struct TypeEnumInfo<'a, Id> {
-    inner: &'a TypeEnum<Id>,
+pub struct Enum<'a, Id> {
+    inner: &'a build::Enum<Id>,
 }
 
-impl<'a, Id: Clone> TypeEnumInfo<'a, Id> {
+impl<'a, Id: Clone> Enum<'a, Id> {
     /// Iterate over `(variant_name, variant_details)` pairs.
-    pub fn variants(&'a self) -> impl Iterator<Item = (&'a str, TypeEnumVariant<Id>)> {
+    pub fn variants(&'a self) -> impl Iterator<Item = (&'a str, VariantDetails<Id>)> {
         self.inner
             .variants
             .iter()
@@ -240,8 +238,8 @@ impl<'a, Id: Clone> TypeEnumInfo<'a, Id> {
     }
 
     /// Iterate over full variant information.
-    pub fn variants_info(&'a self) -> impl Iterator<Item = TypeEnumVariantInfo<'a, Id>> {
-        self.inner.variants.iter().map(|v| TypeEnumVariantInfo {
+    pub fn variants_info(&'a self) -> impl Iterator<Item = EnumVariant<'a, Id>> {
+        self.inner.variants.iter().map(|v| EnumVariant {
             name: v.rust_name.as_str(),
             description: v.description.as_deref(),
             details: variant_details_to_info(&v.details),
@@ -249,12 +247,12 @@ impl<'a, Id: Clone> TypeEnumInfo<'a, Id> {
     }
 }
 
-fn variant_details_to_info<Id: Clone>(details: &VariantDetails<Id>) -> TypeEnumVariant<Id> {
+fn variant_details_to_info<Id: Clone>(details: &build::VariantDetails<Id>) -> VariantDetails<Id> {
     match details {
-        VariantDetails::Unit => TypeEnumVariant::Simple,
-        VariantDetails::Item(id) => TypeEnumVariant::Tuple(vec![id.clone()]),
-        VariantDetails::Tuple(ids) => TypeEnumVariant::Tuple(ids.clone()),
-        VariantDetails::Struct(props) => TypeEnumVariant::Struct(
+        build::VariantDetails::Unit => VariantDetails::Simple,
+        build::VariantDetails::Item(id) => VariantDetails::Tuple(vec![id.clone()]),
+        build::VariantDetails::Tuple(ids) => VariantDetails::Tuple(ids.clone()),
+        build::VariantDetails::Struct(props) => VariantDetails::Struct(
             props
                 .iter()
                 .map(|p| (p.rust_name.to_string(), p.type_id.clone()))
@@ -264,18 +262,18 @@ fn variant_details_to_info<Id: Clone>(details: &VariantDetails<Id>) -> TypeEnumV
 }
 
 /// Full information about a single enum variant.
-pub struct TypeEnumVariantInfo<'a, Id> {
+pub struct EnumVariant<'a, Id> {
     /// The Rust name of the variant.
     pub name: &'a str,
     /// The description (doc comment source) for the variant, if any.
     pub description: Option<&'a str>,
     /// The shape of the variant's associated data.
-    pub details: TypeEnumVariant<Id>,
+    pub details: VariantDetails<Id>,
 }
 
 /// The shape of an enum variant's associated data.
 #[non_exhaustive]
-pub enum TypeEnumVariant<Id> {
+pub enum VariantDetails<Id> {
     /// A unit variant with no associated data.
     Simple,
     /// A variant with one or more unnamed values of the given types.
@@ -287,11 +285,11 @@ pub enum TypeEnumVariant<Id> {
 // -- Newtype view --------------------------------------------------------------
 
 /// A view of a newtype struct's inner type.
-pub struct TypeNewtypeInfo<'a, Id> {
-    inner: &'a TypeNewtypeStruct<Id>,
+pub struct NewtypeStruct<'a, Id> {
+    inner: &'a build::NewtypeStruct<Id>,
 }
 
-impl<'a, Id: Clone> TypeNewtypeInfo<'a, Id> {
+impl<'a, Id: Clone> NewtypeStruct<'a, Id> {
     /// The inner type wrapped by this newtype.
     pub fn inner(&self) -> Id {
         self.inner.inner.clone()

@@ -4,16 +4,17 @@ use log::debug;
 use quote::{format_ident, quote};
 use syn::Ident;
 
-use crate::{JsonValue, TypeCommon, TypeCommonBuilt, TypespaceRenderer};
+use crate::build::{JsonValue, TypeCommon, TypeCommonBuilt};
+use crate::TypespaceRenderer;
 
 #[derive(Debug, Clone)]
-pub struct TypeStruct<Id> {
+pub struct Struct<Id> {
     pub common: TypeCommon,
     pub properties: Vec<StructProperty<Id>>,
     pub deny_unknown_fields: bool,
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeStruct<Id> {
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
@@ -129,12 +130,12 @@ pub enum StructPropertyState {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeUnitStruct {
+pub struct UnitStruct {
     pub common: TypeCommon,
 
     pub repr: serde_json::Value,
 }
-impl TypeUnitStruct {
+impl UnitStruct {
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
@@ -203,7 +204,7 @@ impl TypeUnitStruct {
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeTupleStruct<Id> {
+pub struct TupleStruct<Id> {
     pub common: TypeCommon,
     /// Fields of the tuple.
     pub fields: Vec<Id>,
@@ -212,7 +213,7 @@ pub struct TypeTupleStruct<Id> {
     /// items beyond those in `fields`.
     pub rest: Option<Id>,
 }
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeTupleStruct<Id> {
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
@@ -370,14 +371,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeTupleStruct<Id> 
 }
 
 #[derive(Debug, Clone)]
-pub struct TypeNewtypeStruct<Id> {
+pub struct NewtypeStruct<Id> {
     pub common: TypeCommon,
-    // pub name: NameBuilder,
-    // pub description: Option<String>,
-    // pub default: Option<JsonValue>,
     pub inner: Id,
-    pub constraints: TypeNewtypeConstraints,
-    // pub(crate) built: Option<TypeStructBuilt>,
+    pub constraints: NewtypeConstraints,
 }
 
 // TODO 3/7/2026
@@ -386,7 +383,7 @@ pub struct TypeNewtypeStruct<Id> {
 // shove it into the existing newtype representation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum TypeNewtypeConstraints {
+pub enum NewtypeConstraints {
     None,
     String {
         min: Option<usize>,
@@ -411,13 +408,13 @@ pub enum TypeNewtypeConstraints {
     },
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeNewtypeStruct<Id> {
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,
         default: Option<JsonValue>,
         inner: Id,
-        constraints: TypeNewtypeConstraints,
+        constraints: NewtypeConstraints,
     ) -> Self {
         Self {
             common: TypeCommon {

@@ -32,9 +32,13 @@ a `BTreeMap` key must be `Ord`).
 ```rust
 use quote::format_ident;
 use typespace::{
-    no_cycles, StructProperty, StructPropertySerde,
-    StructPropertyState, Type, TypeStruct, TypespaceBuilder,
-    TypespaceSettings,
+    build::{
+        Struct, StructProperty, StructPropertySerde,
+        StructPropertyState, Type,
+    },
+    no_cycles,
+    settings::Settings,
+    TypespaceBuilder,
 };
 
 let mut builder = TypespaceBuilder::default();
@@ -42,7 +46,7 @@ builder.insert("string".to_string(), Type::String).unwrap();
 builder
     .insert(
         "Thing".to_string(),
-        Type::Struct(TypeStruct::new(
+        Type::Struct(Struct::new(
             "Thing",
             Some("A named thing.".to_string()),
             vec![StructProperty::new(
@@ -58,7 +62,7 @@ builder
     .unwrap();
 
 let ts = builder
-    .finalize(TypespaceSettings::default(), no_cycles)
+    .finalize(Settings::default(), no_cycles)
     .unwrap();
 let tokens = ts.to_codespace().into_stream();
 ```
@@ -85,7 +89,7 @@ includes runtime dependencies on crates; the crate docs section "Dependencies
 of generated code" gives the exact conditions.
 
 Finalized types can also be inspected without rendering: `get_type` and
-`iter_types` return `TypeInfo` views exposing names, identifiers,
+`iter_types` return `view::Type` views exposing names, identifiers,
 structural details, and trait impls. This allows additional code generation
 to properly interact with these generated types.
 
@@ -107,7 +111,7 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 
 - Trait/derive configurability: `#[derive(...)]` sets are hardcoded in
   most render methods today. `TypespaceTrait` and `TypespaceTraitSet`
-  exist and should be wired into `TypespaceSettings` so callers control
+  exist and should be wired into `settings::Settings` so callers control
   both the traits *required* of generated types (driving propagation at
   finalize time) and the traits *emitted* (at render time); how those
   two axes relate is deliberately unresolved. Until then the trait-set
@@ -115,11 +119,11 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 - `push_traits` is incomplete: trait requirements that route through
   `UnitStruct`, `TupleStruct`, or `TypeAlias`, or `Display`/`FromStr`
   requirements on container types, hit `todo!()`.
-- Newtype constraints: `TypeNewtypeConstraints` is accepted but not yet
+- Newtype constraints: `build::NewtypeConstraints` is accepted but not yet
   rendered; constraints should be enforced at deserialization.
 - Concrete map/set types: `Type::Map` always renders as `BTreeMap` and
-  `Type::Set` as `Vec`; both should be `TypespaceSettings` fields.
-- `TypeCommon::default` is never rendered; it should drive a generated
+  `Type::Set` as `Vec`; both should be `settings::Settings` fields.
+- `build::TypeCommon::default` is never rendered; it should drive a generated
   `Default` impl.
 - Type-to-module layout as a settings axis with multiple strategies
   (everything in one mod; custom impls routed to submods such as a

@@ -2,6 +2,13 @@
 
 //! Semantic model of Rust types for code generation.
 //!
+//! The crate is organized around the type lifecycle: consumers assemble
+//! types from the [`build`] module's vocabulary, insert them into a
+//! [`TypespaceBuilder`], and call [`TypespaceBuilder::finalize`] with
+//! [`settings::Settings`] to produce a [`Typespace`]. A finalized
+//! typespace renders code via [`Typespace::to_codespace`] and answers
+//! queries through the [`view`] module's types.
+//!
 //! # Dependencies of generated code
 //!
 //! Rendered code can reference crates that typespace itself does not
@@ -15,62 +22,55 @@
 //!   derives or hand-written `Serialize`/`Deserialize` impls. Only
 //!   output consisting solely of type aliases avoids it.
 //! - [serde_json](https://crates.io/crates/serde_json): required if
-//!   the output contains a [`Type::JsonValue`] (rendered as
+//!   the output contains a [`build::Type::JsonValue`] (rendered as
 //!   `::serde_json::Value`), a property with
-//!   [`StructPropertyState::DefaultValue`] (the generated default
+//!   [`build::StructPropertyState::DefaultValue`] (the generated default
 //!   function calls `::serde_json::from_value`), or a
-//!   [`TypeUnitStruct`] (its `Deserialize` impl compares input against
-//!   the fixed JSON representation).
+//!   [`build::UnitStruct`] (its `Deserialize` impl compares input
+//!   against the fixed JSON representation).
 //! - [json-serde](https://crates.io/crates/json-serde): required if
 //!   the output contains any of:
-//!   - a property with [`StructPropertyState::Optional`] whose type is
-//!     not an `Option` (deserialized with
+//!   - a property with [`build::StructPropertyState::Optional`] whose
+//!     type is not an `Option` (deserialized with
 //!     `::json_serde::deserialize_some`, which distinguishes an absent
 //!     field from a present one and rejects `null`);
-//!   - a property with [`StructPropertyState::Optional`] whose type is
-//!     an `Option`, when
-//!     [`TypespaceSettingsOptionalNullable::DoubleOption`] is selected
+//!   - a property with [`build::StructPropertyState::Optional`] whose
+//!     type is an `Option`, when
+//!     [`settings::OptionalNullable::DoubleOption`] is selected
 //!     (also `::json_serde::deserialize_some`);
-//!   - a [`TypeTupleStruct`] with a `rest` field (its serde impls use
+//!   - a [`build::TupleStruct`] with a `rest` field (its serde impls use
 //!     `::json_serde::FlattenedSequenceSerializer` and
 //!     `::json_serde::FlattenedSequenceDeserializer`).
 //!
 //! Generated code also reproduces, verbatim, every type path the
-//! consumer supplies: the `name` of a [`TypeNative`] (a converter
+//! consumer supplies: the `name` of a [`build::Native`] (a converter
 //! might inject `uuid::Uuid` or `chrono` types for string formats or
 //! `x-rust-type` extensions, as typify does) and the wrapper named by
-//! [`TypespaceSettingsOptionalNullable::CustomType`]. The crates
+//! [`settings::OptionalNullable::CustomType`]. The crates
 //! behind those paths are dependencies chosen by the consumer that
 //! builds the typespace, not by typespace, and the consumer should
 //! document them the way typify documents `uuid`, `chrono`, and
 //! `regress`. typespace itself emits no reference to `regress` today;
 //! that changes when constraint validation rendering lands.
 
+pub mod build;
 mod error;
-mod type_alias;
-mod type_common;
-mod type_enum;
-mod type_info;
-mod type_native;
-mod type_struct;
+pub mod settings;
 pub(crate) mod value_tokens;
+pub mod view;
 
 pub use error::TypespaceError;
-pub use type_alias::*;
-pub use type_common::*;
-pub use type_enum::*;
-pub use type_info::{
-    TypeDetails, TypeEnumInfo, TypeEnumVariant, TypeEnumVariantInfo, TypeInfo, TypeNewtypeInfo,
-    TypeSpaceImpl, TypeStructInfo, TypeStructPropInfo,
-};
-pub use type_native::*;
-pub use type_struct::*;
 
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque};
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
-use serde::Deserialize;
+
+use crate::build::{
+    Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
+    StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct,
+};
+use crate::settings::{OptionalNullable, Settings, Std};
 
 // 6/25/2025
 // I think I need a builder form e.g. of an enum or struct and then the
@@ -102,111 +102,6 @@ use serde::Deserialize;
 //   situations where we need to know a little about types before finalization.
 //   Something else to consider.
 
-// TODO 7/18/2025
-// I wanted to get this started to think through various settings that we might
-// eventually want...
-/// Modify how types are processed and generated.
-///
-/// Settings are supplied to [`TypespaceBuilder::finalize`] and govern
-/// rendering. Start from [`TypespaceSettings::default`] and adjust with
-/// the `with_` methods; the type also implements `Deserialize` so
-/// settings can come from configuration data. Two axes exist today: how
-/// `std` prelude types are spelled ([`TypespaceSettingsStd`]) and how
-/// optional-and-nullable values are modeled
-/// ([`TypespaceSettingsOptionalNullable`]).
-#[derive(Debug, Default, Deserialize)]
-pub struct TypespaceSettings {
-    /// When set to `FullyQualified`, (the default), types in the `std` crate's
-    /// prelude are fully qualified. For example, the `Option` type is rendered
-    /// as `::std::option::Option`. When set to `Unqualified`, these types
-    /// appear in their more typical, auto-imported form. The latter is useful
-    /// if one intends to use type generation as a starting point for
-    /// manually-edited code. Note that this is relevant only to types in the
-    /// `std` crate's prelude such as `Option`, `Vec`, and `String`; types such
-    /// as `std::collections::BTreeMap` are always fully qualified since they
-    /// are not in the prelude.
-    #[serde(default)]
-    std: TypespaceSettingsStd,
-
-    /// Specify the modeling of values that may be either `null` or optional
-    /// (i.e. absent). The default is `ConflateAsAbsent`, which models `null`
-    /// and `optional` as equivalent by using the `std::option::Option<T>` type
-    /// and skipping serialization of `None` values. While imprecise, this is
-    /// typical of Rust code.
-    #[serde(default)]
-    optional_nullable: TypespaceSettingsOptionalNullable,
-    // map_type: Option<()>,
-    // set_type: Option<()>,
-}
-
-impl TypespaceSettings {
-    /// Set how types from the `std` prelude are spelled in generated
-    /// code; see [`TypespaceSettingsStd`]. The default is
-    /// [`TypespaceSettingsStd::FullyQualified`].
-    pub fn with_std(mut self, std: TypespaceSettingsStd) -> Self {
-        self.std = std;
-        self
-    }
-
-    /// Set how values that may be either `null` or absent are modeled;
-    /// see [`TypespaceSettingsOptionalNullable`]. The default is
-    /// [`TypespaceSettingsOptionalNullable::ConflateAsAbsent`].
-    pub fn with_optional_nullable(
-        mut self,
-        optional_nullable: TypespaceSettingsOptionalNullable,
-    ) -> Self {
-        self.optional_nullable = optional_nullable;
-        self
-    }
-}
-
-/// Specify how types in the `std` crate's prelude are spelled in
-/// generated code. Types outside the prelude, such as
-/// `std::collections::BTreeMap`, are always fully qualified.
-#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TypespaceSettingsStd {
-    /// Fully qualify prelude types: `Option` renders as
-    /// `::std::option::Option`. This is the default.
-    #[default]
-    FullyQualified,
-    /// Render prelude types in their typical, auto-imported form. Useful
-    /// if generated code is a starting point for manually-edited code.
-    Unqualified,
-}
-
-/// Specify the modeling of values that may be either 'null' or 'optional'
-/// (i.e. absent).
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TypespaceSettingsOptionalNullable {
-    /// Model `null` and `optional` as equivalent by using the
-    /// `std::option::Option<T>` type. Skip serialization of `None` values.
-    /// This is the default.
-    #[default]
-    ConflateAsAbsent,
-
-    /// Model `null` and `optional` as equivalent by using the
-    /// `std::option::Option<T>` type. `None` values are serialized as `null`.
-    ConflateAsNull,
-
-    /// Use a "double `Option`" of the form
-    /// `std::option::Option<std::option::Option<T>>`. A `None` indicates that
-    /// the value is absent; `Some(None)` indicates that the value is present
-    /// and null; and `Some(Some(_))` indicates that the value is present
-    /// and non-null.
-    DoubleOption,
-
-    /// Use a custom type `Opt` where `Opt: std::default::Default +
-    /// serde::Deserialize + serde::Serialize`. The `Default` implementation
-    /// specifies the value for a field when absent; the `Deserialize`
-    /// implementation produces a value otherwise (null or a non-null value of
-    /// T). In addition, `Opt` must implement `is_absent(&self) -> bool` which
-    /// is used with the serde `skip_serializing_if` attribute to omit the
-    /// field.
-    CustomType(String),
-}
-
 /// A trait that typespace tracks for generated and native types.
 ///
 /// Uses of a type impose trait requirements that
@@ -214,9 +109,9 @@ pub enum TypespaceSettingsOptionalNullable {
 /// used as a map key must implement `Eq`, `PartialEq`, `Ord`, and
 /// `PartialOrd`, and so must every type it contains. Generated types
 /// absorb propagated requirements and emit the corresponding derives;
-/// a [`TypeNative`] type must already declare the required traits among
-/// its `impls`. A requirement that a type cannot satisfy--`Ord` on a
-/// float, say--is a [`TypespaceError`].
+/// a [`build::Native`] type must already declare the required traits
+/// among its `impls`. A requirement that a type cannot satisfy--`Ord`
+/// on a float, say--is a [`TypespaceError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum TypespaceTrait {
@@ -235,8 +130,8 @@ pub enum TypespaceTrait {
 }
 
 impl TypespaceTrait {
-    pub(crate) fn render(&self, settings: &TypespaceSettings) -> proc_macro2::TokenStream {
-        if settings.std == TypespaceSettingsStd::FullyQualified {
+    pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
+        if settings.std == Std::FullyQualified {
             match self {
                 TypespaceTrait::Clone => quote! { ::std::clone::Clone },
                 TypespaceTrait::Debug => quote! { ::std::fmt::Debug },
@@ -271,9 +166,9 @@ impl TypespaceTrait {
 }
 
 /// An unordered collection of [`TypespaceTrait`] values, such as the
-/// traits a [`TypeNative`] type declares that it implements. Build one
-/// with [`TypespaceTraitSet::empty`] and [`TypespaceTraitSet::add`], or
-/// collect from an iterator of traits.
+/// traits a [`build::Native`] type declares that it implements. Build
+/// one with [`TypespaceTraitSet::empty`] and [`TypespaceTraitSet::add`],
+/// or collect from an iterator of traits.
 #[derive(Debug, Clone)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 
@@ -318,219 +213,12 @@ impl TypespaceTraitSet {
     }
 }
 
-// 9.15.2025
-// Little bit of a random thought: "Native" is actually kind of a catch-all for
-// which things like boolean, integer, unit, etc. could apply. I think we'll
-// eventually want more of a builder interface to construct types and and then
-// a finished interface to inspect them. I could imagine--for example--
-// "native" being used for any non-constructed type (so anything except for
-// generated structs, generated enums, and compound types such as tuples and
-// arrays). Could these also have type parameters and therefore be inclusive of
-// maps and vecs? Maybe? Something to noodle on as we think about Typespace as
-// an interface.
-
-/// Represents a type in the Typespace.
-///
-/// A type refers to other types by ID, never by containment; every ID
-/// used here must have its own entry in the [`TypespaceBuilder`]. Named
-/// types (see [`Type::is_named`]) render as items; the remaining
-/// variants are built-in and container types that appear where other
-/// types reference them.
-#[derive(Debug, Clone)]
+/// Identifies a trait implementation that typespace is aware of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Type<Id> {
-    Enum(TypeEnum<Id>),
-    Struct(TypeStruct<Id>),
-    UnitStruct(TypeUnitStruct),
-    TupleStruct(TypeTupleStruct<Id>),
-    NewtypeStruct(TypeNewtypeStruct<Id>),
-    TypeAlias(TypeTypeAlias<Id>),
-
-    Native(TypeNative<Id>),
-    Option(Id),
-    Box(Id),
-    Vec(Id),
-    Map(Id, Id),
-    Set(Id),
-    Array(Id, usize),
-    Tuple(Vec<Id>),
-    Unit,
-    Boolean,
-    Integer(String),
-    Float(String),
-    String,
-    JsonValue,
-}
-
-impl<Id> Type<Id> {
-    /// The metadata common to named types: the name, description, and
-    /// default value. Returns `Some` exactly when [`Type::is_named`]
-    /// returns `true` (structs, enums, unit structs, tuple structs,
-    /// newtype structs, and type aliases); `None` for built-in and
-    /// container types, which have no caller-assigned name.
-    pub fn common(&self) -> Option<&TypeCommon> {
-        match self {
-            Type::Enum(TypeEnum { common, .. })
-            | Type::Struct(TypeStruct { common, .. })
-            | Type::UnitStruct(TypeUnitStruct { common, .. })
-            | Type::TupleStruct(TypeTupleStruct { common, .. })
-            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
-            _ => None,
-        }
-    }
-
-    /// Exclusive-reference form of [`Type::common`]: the metadata common
-    /// to named types, mutably. Returns `Some` for exactly the same
-    /// variants as `common`.
-    pub fn common_mut(&mut self) -> Option<&mut TypeCommon> {
-        match self {
-            Type::Enum(TypeEnum { common, .. })
-            | Type::Struct(TypeStruct { common, .. })
-            | Type::UnitStruct(TypeUnitStruct { common, .. })
-            | Type::TupleStruct(TypeTupleStruct { common, .. })
-            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeTypeAlias { common, .. }) => Some(common),
-            _ => None,
-        }
-    }
-}
-
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
-    /// The IDs of every type this type refers to directly. Each such ID
-    /// must have a corresponding type inserted into the
-    /// [`TypespaceBuilder`] for finalization to succeed.
-    pub fn children(&self) -> Vec<Id> {
-        match self {
-            Type::Enum(type_enum) => type_enum.children(),
-            Type::Struct(type_struct) => type_struct.children(),
-            Type::UnitStruct(_) => Vec::new(),
-            Type::TupleStruct(type_tuple_struct) => type_tuple_struct.children(),
-            Type::NewtypeStruct(type_newtype_struct) => type_newtype_struct.children(),
-            Type::TypeAlias(alias_info) => alias_info.children(),
-
-            Type::Boolean => Vec::new(),
-            Type::String => Vec::new(),
-            Type::Native(_) => Vec::new(),
-
-            Type::Option(id)
-            | Type::Box(id)
-            | Type::Vec(id)
-            | Type::Set(id)
-            | Type::Array(id, _) => vec![id.clone()],
-
-            Type::Map(key_id, value_id) => vec![key_id.clone(), value_id.clone()],
-            Type::Tuple(items) => items.clone(),
-
-            Type::Unit => Vec::new(),
-            Type::Integer(_) => Vec::new(),
-            Type::Float(_) => Vec::new(),
-            Type::JsonValue => Vec::new(),
-        }
-    }
-
-    /// Children that this type "contains" (i.e. cycle-breaking candidates).
-    pub fn contained_children(&self) -> Vec<Id> {
-        match self {
-            Type::TupleStruct(TypeTupleStruct { fields, .. }) => fields.clone(),
-            Type::NewtypeStruct(TypeNewtypeStruct { inner, .. }) => vec![inner.clone()],
-            Type::Option(id) | Type::Vec(id) | Type::Set(id) | Type::Array(id, _) => {
-                vec![id.clone()]
-            }
-            Type::Map(k, v) => vec![k.clone(), v.clone()],
-            Type::Tuple(ids) => ids.clone(),
-            Type::Struct(s) => s.properties.iter().map(|p| p.type_id.clone()).collect(),
-            Type::Enum(e) => e
-                .variants
-                .iter()
-                .flat_map(|v| v.contained_children())
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    /// Return the list of child types that are contained (i.e. contributed to
-    /// the size of this type). This is used to consider containment cycles.
-    pub fn contained_children_mut(&mut self) -> Vec<&mut Id> {
-        match self {
-            Type::Enum(TypeEnum { variants, .. }) => {
-                let mut out = Vec::new();
-                for variant in variants {
-                    match &mut variant.details {
-                        VariantDetails::Unit => {}
-                        VariantDetails::Item(schema_ref) => {
-                            out.push(schema_ref);
-                        }
-                        VariantDetails::Tuple(schema_refs) => {
-                            out.extend(schema_refs);
-                        }
-                        VariantDetails::Struct(props) => {
-                            for StructProperty { type_id, .. } in props {
-                                out.push(type_id);
-                            }
-                        }
-                    }
-                }
-                out
-            }
-            Type::Struct(TypeStruct { properties, .. }) => properties
-                .iter_mut()
-                .map(|prop| &mut prop.type_id)
-                .collect(),
-
-            Type::UnitStruct(_) => vec![],
-            Type::TupleStruct(type_tuple_struct) => type_tuple_struct.contained_children_mut(),
-            Type::NewtypeStruct(type_newtype_struct) => {
-                type_newtype_struct.contained_children_mut()
-            }
-
-            // 2/4/2026
-            // This is an interesting case. Let's say I have something like
-            // this:
-            // struct Foo{ foo: OptionString }
-            // where OptionString is a type alias for Option<String>.
-            // I guess we just want to return the target type... but we'll want
-            // to make sure that doesn't turn this into an alias to a Box...
-            // somehow?
-            Type::TypeAlias(alias_info) => {
-                vec![&mut alias_info.target]
-            }
-
-            Type::Option(id) => vec![id],
-            Type::Array(id, _) => vec![id],
-            Type::Tuple(items) => items.iter_mut().collect(),
-
-            // TODO maybe native types could have children? Right now these are
-            // just for self-contained types...
-            Type::Native(_) => Default::default(),
-            Type::Box(_)
-            | Type::Vec(_)
-            | Type::Map(_, _)
-            | Type::Set(_)
-            | Type::Unit
-            | Type::Boolean
-            | Type::Integer(_)
-            | Type::Float(_)
-            | Type::String
-            | Type::JsonValue => Default::default(),
-        }
-    }
-
-    /// Whether this is a named type--one that renders as its own item
-    /// (struct, enum, unit struct, tuple struct, newtype struct, or type
-    /// alias)--as opposed to a built-in or container type. Named types
-    /// are exactly those for which [`Type::common`] returns `Some`.
-    pub fn is_named(&self) -> bool {
-        matches!(
-            self,
-            Type::Enum(_)
-                | Type::Struct(_)
-                | Type::UnitStruct(_)
-                | Type::TupleStruct(_)
-                | Type::NewtypeStruct(_)
-                | Type::TypeAlias(_)
-        )
-    }
+pub enum TypeSpaceImpl {
+    Display,
+    FromStr,
 }
 
 /// Accumulates the type graph prior to finalization.
@@ -605,7 +293,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// that the graph contains no containment cycles.
     pub fn finalize<F>(
         self,
-        settings: TypespaceSettings,
+        settings: Settings,
         make_box_id: F,
     ) -> Result<Typespace<Id>, TypespaceError<Id>>
     where
@@ -655,7 +343,7 @@ pub fn no_cycles<Id>(_: &Id) -> Id {
 pub struct Typespace<Id> {
     pub(crate) types: BTreeMap<Id, Type<Id>>,
     /// The settings supplied at finalization, which govern rendering.
-    pub settings: TypespaceSettings,
+    pub settings: Settings,
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
@@ -666,9 +354,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     /// Panics if `id` does not name a type in the typespace; every ID
     /// accepted at insert time (plus the box IDs generated during
     /// finalization) is valid.
-    pub fn get_type(&self, id: &Id) -> TypeInfo<'_, Id> {
+    pub fn get_type(&self, id: &Id) -> view::Type<'_, Id> {
         let (id, typ) = self.types.get_key_value(id).expect("invalid type id");
-        TypeInfo {
+        view::Type {
             typespace: self,
             id,
             typ,
@@ -676,8 +364,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     }
 
     /// Iterate over all types in the typespace.
-    pub fn iter_types(&self) -> impl Iterator<Item = TypeInfo<'_, Id>> {
-        self.types.iter().map(|(id, typ)| TypeInfo {
+    pub fn iter_types(&self) -> impl Iterator<Item = view::Type<'_, Id>> {
+        self.types.iter().map(|(id, typ)| view::Type {
             typespace: self,
             id,
             typ,
@@ -702,7 +390,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
 
 pub(crate) struct TypespaceRenderer<'a, Id> {
     pub(crate) types: &'a BTreeMap<Id, Type<Id>>,
-    pub(crate) settings: &'a TypespaceSettings,
+    pub(crate) settings: &'a Settings,
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
@@ -764,12 +452,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     ) -> TokenStream {
         let ty = self.types.get(id).unwrap();
         match ty {
-            Type::Enum(TypeEnum { common, .. })
-            | Type::Struct(TypeStruct { common, .. })
-            | Type::UnitStruct(TypeUnitStruct { common, .. })
-            | Type::TupleStruct(TypeTupleStruct { common, .. })
-            | Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeTypeAlias { common, .. }) => {
+            Type::Enum(Enum { common, .. })
+            | Type::Struct(Struct { common, .. })
+            | Type::UnitStruct(UnitStruct { common, .. })
+            | Type::TupleStruct(TupleStruct { common, .. })
+            | Type::NewtypeStruct(NewtypeStruct { common, .. })
+            | Type::TypeAlias(TypeAlias { common, .. }) => {
                 let name = &common.name;
                 let name_ident = format_ident!("{name}");
 
@@ -781,7 +469,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
 
-            Type::Native(TypeNative {
+            Type::Native(Native {
                 name, parameters, ..
             }) => {
                 let name_ident = syn::parse_str::<syn::TypePath>(name).unwrap();
@@ -815,8 +503,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
             Type::Option(option_id) => {
                 let option_type = match &self.settings.std {
-                    TypespaceSettingsStd::FullyQualified => quote! { ::std::option::Option },
-                    TypespaceSettingsStd::Unqualified => quote! { Option },
+                    Std::FullyQualified => quote! { ::std::option::Option },
+                    Std::Unqualified => quote! { Option },
                 };
                 if base_type {
                     option_type
@@ -829,8 +517,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
             Type::Box(boxed_id) => {
                 let box_type = match &self.settings.std {
-                    TypespaceSettingsStd::FullyQualified => quote! { ::std::boxed::Box },
-                    TypespaceSettingsStd::Unqualified => quote! { Box },
+                    Std::FullyQualified => quote! { ::std::boxed::Box },
+                    Std::Unqualified => quote! { Box },
                 };
                 if base_type {
                     box_type
@@ -845,8 +533,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // TODO 3/25/2026
                 // Replace with set type
                 let vec_type = match &self.settings.std {
-                    TypespaceSettingsStd::FullyQualified => quote! { ::std::vec::Vec },
-                    TypespaceSettingsStd::Unqualified => quote! { Vec },
+                    Std::FullyQualified => quote! { ::std::vec::Vec },
+                    Std::Unqualified => quote! { Vec },
                 };
                 if base_type {
                     vec_type
@@ -861,8 +549,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // TODO 3/25/2026
                 // Make configurable?
                 let vec_type = match &self.settings.std {
-                    TypespaceSettingsStd::FullyQualified => quote! { ::std::vec::Vec },
-                    TypespaceSettingsStd::Unqualified => quote! { Vec },
+                    Std::FullyQualified => quote! { ::std::vec::Vec },
+                    Std::Unqualified => quote! { Vec },
                 };
                 if base_type {
                     vec_type
@@ -892,8 +580,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 .unwrap()
                 .to_token_stream(),
             Type::String => match &self.settings.std {
-                TypespaceSettingsStd::FullyQualified => quote! { ::std::string::String },
-                TypespaceSettingsStd::Unqualified => quote! { String },
+                Std::FullyQualified => quote! { ::std::string::String },
+                Std::Unqualified => quote! { String },
             },
             Type::JsonValue => quote! { ::serde_json::Value },
             Type::Unit => quote! { () },
@@ -951,8 +639,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         let ty_ident = self.render_ident(type_id);
 
         let std_opt_type = match &self.settings.std {
-            TypespaceSettingsStd::FullyQualified => quote! { ::std::option::Option },
-            TypespaceSettingsStd::Unqualified => quote! { Option },
+            Std::FullyQualified => quote! { ::std::option::Option },
+            Std::Unqualified => quote! { Option },
         };
         let std_opt_is_none = format!("{std_opt_type}::is_none");
 
@@ -991,16 +679,16 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // handling of this.
             (StructPropertyState::Optional, Some(inner_id)) => {
                 match &self.settings.optional_nullable {
-                    TypespaceSettingsOptionalNullable::ConflateAsAbsent => {
+                    OptionalNullable::ConflateAsAbsent => {
                         serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
                         ty_ident
                     }
-                    TypespaceSettingsOptionalNullable::ConflateAsNull => {
+                    OptionalNullable::ConflateAsNull => {
                         // We always serialize--including `None` as `null`--so
                         // no serde options are necessary.
                         ty_ident
                     }
-                    TypespaceSettingsOptionalNullable::DoubleOption => {
+                    OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
                         serde_options.push(quote! {
                             deserialize_with = "::json_serde::deserialize_some"
@@ -1013,7 +701,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                             #std_opt_type<#ty_ident>
                         }
                     }
-                    TypespaceSettingsOptionalNullable::CustomType(custom_type_name) => {
+                    OptionalNullable::CustomType(custom_type_name) => {
                         let custom_type_path =
                             syn::parse_str::<syn::TypePath>(custom_type_name).unwrap();
                         serde_options.push(quote! { default });
@@ -1252,8 +940,6 @@ where
                     let typ = types.get_mut(type_id).unwrap();
 
                     let child_ids = typ.contained_children_mut();
-                    // let type_entry = self.id_to_entry.get_mut(type_id).unwrap();
-                    // let child_ids = get_child_ids(type_entry);
                     for child_id in child_ids {
                         if let Some(replace_id) = replace.get(child_id) {
                             *child_id = replace_id.clone();
@@ -1327,9 +1013,9 @@ where
         let ty = types.get_mut(&schema_ref).unwrap();
 
         let common_built = match ty {
-            Type::NewtypeStruct(TypeNewtypeStruct { common, .. })
-            | Type::Enum(TypeEnum { common, .. })
-            | Type::Struct(TypeStruct { common, .. }) => Some(common.built.as_mut().unwrap()),
+            Type::NewtypeStruct(NewtypeStruct { common, .. })
+            | Type::Enum(Enum { common, .. })
+            | Type::Struct(Struct { common, .. }) => Some(common.built.as_mut().unwrap()),
             Type::UnitStruct(_) => todo!(),
             Type::TupleStruct(_) => todo!(),
             Type::TypeAlias(_) => todo!(),
@@ -1363,7 +1049,7 @@ where
                 | Type::NewtypeStruct(_)
                 | Type::TypeAlias(_) => unreachable!(),
 
-                Type::Native(TypeNative { name, impls, .. }) => {
+                Type::Native(Native { name, impls, .. }) => {
                     let missing_traits = traits
                         .difference(impls)
                         .cloned()

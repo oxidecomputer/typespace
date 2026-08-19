@@ -3,10 +3,11 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::{JsonValue, StructProperty, TypeCommon, TypespaceRenderer};
+use crate::build::{JsonValue, StructProperty, TypeCommon};
+use crate::TypespaceRenderer;
 
 #[derive(Debug, Clone)]
-pub struct TypeEnum<Id> {
+pub struct Enum<Id> {
     pub common: TypeCommon,
 
     pub tag_type: EnumTagType,
@@ -14,7 +15,7 @@ pub struct TypeEnum<Id> {
     pub deny_unknown_fields: bool,
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeEnum<Id> {
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     pub fn new(
         name: impl Into<String>,
         description: Option<String>,

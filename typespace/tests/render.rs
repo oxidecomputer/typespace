@@ -3,14 +3,18 @@
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::{
-    no_cycles, EnumTagType, EnumVariant, JsonValue, StructProperty, StructPropertySerde,
-    StructPropertyState, Type, TypeEnum, TypeNative, TypeNewtypeConstraints, TypeNewtypeStruct,
-    TypeStruct, TypeTupleStruct, TypeTypeAlias, TypeUnitStruct, TypespaceBuilder, TypespaceError,
-    TypespaceSettings, TypespaceSettingsOptionalNullable, TypespaceSettingsStd, VariantDetails,
+    build::{
+        Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct,
+        Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type,
+        TypeAlias, UnitStruct, VariantDetails,
+    },
+    no_cycles,
+    settings::{OptionalNullable, Settings, Std},
+    TypespaceBuilder, TypespaceError,
 };
 use typespace_test_macro::check_and_include;
 
-// Stub for the user-provided type referenced by TypespaceSettingsOptionalNullable::CustomType.
+// Stub for the user-provided type referenced by OptionalNullable::CustomType.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum OptionField<T> {
@@ -31,27 +35,27 @@ fn test_struct_field_serde() {
     let configs = [
         (
             "ConflatedAsAbsent",
-            TypespaceSettings::default()
-                .with_std(TypespaceSettingsStd::Unqualified)
-                .with_optional_nullable(TypespaceSettingsOptionalNullable::ConflateAsAbsent),
+            Settings::default()
+                .with_std(Std::Unqualified)
+                .with_optional_nullable(OptionalNullable::ConflateAsAbsent),
         ),
         (
             "ConflatedAsNull",
-            TypespaceSettings::default()
-                .with_std(TypespaceSettingsStd::Unqualified)
-                .with_optional_nullable(TypespaceSettingsOptionalNullable::ConflateAsNull),
+            Settings::default()
+                .with_std(Std::Unqualified)
+                .with_optional_nullable(OptionalNullable::ConflateAsNull),
         ),
         (
             "DoubleOption",
-            TypespaceSettings::default()
-                .with_std(TypespaceSettingsStd::Unqualified)
-                .with_optional_nullable(TypespaceSettingsOptionalNullable::DoubleOption),
+            Settings::default()
+                .with_std(Std::Unqualified)
+                .with_optional_nullable(OptionalNullable::DoubleOption),
         ),
         (
             "CustomType",
-            TypespaceSettings::default()
-                .with_std(TypespaceSettingsStd::Unqualified)
-                .with_optional_nullable(TypespaceSettingsOptionalNullable::CustomType(
+            Settings::default()
+                .with_std(Std::Unqualified)
+                .with_optional_nullable(OptionalNullable::CustomType(
                     "super::OptionField".to_string(),
                 )),
         ),
@@ -131,7 +135,7 @@ fn test_struct_field_serde() {
         builder
             .insert(
                 "X".to_string(),
-                Type::Struct(TypeStruct::new(name, None, properties, false)),
+                Type::Struct(Struct::new(name, None, properties, false)),
             )
             .unwrap();
 
@@ -219,7 +223,7 @@ fn test_unit_struct() {
     builder
         .insert(
             "MyUnitStruct".to_string(),
-            Type::UnitStruct(TypeUnitStruct::new(
+            Type::UnitStruct(UnitStruct::new(
                 "MyUnitStruct",
                 None,
                 serde_json::json!("<<+>>"),
@@ -228,7 +232,7 @@ fn test_unit_struct() {
         .unwrap();
 
     let ts = builder
-        .finalize(TypespaceSettings::default(), no_cycles)
+        .finalize(Settings::default(), no_cycles)
         .expect("finalize typespace");
 
     #[check_and_include("tests/output/test_unit_struct.rs", ts.to_codespace().into_stream())]
@@ -261,7 +265,7 @@ fn test_tuple_struct() {
     builder
         .insert(
             "MyTupleStruct".to_string(),
-            Type::TupleStruct(TypeTupleStruct::new(
+            Type::TupleStruct(TupleStruct::new(
                 "MyTupleStruct",
                 None,
                 vec![string_id, int_id],
@@ -271,7 +275,7 @@ fn test_tuple_struct() {
         .unwrap();
 
     let ts = builder
-        .finalize(TypespaceSettings::default(), no_cycles)
+        .finalize(Settings::default(), no_cycles)
         .expect("finalize typespace");
 
     #[check_and_include("tests/output/test_tuple_struct.rs", ts.to_codespace().into_stream())]
@@ -378,7 +382,7 @@ fn test_enums() {
         builder
             .insert(
                 "E".to_string(),
-                Type::Enum(TypeEnum::new(
+                Type::Enum(Enum::new(
                     *name,
                     None,
                     None,
@@ -390,10 +394,7 @@ fn test_enums() {
             .unwrap();
 
         builder
-            .finalize(
-                TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-                no_cycles,
-            )
+            .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
             .unwrap()
             .to_codespace()
             .into_stream()
@@ -463,12 +464,12 @@ fn test_newtype_struct() {
     builder
         .insert(
             "MyString".to_string(),
-            Type::NewtypeStruct(TypeNewtypeStruct::new(
+            Type::NewtypeStruct(NewtypeStruct::new(
                 "MyString",
                 Some("A newtype wrapping String.".to_string()),
                 None,
                 string_id,
-                TypeNewtypeConstraints::None,
+                NewtypeConstraints::None,
             )),
         )
         .unwrap();
@@ -476,21 +477,18 @@ fn test_newtype_struct() {
     builder
         .insert(
             "MyInt".to_string(),
-            Type::NewtypeStruct(TypeNewtypeStruct::new(
+            Type::NewtypeStruct(NewtypeStruct::new(
                 "MyInt",
                 None,
                 None,
                 int_id,
-                TypeNewtypeConstraints::None,
+                NewtypeConstraints::None,
             )),
         )
         .unwrap();
 
     let ts = builder
-        .finalize(
-            TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-            no_cycles,
-        )
+        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
         .unwrap();
 
     #[check_and_include("tests/output/test_newtype_struct.rs", ts.to_codespace().into_stream())]
@@ -526,14 +524,14 @@ fn test_type_alias() {
     builder
         .insert(
             "MyAlias".to_string(),
-            Type::TypeAlias(TypeTypeAlias::new("MyAlias", None, string_id)),
+            Type::TypeAlias(TypeAlias::new("MyAlias", None, string_id)),
         )
         .unwrap();
 
     builder
         .insert(
             "StringList".to_string(),
-            Type::TypeAlias(TypeTypeAlias::new(
+            Type::TypeAlias(TypeAlias::new(
                 "StringList",
                 Some("A list of strings.".to_string()),
                 vec_string_id,
@@ -542,10 +540,7 @@ fn test_type_alias() {
         .unwrap();
 
     let ts = builder
-        .finalize(
-            TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-            no_cycles,
-        )
+        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
         .unwrap();
 
     #[check_and_include("tests/output/test_type_alias.rs", ts.to_codespace().into_stream())]
@@ -574,7 +569,7 @@ fn test_struct_serde_rename_flatten() {
     builder
         .insert(
             "Inner".to_string(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "Inner",
                 None,
                 vec![StructProperty::new(
@@ -595,7 +590,7 @@ fn test_struct_serde_rename_flatten() {
     builder
         .insert(
             "Outer".to_string(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "Outer",
                 None,
                 vec![
@@ -620,10 +615,7 @@ fn test_struct_serde_rename_flatten() {
         .unwrap();
 
     let ts = builder
-        .finalize(
-            TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-            no_cycles,
-        )
+        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
         .unwrap();
 
     #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", ts.to_codespace().into_stream())]
@@ -648,14 +640,14 @@ fn test_native_type() {
     builder
         .insert(
             uuid_id.clone(),
-            Type::Native(TypeNative::new_string_like("std::path::PathBuf")),
+            Type::Native(Native::new_string_like("std::path::PathBuf")),
         )
         .unwrap();
 
     builder
         .insert(
             "Resource".to_string(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "Resource",
                 None,
                 vec![StructProperty::new(
@@ -671,10 +663,7 @@ fn test_native_type() {
         .unwrap();
 
     let ts = builder
-        .finalize(
-            TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-            no_cycles,
-        )
+        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
         .unwrap();
 
     #[check_and_include("tests/output/test_native_type.rs", ts.to_codespace().into_stream())]
@@ -750,7 +739,7 @@ fn test_compound_field_types() {
     builder
         .insert(
             "All".to_string(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "All",
                 None,
                 vec![
@@ -849,7 +838,7 @@ fn test_compound_field_types() {
     builder
         .insert(
             "Defaults".to_string(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "Defaults",
                 None,
                 vec![
@@ -944,10 +933,7 @@ fn test_compound_field_types() {
         .unwrap();
 
     let ts = builder
-        .finalize(
-            TypespaceSettings::default().with_std(TypespaceSettingsStd::Unqualified),
-            no_cycles,
-        )
+        .finalize(Settings::default().with_std(Std::Unqualified), no_cycles)
         .unwrap();
 
     #[check_and_include("tests/output/test_compound_field_types.rs", ts.to_codespace().into_stream())]
@@ -1013,7 +999,7 @@ fn test_map_key_struct_with_float() {
     builder
         .insert(
             key_id.clone(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "Key",
                 None,
                 vec![StructProperty::new(
@@ -1035,7 +1021,7 @@ fn test_map_key_struct_with_float() {
         .insert("map".to_string(), Type::Map(key_id, value_id))
         .unwrap();
 
-    let Err(err) = builder.finalize(TypespaceSettings::default(), no_cycles) else {
+    let Err(err) = builder.finalize(Settings::default(), no_cycles) else {
         panic!("expected finalize to fail");
     };
     assert!(matches!(
@@ -1067,7 +1053,7 @@ fn test_empty_type_name() {
     let err = builder
         .insert(
             "nameless".to_string(),
-            Type::Struct(TypeStruct::new("", None, vec![], false)),
+            Type::Struct(Struct::new("", None, vec![], false)),
         )
         .unwrap_err();
     assert!(matches!(
@@ -1084,7 +1070,7 @@ fn test_unknown_type_id() {
     builder
         .insert("v".to_string(), Type::Vec("missing".to_string()))
         .unwrap();
-    let Err(err) = builder.finalize(TypespaceSettings::default(), no_cycles) else {
+    let Err(err) = builder.finalize(Settings::default(), no_cycles) else {
         panic!("expected finalize to fail");
     };
     assert!(matches!(
@@ -1110,7 +1096,7 @@ fn test_cycles() {
     builder
         .insert(
             struct_a_id,
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "A",
                 None,
                 vec![StructProperty::new(
@@ -1130,7 +1116,7 @@ fn test_cycles() {
     builder
         .insert(
             b_id,
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "B",
                 None,
                 vec![StructProperty::new(
@@ -1147,7 +1133,7 @@ fn test_cycles() {
     builder
         .insert(
             c_id,
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "C",
                 None,
                 vec![StructProperty::new(
@@ -1163,7 +1149,7 @@ fn test_cycles() {
         .unwrap();
 
     let ts = builder
-        .finalize(TypespaceSettings::default(), |_: &i32| next())
+        .finalize(Settings::default(), |_: &i32| next())
         .expect("finalize typespace");
 
     #[check_and_include("tests/output/test_cycles.rs", ts.to_codespace().into_stream())]

@@ -3,7 +3,7 @@
 use crate::{TypespaceTrait, TypespaceTraitSet};
 
 #[derive(Debug, Clone)]
-pub struct TypeNative<Id> {
+pub struct Native<Id> {
     pub name: String,
 
     pub impls: TypespaceTraitSet,
@@ -15,7 +15,7 @@ pub struct TypeNative<Id> {
     pub parameters: Vec<Id>,
 }
 
-impl<Id> TypeNative<Id> {
+impl<Id> Native<Id> {
     /// Create a native type. `name` is the Rust type path emitted
     /// verbatim into generated code; `impls` is the set of traits the
     /// type is known to implement, consulted when trait requirements

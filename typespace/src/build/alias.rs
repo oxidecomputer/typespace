@@ -3,15 +3,16 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::{TypeCommon, TypespaceRenderer};
+use crate::build::TypeCommon;
+use crate::TypespaceRenderer;
 
 #[derive(Debug, Clone)]
-pub struct TypeTypeAlias<Id> {
+pub struct TypeAlias<Id> {
     pub common: TypeCommon,
     pub target: Id,
 }
 
-impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeTypeAlias<Id> {
+impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
     pub fn new(name: impl Into<String>, description: Option<String>, target: Id) -> Self {
         Self {
             common: TypeCommon {

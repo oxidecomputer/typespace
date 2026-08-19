@@ -2,14 +2,18 @@
 
 use quote::{format_ident, quote};
 use typespace::{
-    no_cycles, EnumTagType, EnumVariant, StructProperty, StructPropertySerde, StructPropertyState,
-    Type, TypeDetails, TypeEnum, TypeEnumVariant, TypeSpaceImpl, TypeStruct, TypespaceBuilder,
-    TypespaceSettings, VariantDetails,
+    build::{
+        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertySerde,
+        StructPropertyState, Type, VariantDetails,
+    },
+    no_cycles,
+    settings::Settings,
+    view, TypeSpaceImpl, TypespaceBuilder,
 };
 
 fn make_typespace() -> typespace::Typespace<String> {
     let mut builder = TypespaceBuilder::default();
-    let settings = TypespaceSettings::default();
+    let settings = Settings::default();
 
     let str_id = "str".to_string();
     builder.insert(str_id.clone(), Type::String).unwrap();
@@ -32,7 +36,7 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             struct_id.clone(),
-            Type::Struct(TypeStruct::new(
+            Type::Struct(Struct::new(
                 "MyStruct",
                 Some("A sample struct".to_string()),
                 vec![
@@ -68,7 +72,7 @@ fn make_typespace() -> typespace::Typespace<String> {
     builder
         .insert(
             enum_id.clone(),
-            Type::Enum(TypeEnum::new(
+            Type::Enum(Enum::new(
                 "MyEnum",
                 Some("A sample enum".to_string()),
                 None,
@@ -114,7 +118,7 @@ fn struct_properties_via_get_type() {
     assert_eq!(ti.name(), "MyStruct");
     assert_eq!(ti.description(), Some("A sample struct"));
 
-    let TypeDetails::Struct(s) = ti.details() else {
+    let view::TypeDetails::Struct(s) = ti.details() else {
         panic!("expected Struct, got something else");
     };
 
@@ -137,7 +141,7 @@ fn enum_variants_via_get_type() {
     assert_eq!(ti.name(), "MyEnum");
     assert_eq!(ti.description(), Some("A sample enum"));
 
-    let TypeDetails::Enum(e) = ti.details() else {
+    let view::TypeDetails::Enum(e) = ti.details() else {
         panic!("expected Enum, got something else");
     };
 
@@ -145,17 +149,17 @@ fn enum_variants_via_get_type() {
     assert_eq!(variants.len(), 3);
 
     let nothing = variants.iter().find(|v| v.name == "Nothing").unwrap();
-    assert!(matches!(nothing.details, TypeEnumVariant::Simple));
+    assert!(matches!(nothing.details, view::VariantDetails::Simple));
 
     let single = variants.iter().find(|v| v.name == "Single").unwrap();
     assert!(
-        matches!(&single.details, TypeEnumVariant::Tuple(ids) if ids.len() == 1),
+        matches!(&single.details, view::VariantDetails::Tuple(ids) if ids.len() == 1),
         "Single should be a one-element Tuple"
     );
 
     let pair = variants.iter().find(|v| v.name == "Pair").unwrap();
     assert!(
-        matches!(&pair.details, TypeEnumVariant::Tuple(ids) if ids.len() == 2),
+        matches!(&pair.details, view::VariantDetails::Tuple(ids) if ids.len() == 2),
         "Pair should be a two-element Tuple"
     );
 }
