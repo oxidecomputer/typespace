@@ -269,48 +269,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
-    /// A structural identity for unnamed types, used for deduplication.
-    ///
-    /// Consumers that intern types--inserting `Option<T>` twice must
-    /// map to one ID--use the key as an ordered-map key: two unnamed
-    /// types with equal keys are structurally identical (native types
-    /// compare by path, declared impls, and parameters). Named types
-    /// return `None`; they deduplicate by name, not by structure.
-    pub fn dedup_key(&self) -> Option<DedupKey<Id>> {
-        let inner = match self {
-            // Named types are deduplicated by name, not by structure.
-            Type::Enum(_)
-            | Type::Struct(_)
-            | Type::UnitStruct(_)
-            | Type::TupleStruct(_)
-            | Type::NewtypeStruct(_)
-            | Type::TypeAlias(_) => return None,
-
-            // Two native types that differ in declared impls (or the
-            // irrefutable-FromStr capability) must not be conflated.
-            Type::Native(native) => DedupKeyInner::Native(
-                native.name.clone(),
-                native.impls.clone(),
-                native.from_string_irrefutable,
-                native.parameters.clone(),
-            ),
-
-            Type::Option(id) => DedupKeyInner::Option(id.clone()),
-            Type::Box(id) => DedupKeyInner::Box(id.clone()),
-            Type::Vec(id) => DedupKeyInner::Vec(id.clone()),
-            Type::Map(key_id, value_id) => DedupKeyInner::Map(key_id.clone(), value_id.clone()),
-            Type::Set(id) => DedupKeyInner::Set(id.clone()),
-            Type::Array(id, length) => DedupKeyInner::Array(id.clone(), *length),
-            Type::Tuple(ids) => DedupKeyInner::Tuple(ids.clone()),
-            Type::Unit => DedupKeyInner::Unit,
-            Type::Boolean => DedupKeyInner::Boolean,
-            Type::Integer(name) => DedupKeyInner::Integer(name.clone()),
-            Type::Float(name) => DedupKeyInner::Float(name.clone()),
-            Type::String => DedupKeyInner::String,
-            Type::JsonValue => DedupKeyInner::JsonValue,
-        };
-        Some(DedupKey(inner))
-    }
 
     /// Children that this type "contains" (i.e. cycle-breaking candidates).
     pub fn contained_children(&self) -> Vec<Id> {
@@ -527,29 +485,3 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     }
 }
 
-/// An opaque structural identity for an unnamed type.
-///
-/// Produced by [`Type::dedup_key`]; two keys compare equal exactly when
-/// the types they came from are structurally identical. The only
-/// supported operations are comparison, ordering, hashing by `Ord`-based
-/// containers, and cloning.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DedupKey<Id>(DedupKeyInner<Id>);
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum DedupKeyInner<Id> {
-    Native(String, crate::TypespaceTraitSet, bool, Vec<Id>),
-    Option(Id),
-    Box(Id),
-    Vec(Id),
-    Map(Id, Id),
-    Set(Id),
-    Array(Id, usize),
-    Tuple(Vec<Id>),
-    Unit,
-    Boolean,
-    Integer(String),
-    Float(String),
-    String,
-    JsonValue,
-}

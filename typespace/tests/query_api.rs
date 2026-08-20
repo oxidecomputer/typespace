@@ -169,7 +169,7 @@ fn has_impl_false_for_plain_types() {
 }
 
 // Chunk-5 query additions on the build side: names, naming contexts,
-// dedup keys, defaults, and enum analyses.
+// defaults, and enum analyses.
 #[test]
 fn build_side_queries() {
     let str_id = "str".to_string();
@@ -242,24 +242,6 @@ fn build_side_queries() {
         Type::Option("o".to_string()).children_with_context(),
         vec![("o".to_string(), "".to_string())]
     );
-
-    // dedup_key: structural identity for unnamed types only.
-    let vec_a = Type::Vec("a".to_string());
-    let vec_a2 = Type::Vec("a".to_string());
-    let vec_b = Type::Vec("b".to_string());
-    assert_eq!(vec_a.dedup_key(), vec_a2.dedup_key());
-    assert_ne!(vec_a.dedup_key(), vec_b.dedup_key());
-    assert!(vec_a.dedup_key().is_some());
-    assert!(named.dedup_key().is_none());
-
-    // Native types differing only in declared impls must not conflate.
-    let n1 = Type::<String>::Native(Native::new_string_like("uuid::Uuid"));
-    let n2 = Type::<String>::Native(Native::new(
-        "uuid::Uuid",
-        typespace::TypespaceTraitSet::empty(),
-        Vec::new(),
-    ));
-    assert_ne!(n1.dedup_key(), n2.dedup_key());
 
     // json_name: the wire name of a variant.
     let plain = EnumVariant::<String>::new("Alpha", VariantDetails::Unit);
