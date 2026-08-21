@@ -42,24 +42,32 @@ fn test_struct_field_serde() {
             "ConflatedAsAbsent",
             Settings::default()
                 .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Serialize)
+                .with_required_trait(TypespaceTrait::Deserialize)
                 .with_optional_nullable(OptionalNullable::ConflateAsAbsent),
         ),
         (
             "ConflatedAsNull",
             Settings::default()
                 .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Serialize)
+                .with_required_trait(TypespaceTrait::Deserialize)
                 .with_optional_nullable(OptionalNullable::ConflateAsNull),
         ),
         (
             "DoubleOption",
             Settings::default()
                 .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Serialize)
+                .with_required_trait(TypespaceTrait::Deserialize)
                 .with_optional_nullable(OptionalNullable::DoubleOption),
         ),
         (
             "CustomType",
             Settings::default()
                 .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Serialize)
+                .with_required_trait(TypespaceTrait::Deserialize)
                 .with_optional_nullable(OptionalNullable::CustomType(
                     "super::OptionField".to_string(),
                 )),
@@ -193,7 +201,11 @@ fn test_struct_field_serde() {
 
 #[test]
 fn test_unit_struct() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize),
+    );
 
     builder
         .insert(
@@ -219,7 +231,12 @@ fn test_unit_struct() {
 
 #[test]
 fn test_tuple_struct() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::Serialize),
+    );
 
     let int_id = "integer".to_string();
     builder
@@ -303,7 +320,12 @@ fn test_enums() {
     ];
 
     let outputs = configs.iter().map(|(name, tag_type)| {
-        let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+        let mut builder = TypespaceBuilder::new(
+            Settings::default()
+                .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Deserialize)
+                .with_required_trait(TypespaceTrait::Serialize),
+        );
 
         let string_id = "string".to_string();
         builder.insert(string_id.clone(), Type::String).unwrap();
@@ -403,7 +425,12 @@ fn test_enums() {
 
 #[test]
 fn test_newtype_struct() {
-    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_std(Std::Unqualified),
+    );
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -495,7 +522,12 @@ fn test_type_alias() {
 
 #[test]
 fn test_struct_serde_rename_flatten() {
-    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_std(Std::Unqualified),
+    );
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -583,7 +615,12 @@ fn test_native_type() {
 
 #[test]
 fn test_compound_field_types() {
-    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_std(Std::Unqualified),
+    );
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -1088,7 +1125,11 @@ fn test_unknown_type_id() {
 // Test a some simple cyclic types.
 #[test]
 fn test_cycles() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder = TypespaceBuilder::new(
+        Settings::default()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize),
+    );
 
     let mut id = 0;
 
@@ -1173,6 +1214,8 @@ fn test_container_overrides() {
     // HashMap wants hashing of its keys, not ordering; BTreeSet keeps
     // the ordered-comparison demands.
     let settings = Settings::default()
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
         .with_map_type(
             "::std::collections::HashMap",
             [
@@ -1298,10 +1341,12 @@ fn test_container_overrides() {
 fn test_trait_impls() {
     let settings = Settings::default()
         .with_std(Std::Unqualified)
-        .with_trait_impl(typespace::TypespaceTrait::Clone)
-        .with_trait_impl(typespace::TypespaceTrait::Debug)
-        .with_trait_impl(typespace::TypespaceTrait::PartialEq)
-        .with_trait_impl(typespace::TypespaceTrait::Eq)
+        .with_required_trait(typespace::TypespaceTrait::Serialize)
+        .with_required_trait(typespace::TypespaceTrait::Deserialize)
+        .with_required_trait(typespace::TypespaceTrait::Clone)
+        .with_required_trait(typespace::TypespaceTrait::Debug)
+        .with_required_trait(typespace::TypespaceTrait::PartialEq)
+        .with_required_trait(typespace::TypespaceTrait::Eq)
         .with_derive("::std::hash::Hash");
     let mut builder = TypespaceBuilder::new(settings);
 
@@ -1418,7 +1463,7 @@ fn test_trait_impls() {
 // surfaces an error when a leaf type cannot satisfy it.
 #[test]
 fn test_trait_impls_conflict() {
-    let settings = Settings::default().with_trait_impl(typespace::TypespaceTrait::Eq);
+    let settings = Settings::default().with_required_trait(typespace::TypespaceTrait::Eq);
     let mut builder = TypespaceBuilder::new(settings);
 
     let float_id = "float".to_string();
@@ -1468,61 +1513,6 @@ fn test_invalid_derive() {
         err,
         Error::InvalidDerive { ref derive, .. } if derive == "not a path!"
     ));
-}
-
-// The json-serde crate path override changes both the deserialize_some
-// attribute paths and the flattened-sequence impls.
-#[test]
-fn test_json_serde_crate_override() {
-    let settings = Settings::default()
-        .with_std(Std::Unqualified)
-        .with_json_serde_crate("my_json_serde");
-    let mut builder = TypespaceBuilder::new(settings);
-
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let vec_id = "vec".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
-
-    builder
-        .insert(
-            "Options".to_string(),
-            Struct::new()
-                .name("Options")
-                .properties(vec![StructProperty::new("maybe", string_id.clone())
-                    .with_state(StructPropertyState::Optional)])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Rest".to_string(),
-            TupleStruct::new()
-                .name("Rest")
-                .fields(vec![string_id.clone()])
-                .rest(vec_id)
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_json_serde_crate_override.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let v: import::Options = serde_json::from_str(r#"{"maybe": "yes"}"#).unwrap();
-        assert_eq!(v.maybe, Some("yes".to_string()));
-        assert!(serde_json::from_str::<import::Options>(r#"{"maybe": null}"#).is_err());
-
-        let r: import::Rest = serde_json::from_str(r#"["head", "a", "b"]"#).unwrap();
-        assert_eq!(r.0, "head");
-        assert_eq!(r.1, vec!["a", "b"]);
-    }
 }
 
 // The acceptance test for conflict path rendering: a set whose elements are

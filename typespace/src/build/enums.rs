@@ -9,7 +9,7 @@ use crate::build::{
     check_properties, validate_ident, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt,
 };
 use crate::error::{Error, NameAxis};
-use crate::{TypespaceRenderer, TypespaceTrait};
+use crate::TypespaceRenderer;
 
 /// An enum.
 ///
@@ -276,27 +276,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         let name_ident = format_ident!("{name}");
 
-        // Serialize and Deserialize are always derived; propagated traits
-        // are realized as additional derives. Default is excluded: its
-        // derive form requires a #[default] variant attribute, so a
-        // required Default on an enum awaits a hand-written impl.
-        let derive_attr = typespace.render_derives(
-            &[
-                quote! { ::serde::Deserialize },
-                quote! { ::serde::Serialize },
-            ],
-            traits,
-            &[
-                TypespaceTrait::Serialize,
-                TypespaceTrait::Deserialize,
-                TypespaceTrait::Default,
-            ],
-        );
+        let derives_attr = typespace.render_derives(&traits);
 
         quote! {
             // TODO I want to have the original unique id available
             #description
-            #derive_attr
+            #derives_attr
             #serde
             pub enum #name_ident {
                 #( #variants, )*

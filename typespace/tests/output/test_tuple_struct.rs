@@ -1,9 +1,4 @@
-#[derive(::std::clone::Clone, ::std::fmt::Debug)]
-pub struct MyTupleStruct(
-    pub ::std::string::String,
-    pub u32,
-    pub ::std::vec::Vec<::std::string::String>,
-);
+pub struct MyTupleStruct(pub String, pub u32, pub Vec<String>);
 impl ::serde::Serialize for MyTupleStruct {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

@@ -136,6 +136,7 @@ where
 
 #[derive(Debug, Clone)]
 pub(crate) struct TypeCommonBuilt {
+    /// Computed set of traits required of this type.
     // TODO 3/25/2026
     // This definitely needs more consideration after I start feeling it out.
     pub traits: TypespaceTraitSet,

@@ -232,12 +232,19 @@ impl TypespaceTraitSet {
     pub fn contains(&self, tt: &TypespaceTrait) -> bool {
         self.0.contains(tt)
     }
+
     pub fn add(&mut self, tt: TypespaceTrait) {
         self.0.insert(tt);
     }
+
+    pub fn remove(&mut self, tt: TypespaceTrait) -> bool {
+        self.0.remove(&tt)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
     pub fn iter(&self) -> impl Iterator<Item = &TypespaceTrait> {
         self.0.iter()
     }
@@ -631,30 +638,17 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         self.render_ident_impl(id, None, true)
     }
 
-    /// Render the derive attribute for a named type.
-    ///
-    /// `base` holds the derives a shape always emits, first and
-    /// verbatim. The type's propagated trait set follows, except for
-    /// the traits in `skip`--those covered by `base` or realized as
-    /// hand-written impls--and for the traits with no derive form (see
-    /// [`TypespaceTrait::is_derivable`]). Extra derives from
-    /// [`settings::Settings::with_derive`] come last, parsed but
-    /// otherwise emitted as given. Returns `None` when there is nothing
-    /// to derive.
-    pub(crate) fn render_derives(
-        &self,
-        base: &[TokenStream],
-        traits: &TypespaceTraitSet,
-        skip: &[TypespaceTrait],
-    ) -> Option<TokenStream> {
-        let mut derives = base.to_vec();
-        derives.extend(
-            traits
-                .iter()
-                .filter(|tt| !skip.contains(tt))
-                .filter(|tt| tt.is_derivable())
-                .map(|tt| tt.render(self.settings)),
-        );
+    /// Render the derive attribute given the computed traits for a type and
+    /// the extra derives from settings.
+    pub(crate) fn render_derives(&self, traits: &TypespaceTraitSet) -> Option<TokenStream> {
+        let mut derives = traits
+            .iter()
+            .map(|tt| tt.render(self.settings))
+            .collect::<Vec<_>>();
+        // TODO 8/20/2026
+        // I think that we should validate (and maybe render) these extra
+        // derives from settings during finalization and store them in the
+        // TypespaceRenderer.
         derives.extend(self.settings.extra_derives.iter().map(|derive| {
             syn::parse_str::<syn::Path>(derive)
                 .expect("invalid derive path")
@@ -882,7 +876,6 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Std::Unqualified => quote! { Option },
         };
         let std_opt_is_none = format!("{std_opt_type}::is_none");
-        let deserialize_some = format!("{}::deserialize_some", self.settings.json_serde_crate());
 
         let prop_ty_ident = match (state, maybe_option_type) {
             // A required field needs no serde annotations.
@@ -904,7 +897,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             (StructPropertyState::Optional, None) => {
                 serde_options.push(quote! { default });
                 serde_options.push(quote! {
-                    deserialize_with = #deserialize_some
+                    deserialize_with = "::json_serde::deserialize_some"
                 });
                 serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
                 // TODO schemars schema_with
@@ -931,7 +924,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
                         serde_options.push(quote! {
-                            deserialize_with = #deserialize_some
+                            deserialize_with = "::json_serde::deserialize_some"
                         });
                         serde_options.push(quote! {
                             skip_serializing_if = #std_opt_is_none
@@ -1253,14 +1246,14 @@ where
     // rather than writing them into TypeCommonBuilt directly so that they
     // propagate to contained types--and are checked against native and
     // built-in leaf types--exactly like structural requirements.
-    if !settings.trait_impls.is_empty() {
+    if !settings.required_traits.is_empty() {
         work.extend(
             types
                 .iter()
                 .filter(|(_, ty)| ty.is_named())
                 .map(|(type_id, _)| WorkItem {
                     target: type_id.clone(),
-                    traits: settings.trait_impls.clone(),
+                    traits: settings.required_traits.clone(),
                     origin: RequirementOrigin::Requested,
                     path: Vec::new(),
                 }),

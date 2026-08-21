@@ -1,8 +1,8 @@
 #[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
     Clone,
     Debug,
+    ::serde::Serialize,
+    ::serde::Deserialize,
     Eq,
     PartialEq,
     ::std::hash::Hash
@@ -11,7 +11,7 @@ pub enum Gadget {
     Off,
     On(u32),
 }
-#[derive(::std::clone::Clone, ::std::fmt::Debug, Eq, PartialEq, ::std::hash::Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
 pub struct Marker;
 impl ::serde::Serialize for Marker {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -42,7 +42,7 @@ impl<'de> ::serde::Deserialize<'de> for Marker {
     }
 }
 pub type Named = String;
-#[derive(::std::clone::Clone, ::std::fmt::Debug, Eq, PartialEq, ::std::hash::Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
 pub struct Pair(pub String, pub u32);
 impl ::serde::Serialize for Pair {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -93,10 +93,10 @@ impl<'de> ::serde::Deserialize<'de> for Pair {
     }
 }
 #[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
     Clone,
     Debug,
+    ::serde::Serialize,
+    ::serde::Deserialize,
     Eq,
     PartialEq,
     ::std::hash::Hash
@@ -105,7 +105,16 @@ pub struct Widget {
     pub name: String,
     pub tags: Vec<String>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
+#[derive(
+    Clone,
+    Debug,
+    ::serde::Serialize,
+    ::serde::Deserialize,
+    Eq,
+    PartialEq,
+    ::std::hash::Hash
+)]
+#[serde(transparent)]
 pub struct Wrapper(pub String);
 impl ::std::ops::Deref for Wrapper {
     type Target = String;
@@ -116,21 +125,5 @@ impl ::std::ops::Deref for Wrapper {
 impl ::std::convert::From<Wrapper> for String {
     fn from(value: Wrapper) -> Self {
         value.0
-    }
-}
-impl ::serde::Serialize for Wrapper {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: ::serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-impl<'de> ::serde::Deserialize<'de> for Wrapper {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: ::serde::Deserializer<'de>,
-    {
-        Ok(Self(::serde::Deserialize::deserialize(deserializer)?))
     }
 }

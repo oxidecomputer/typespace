@@ -3,7 +3,7 @@ pub use conflated_as_null::*;
 pub use custom_type::*;
 pub use double_option::*;
 pub mod conflated_as_absent {
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(::serde::Serialize, ::serde::Deserialize)]
     pub struct ConflatedAsAbsent {
         #[serde(
             default,
@@ -36,7 +36,7 @@ pub mod conflated_as_absent {
     }
 }
 pub mod conflated_as_null {
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(::serde::Serialize, ::serde::Deserialize)]
     pub struct ConflatedAsNull {
         #[serde(
             default,
@@ -68,7 +68,7 @@ pub mod conflated_as_null {
     }
 }
 pub mod custom_type {
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(::serde::Serialize, ::serde::Deserialize)]
     pub struct CustomType {
         #[serde(
             default,
@@ -101,7 +101,7 @@ pub mod custom_type {
     }
 }
 pub mod double_option {
-    #[derive(::serde::Deserialize, ::serde::Serialize)]
+    #[derive(::serde::Serialize, ::serde::Deserialize)]
     pub struct DoubleOption {
         #[serde(
             default,

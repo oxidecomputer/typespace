@@ -1,4 +1,3 @@
-#[derive(::std::clone::Clone, ::std::fmt::Debug)]
 pub struct MyUnitStruct;
 impl ::serde::Serialize for MyUnitStruct {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

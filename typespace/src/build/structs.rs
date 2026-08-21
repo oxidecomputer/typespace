@@ -193,16 +193,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             rendered_properties.push(typespace.render_struct_property(prop, true, &snake_name, cs));
         }
 
-        // Serialize and Deserialize are always derived; propagated traits
-        // are realized as additional derives.
-        let derive_attr = typespace.render_derives(
-            &[
-                quote! { ::serde::Deserialize },
-                quote! { ::serde::Serialize },
-            ],
-            traits,
-            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
-        );
+        let derive_attr = typespace.render_derives(traits);
 
         quote! {
             #description
@@ -423,26 +414,12 @@ impl UnitStruct {
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
-        // Clone and Debug are always derived; Serialize and Deserialize are
-        // hand-written impls below, so they never appear as derives.
-        let derive_attr = typespace.render_derives(
-            &[quote! { ::std::clone::Clone }, quote! { ::std::fmt::Debug }],
-            traits,
-            &[
-                TypespaceTrait::Clone,
-                TypespaceTrait::Debug,
-                TypespaceTrait::Serialize,
-                TypespaceTrait::Deserialize,
-            ],
-        );
-
         let repr_tokens = crate::value_tokens::value_tokens(repr);
         let repr_string = serde_json::to_string(repr).unwrap();
-        quote! {
-            #description
-            #derive_attr
-            pub struct #name_ident;
 
+        let mut traits = traits.clone();
+        let serde_serialize = traits.remove(TypespaceTrait::Serialize).then(|| {
+            quote! {
             impl ::serde::Serialize for #name_ident {
                 fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
                 where
@@ -452,6 +429,11 @@ impl UnitStruct {
                 }
             }
 
+
+            }
+        });
+        let serde_deserialize = traits.remove(TypespaceTrait::Deserialize).then(|| {
+            quote! {
             impl<'de> ::serde::Deserialize<'de> for #name_ident {
                 fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
                 where
@@ -469,6 +451,22 @@ impl UnitStruct {
                     Ok(#name_ident)
                 }
             }
+
+
+            }
+        });
+
+        let derive_attr = typespace.render_derives(&traits);
+
+        quote! {
+            #description
+            #derive_attr
+            pub struct #name_ident;
+
+            #serde_serialize
+            #serde_deserialize
+
+
         }
     }
 }
@@ -605,24 +603,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         let name_ident = format_ident!("{name}");
 
-        // Clone and Debug are always derived; Serialize and Deserialize are
-        // hand-written impls below, so they never appear as derives.
-        let derive_attr = typespace.render_derives(
-            &[quote! { ::std::clone::Clone }, quote! { ::std::fmt::Debug }],
-            traits,
-            &[
-                TypespaceTrait::Clone,
-                TypespaceTrait::Debug,
-                TypespaceTrait::Serialize,
-                TypespaceTrait::Deserialize,
-            ],
-        );
-
-        // The flattened-sequence helpers come from the json-serde crate,
-        // whose path is configurable.
-        let json_serde = syn::parse_str::<syn::Path>(typespace.settings.json_serde_crate())
-            .expect("invalid json-serde crate path");
-
         let field_ident = fields
             .iter()
             .map(|field_id| typespace.render_ident(field_id));
@@ -648,6 +628,85 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             .collect::<Vec<_>>();
         let expected = format!("a tuple of size {} or more", fields.len());
 
+        let mut traits = traits.clone();
+        let serde_serialize = traits.remove(TypespaceTrait::Serialize).then(|| {
+            quote! {
+                impl ::serde::Serialize for #name_ident {
+                    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                    where
+                        S: ::serde::Serializer,
+                    {
+                        use ::serde::ser::SerializeSeq;
+                        let mut seq = serializer.serialize_seq(None)?;
+                        #(
+                            seq.serialize_element(&self.#field_index)?;
+                        )*
+                        #(
+                            self.#rest_index.serialize(
+                                ::json_serde::FlattenedSequenceSerializer::new(&mut seq)
+                            )?;
+                        )*
+                        seq.end()
+                    }
+                }
+            }
+        });
+        let serde_deserialize = traits.remove(TypespaceTrait::Deserialize).then(|| {
+            quote! {
+                impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                    where
+                        D: ::serde::Deserializer<'de>,
+                    {
+                        struct Visitor;
+
+                        impl<'de> ::serde::de::Visitor<'de> for Visitor {
+                            type Value = #name_ident;
+
+                            fn expecting(&self, formatter: &mut ::std::fmt::Formatter)
+                                -> ::std::fmt::Result
+                            {
+                                // TODO could we specify the type here?
+                                formatter.write_str("a sequence")
+                            }
+
+                            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                            where
+                                A: ::serde::de::SeqAccess<'de>,
+                            {
+                                // Strictly speaking, we don't need to
+                                // store each tuple element in a
+                                // variable, but as a practical matter,
+                                // it makes the generated code much
+                                // easier to follow and less indented.
+                                #(
+                                    let #field_var = seq
+                                        .next_element()?
+                                        .ok_or_else(|| ::serde::de::Error::invalid_length(
+                                            #field_int,
+                                            &#expected
+                                        ))?;
+                                )*
+                                #(
+                                    let #rest_var = ::serde::Deserialize::deserialize(
+                                        ::json_serde::FlattenedSequenceDeserializer::new(&mut seq)
+                                    )?;
+                                )*
+                                Ok(#name_ident(
+                                    #( #field_var, )*
+                                    #( #rest_var, )*
+                                ))
+                            }
+                        }
+
+                        deserializer.deserialize_seq(Visitor)
+                    }
+                }
+            }
+        });
+
+        let derive_attr = typespace.render_derives(&traits);
+
         quote! {
             #description
             #derive_attr
@@ -656,72 +715,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                 #( pub #rest_ident, )*
             );
 
-            impl ::serde::Serialize for #name_ident {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: ::serde::Serializer,
-                {
-                    use ::serde::ser::SerializeSeq;
-                    let mut seq = serializer.serialize_seq(None)?;
-                    #(
-                        seq.serialize_element(&self.#field_index)?;
-                    )*
-                    #(
-                        self.#rest_index.serialize(
-                            #json_serde::FlattenedSequenceSerializer::new(&mut seq)
-                        )?;
-                    )*
-                    seq.end()
-                }
-            }
-
-            impl<'de> ::serde::Deserialize<'de> for #name_ident {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: ::serde::Deserializer<'de>,
-                {
-                    struct Visitor;
-
-                    impl<'de> ::serde::de::Visitor<'de> for Visitor {
-                        type Value = #name_ident;
-
-                        fn expecting(&self, formatter: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-                            // TODO could we specify the type here?
-                            formatter.write_str("a sequence")
-                        }
-
-                        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-                        where
-                            A: ::serde::de::SeqAccess<'de>,
-                        {
-                            // Strictly speaking, we don't need to
-                            // store each tuple element in a
-                            // variable, but as a practical matter,
-                            // it makes the generated code much
-                            // easier to follow and less indented.
-                            #(
-                                let #field_var = seq
-                                    .next_element()?
-                                    .ok_or_else(|| ::serde::de::Error::invalid_length(
-                                        #field_int,
-                                        &#expected
-                                    ))?;
-                            )*
-                            #(
-                                let #rest_var = ::serde::Deserialize::deserialize(
-                                    #json_serde::FlattenedSequenceDeserializer::new(&mut seq)
-                                )?;
-                            )*
-                            Ok(#name_ident(
-                                #( #field_var, )*
-                                #( #rest_var, )*
-                            ))
-                        }
-                    }
-
-                    deserializer.deserialize_seq(Visitor)
-                }
-            }
+            #serde_serialize
+            #serde_deserialize
         }
     }
 
@@ -901,19 +896,19 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let inner_ident = typespace.render_ident(inner);
 
-        // Serialize and Deserialize are hand-written impls below, so they
-        // never appear as derives; other propagated traits are derived.
-        let derive_attr = typespace.render_derives(
-            &[],
-            traits,
-            &[TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
-        );
+        let derive_attr = typespace.render_derives(&traits);
 
-        debug!("constraints: {constraints:#?}");
+        // If either serde trait is derived, use the transparent attribute.
+        let serde_attr = (traits.contains(&TypespaceTrait::Serialize)
+            || traits.contains(&TypespaceTrait::Deserialize))
+        .then(|| {
+            quote! { #[serde(transparent)] }
+        });
 
         quote! {
             #description
             #derive_attr
+            #serde_attr
             pub struct #name_ident(pub #inner_ident);
 
             impl ::std::ops::Deref for #name_ident {
@@ -929,23 +924,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
 
-            impl ::serde::Serialize for #name_ident {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: ::serde::Serializer,
-                {
-                    self.0.serialize(serializer)
-                }
-            }
-
-            impl<'de> ::serde::Deserialize<'de> for #name_ident {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: ::serde::Deserializer<'de>,
-                {
-                    Ok(Self(::serde::Deserialize::deserialize(deserializer)?))
-                }
-            }
         }
     }
 }

@@ -1,4 +1,4 @@
-#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
 pub struct All {
     pub a_bool: bool,
     pub an_int: u32,
@@ -13,7 +13,7 @@ pub struct All {
     pub a_box_string: Box<String>,
     pub a_box_vec: Box<Vec<String>>,
 }
-#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
 pub struct Defaults {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub a_bool: bool,

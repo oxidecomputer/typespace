@@ -1,4 +1,4 @@
-#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
 pub struct ContainerDefaults {
     #[serde(default, skip_serializing_if = ":: std :: collections :: HashMap::is_empty")]
     pub a_map: ::std::collections::HashMap<::std::string::String, u32>,
@@ -15,7 +15,7 @@ pub struct ContainerDefaults {
     #[serde(default, skip_serializing_if = ":: serde_json :: Map::is_empty")]
     pub an_obj: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
 }
-#[derive(::serde::Deserialize, ::serde::Serialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
 pub struct Containers {
     pub a_map: ::std::collections::HashMap<::std::string::String, u32>,
     pub a_set: ::std::collections::BTreeSet<::std::string::String>,
