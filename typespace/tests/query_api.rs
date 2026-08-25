@@ -3,7 +3,7 @@
 use quote::quote;
 use typespace::{
     build::{
-        Enum, EnumTagType, EnumVariant, Native, Struct, StructProperty, StructPropertyState, Type,
+        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertyState, Type,
         VariantDetails,
     },
     no_cycles,
@@ -12,7 +12,7 @@ use typespace::{
 };
 
 fn make_typespace() -> typespace::Typespace<String> {
-    let mut builder = TypespaceBuilder::new(Settings::default());
+    let mut builder = TypespaceBuilder::default();
 
     let str_id = "str".to_string();
     builder.insert(str_id.clone(), Type::String).unwrap();
@@ -285,7 +285,7 @@ fn build_side_queries() {
 #[test]
 fn scoped_and_prefinalize_idents() {
     let mut builder =
-        TypespaceBuilder::new(Settings::default().with_std(typespace::settings::Std::Unqualified));
+        TypespaceBuilder::new(Settings::minimal().with_std(typespace::settings::Std::Unqualified));
 
     let str_id = "str".to_string();
     builder.insert(str_id.clone(), Type::String).unwrap();

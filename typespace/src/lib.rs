@@ -135,14 +135,6 @@ pub enum TypespaceTrait {
 }
 
 impl TypespaceTrait {
-    /// Whether the trait can be realized with a std-style derive.
-    ///
-    /// `Display` and `FromStr` have no derive form and may not appear
-    /// in a derive attribute.
-    pub(crate) fn is_derivable(&self) -> bool {
-        !matches!(self, TypespaceTrait::Display | TypespaceTrait::FromStr)
-    }
-
     pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
         if settings.std == Std::FullyQualified {
             match self {
@@ -293,7 +285,7 @@ pub struct TypespaceBuilder<Id> {
 impl<Id> Default for TypespaceBuilder<Id> {
     /// A builder with default [`settings::Settings`].
     fn default() -> Self {
-        Self::new(Settings::default())
+        Self::new(Settings::typical())
     }
 }
 
@@ -641,6 +633,22 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     /// Render the derive attribute given the computed traits for a type and
     /// the extra derives from settings.
     pub(crate) fn render_derives(&self, traits: &TypespaceTraitSet) -> Option<TokenStream> {
+        // Verify that traits that require manual implementation aren't
+        // included as derives. If this happens it indicates that either the
+        // finalize step didn't detect an unsatisfiable situation, or that the
+        // caller (a renderer for a type) neglected to implement (and remove)
+        // one of these traits.
+        [TypespaceTrait::Display, TypespaceTrait::FromStr]
+            .into_iter()
+            .for_each(|manual_trait| {
+                if traits.contains(&manual_trait) {
+                    panic!(
+                        "trying to derive {manual_trait} which requires a \
+                        manual implementation; this is a bug",
+                    )
+                }
+            });
+
         let mut derives = traits
             .iter()
             .map(|tt| tt.render(self.settings))

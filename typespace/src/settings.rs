@@ -4,10 +4,7 @@
 
 use serde::Deserialize;
 
-use crate::{
-    TypespaceTrait::{self, Serialize},
-    TypespaceTraitSet,
-};
+use crate::{TypespaceTrait, TypespaceTraitSet};
 
 // TODO 7/18/2025
 // I wanted to get this started to think through various settings that we might
@@ -81,26 +78,6 @@ pub struct Settings {
     pub(crate) extra_attrs: Vec<String>,
 }
 
-impl Default for Settings {
-    /// Built-in containers with their trait demands: maps and sets use
-    /// ordered lookup, so keys and elements require the `Ord` family.
-    fn default() -> Self {
-        Self {
-            std: Std::default(),
-            optional_nullable: OptionalNullable::default(),
-            map_type: None,
-            map_key_traits: ordered_lookup_traits(),
-            set_type: None,
-            set_element_traits: ordered_lookup_traits(),
-            vec_type: None,
-            required_traits: TypespaceTraitSet::empty(),
-            desired_traits: TypespaceTraitSet::empty(),
-            extra_derives: Default::default(),
-            extra_attrs: Default::default(),
-        }
-    }
-}
-
 /// The traits an ordered-lookup container (`BTreeMap`, or the ordered
 /// treatment of sets) demands of its key or element type. This is the
 /// default requirement set for maps and sets; container overrides
@@ -117,12 +94,9 @@ fn ordered_lookup_traits() -> TypespaceTraitSet {
 }
 
 impl Settings {
-    // TODO 8/20/2026
-    // I want to have a collection of typical presets to use for use cases such
-    // as macros (prefixes, normal traits), stand-alone crate generation, etc.
-    fn minimal() -> Self {
+    pub fn minimal() -> Self {
         Self {
-            std: Std::default(),
+            std: Std::FullyQualified,
             optional_nullable: OptionalNullable::default(),
             map_type: None,
             map_key_traits: ordered_lookup_traits(),
@@ -131,6 +105,64 @@ impl Settings {
             vec_type: None,
             required_traits: TypespaceTraitSet::empty(),
             desired_traits: TypespaceTraitSet::empty(),
+            extra_derives: Default::default(),
+            extra_attrs: Default::default(),
+        }
+    }
+
+    pub fn typical() -> Self {
+        Self {
+            std: Std::FullyQualified,
+            optional_nullable: OptionalNullable::default(),
+            map_type: None,
+            map_key_traits: ordered_lookup_traits(),
+            set_type: None,
+            set_element_traits: ordered_lookup_traits(),
+            vec_type: None,
+            required_traits: [
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+            ]
+            .into_iter()
+            .collect(),
+            desired_traits: TypespaceTraitSet::empty(),
+            extra_derives: Default::default(),
+            extra_attrs: Default::default(),
+        }
+    }
+
+    pub fn all_traits() -> Self {
+        Self {
+            std: Std::FullyQualified,
+            optional_nullable: OptionalNullable::default(),
+            map_type: None,
+            map_key_traits: ordered_lookup_traits(),
+            set_type: None,
+            set_element_traits: ordered_lookup_traits(),
+            vec_type: None,
+            required_traits: [
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+                TypespaceTrait::JsonSchema,
+            ]
+            .into_iter()
+            .collect(),
+            desired_traits: [
+                TypespaceTrait::Display,
+                TypespaceTrait::FromStr,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::Ord,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Hash,
+                TypespaceTrait::Default,
+            ]
+            .into_iter()
+            .collect(),
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
         }
@@ -346,7 +378,7 @@ impl std::fmt::Debug for ContainerType {
 #[serde(rename_all = "kebab-case")]
 pub enum Std {
     /// Fully qualify prelude types: `Option` renders as
-    /// `::std::option::Option`. This is the default.
+    /// `::std::option::Option`.
     #[default]
     FullyQualified,
     /// Render prelude types in their typical, auto-imported form. Useful
@@ -361,12 +393,15 @@ pub enum Std {
 pub enum OptionalNullable {
     /// Model `null` and `optional` as equivalent by using the
     /// `std::option::Option<T>` type. Skip serialization of `None` values.
-    /// This is the default.
+    /// This is the default--it's a typical configuration where `None` values
+    /// are omitted.
     #[default]
     ConflateAsAbsent,
 
     /// Model `null` and `optional` as equivalent by using the
     /// `std::option::Option<T>` type. `None` values are serialized as `null`.
+    /// This is the default behavior of `serde` absent any additional
+    /// attributes on a field.
     ConflateAsNull,
 
     /// Use a "double `Option`" of the form
@@ -384,4 +419,9 @@ pub enum OptionalNullable {
     /// is used with the serde `skip_serializing_if` attribute to omit the
     /// field.
     CustomType(String),
+    // 8/21/2026
+    // At the fringes to consider. Should we have a AbsentOptional traits that
+    // requires Default + Deserialize + Serialize, and requires an is_absent()
+    // method? We could shove it into json-serde, and we could impl it for
+    // Option<Option<T>>.
 }

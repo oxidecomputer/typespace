@@ -40,7 +40,7 @@ fn test_struct_field_serde() {
     let configs = [
         (
             "ConflatedAsAbsent",
-            Settings::default()
+            Settings::minimal()
                 .with_std(Std::Unqualified)
                 .with_required_trait(TypespaceTrait::Serialize)
                 .with_required_trait(TypespaceTrait::Deserialize)
@@ -48,7 +48,7 @@ fn test_struct_field_serde() {
         ),
         (
             "ConflatedAsNull",
-            Settings::default()
+            Settings::minimal()
                 .with_std(Std::Unqualified)
                 .with_required_trait(TypespaceTrait::Serialize)
                 .with_required_trait(TypespaceTrait::Deserialize)
@@ -56,7 +56,7 @@ fn test_struct_field_serde() {
         ),
         (
             "DoubleOption",
-            Settings::default()
+            Settings::minimal()
                 .with_std(Std::Unqualified)
                 .with_required_trait(TypespaceTrait::Serialize)
                 .with_required_trait(TypespaceTrait::Deserialize)
@@ -64,7 +64,7 @@ fn test_struct_field_serde() {
         ),
         (
             "CustomType",
-            Settings::default()
+            Settings::minimal()
                 .with_std(Std::Unqualified)
                 .with_required_trait(TypespaceTrait::Serialize)
                 .with_required_trait(TypespaceTrait::Deserialize)
@@ -202,7 +202,7 @@ fn test_struct_field_serde() {
 #[test]
 fn test_unit_struct() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize),
     );
@@ -232,7 +232,7 @@ fn test_unit_struct() {
 #[test]
 fn test_tuple_struct() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_std(Std::Unqualified)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_required_trait(TypespaceTrait::Serialize),
@@ -321,7 +321,7 @@ fn test_enums() {
 
     let outputs = configs.iter().map(|(name, tag_type)| {
         let mut builder = TypespaceBuilder::new(
-            Settings::default()
+            Settings::minimal()
                 .with_std(Std::Unqualified)
                 .with_required_trait(TypespaceTrait::Deserialize)
                 .with_required_trait(TypespaceTrait::Serialize),
@@ -426,7 +426,7 @@ fn test_enums() {
 #[test]
 fn test_newtype_struct() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
@@ -480,7 +480,7 @@ fn test_newtype_struct() {
 
 #[test]
 fn test_type_alias() {
-    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+    let mut builder = TypespaceBuilder::new(Settings::minimal().with_std(Std::Unqualified));
 
     let string_id = "string".to_string();
     builder.insert(string_id.clone(), Type::String).unwrap();
@@ -523,7 +523,7 @@ fn test_type_alias() {
 #[test]
 fn test_struct_serde_rename_flatten() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
@@ -586,7 +586,7 @@ fn test_struct_serde_rename_flatten() {
 
 #[test]
 fn test_native_type() {
-    let mut builder = TypespaceBuilder::new(Settings::default().with_std(Std::Unqualified));
+    let mut builder = TypespaceBuilder::new(Settings::minimal().with_std(Std::Unqualified));
 
     let uuid_id = "path".to_string();
     builder
@@ -616,7 +616,7 @@ fn test_native_type() {
 #[test]
 fn test_compound_field_types() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
@@ -1072,7 +1072,7 @@ fn test_insert_unbuilt_shape() {
 // the configured traits.
 #[test]
 fn test_map_key_traits_override() {
-    let settings = Settings::default().with_map_type(
+    let settings = Settings::minimal().with_map_type(
         "::std::collections::HashMap",
         [
             TypespaceTrait::Hash,
@@ -1126,7 +1126,7 @@ fn test_unknown_type_id() {
 #[test]
 fn test_cycles() {
     let mut builder = TypespaceBuilder::new(
-        Settings::default()
+        Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize),
     );
@@ -1213,7 +1213,7 @@ fn test_cycles() {
 fn test_container_overrides() {
     // HashMap wants hashing of its keys, not ordering; BTreeSet keeps
     // the ordered-comparison demands.
-    let settings = Settings::default()
+    let settings = Settings::minimal()
         .with_required_trait(TypespaceTrait::Serialize)
         .with_required_trait(TypespaceTrait::Deserialize)
         .with_map_type(
@@ -1339,7 +1339,7 @@ fn test_container_overrides() {
 // realized as derives; with_derive paths are appended opaquely.
 #[test]
 fn test_trait_impls() {
-    let settings = Settings::default()
+    let settings = Settings::minimal()
         .with_std(Std::Unqualified)
         .with_required_trait(typespace::TypespaceTrait::Serialize)
         .with_required_trait(typespace::TypespaceTrait::Deserialize)
@@ -1463,7 +1463,7 @@ fn test_trait_impls() {
 // surfaces an error when a leaf type cannot satisfy it.
 #[test]
 fn test_trait_impls_conflict() {
-    let settings = Settings::default().with_required_trait(typespace::TypespaceTrait::Eq);
+    let settings = Settings::minimal().with_required_trait(typespace::TypespaceTrait::Eq);
     let mut builder = TypespaceBuilder::new(settings);
 
     let float_id = "float".to_string();
@@ -1503,7 +1503,7 @@ fn test_trait_impls_conflict() {
 // An extra derive that isn't a valid Rust path is rejected at finalize.
 #[test]
 fn test_invalid_derive() {
-    let settings = Settings::default().with_derive("not a path!");
+    let settings = Settings::minimal().with_derive("not a path!");
     let builder = TypespaceBuilder::<String>::new(settings);
 
     let Err(err) = builder.finalize(no_cycles) else {
