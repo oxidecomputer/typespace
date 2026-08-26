@@ -627,6 +627,21 @@ where
                         },
                     );
                 }
+
+                // ::json_serde::Absent derives Clone, Debug, Default, Eq,
+                // Hash, Ord, PartialEq, and PartialOrd, and hand-writes
+                // Serialize, Deserialize, and (under the schemars08 and
+                // schemars1 features) JsonSchema; it has no Display or
+                // FromStr impl (see json-serde/src/lib.rs).
+                Type::Never => {
+                    let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "json_serde::Absent".to_string(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -641,7 +656,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        build::{Enum, EnumTagType, EnumVariant, Struct, StructProperty, Type, VariantDetails},
+        build::{
+            Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, Type,
+            VariantDetails,
+        },
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::Settings,
@@ -862,6 +880,86 @@ mod tests {
             .into_iter()
             .collect::<TypespaceTraitSet>();
         assert_eq!(built_traits(&typespace, "color"), expected);
+    }
+
+    /// A `Never` field satisfies every trait `Settings::typical`
+    /// requires: `::json_serde::Absent` derives `Clone` and `Debug` and
+    /// hand-writes `Serialize` and `Deserialize` (see
+    /// json-serde/src/lib.rs), so a struct containing one finalizes
+    /// without conflicts and the field's own trait set matches the
+    /// struct's.
+    #[test]
+    fn never_field_satisfies_typical_settings() {
+        // struct S {
+        //     gone: Never,
+        // }
+        let mut builder = TypespaceBuilder::new(Settings::typical());
+        builder.insert("never".to_string(), Type::Never).unwrap();
+        builder
+            .insert(
+                "s".to_string(),
+                Struct::new()
+                    .name("S")
+                    .properties(vec![StructProperty::new("gone", "never".to_string())])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let expected = [
+            TypespaceTrait::Clone,
+            TypespaceTrait::Debug,
+            TypespaceTrait::Serialize,
+            TypespaceTrait::Deserialize,
+        ]
+        .into_iter()
+        .collect::<TypespaceTraitSet>();
+        assert_eq!(built_traits(&typespace, "s"), expected);
+    }
+
+    /// `::json_serde::Absent` has no `Display` impl (see
+    /// json-serde/src/lib.rs). A newtype struct forwards a required
+    /// `Display` to its inner type unconditionally--`feasibility`'s
+    /// `NewtypeStruct` arm has no impossibility check of its own--so
+    /// wrapping a `Never` field surfaces the conflict at the leaf, not
+    /// at the newtype.
+    #[test]
+    fn required_display_conflicts_on_never_field() {
+        // struct Wrapper(Never);
+        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Display);
+        let mut builder = TypespaceBuilder::new(settings);
+        builder.insert("never".to_string(), Type::Never).unwrap();
+        builder
+            .insert(
+                "wrapper".to_string(),
+                NewtypeStruct::new("never".to_string())
+                    .name("Wrapper")
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::Display);
+        assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
+        assert_eq!(conflict.offender, "never");
+        assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
+        assert_eq!(conflict.path[0].type_id, "wrapper");
+        assert!(matches!(conflict.path[0].relation, Relation::Inner));
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::Primitive { type_name } if type_name == "json_serde::Absent"
+        ));
     }
 
     /// Requiring a trait requires its supertraits: Ord alone expands

@@ -136,6 +136,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             build::Type::Integer(s) => TypeDetails::Builtin(s.as_str()),
             build::Type::Float(s) => TypeDetails::Builtin(s.as_str()),
             build::Type::JsonValue => TypeDetails::Builtin("::serde_json::Value"),
+            build::Type::Never => TypeDetails::Builtin("::json_serde::Absent"),
             build::Type::Native(n) => TypeDetails::Builtin(n.name.as_str()),
 
             // Treat these less-common named types as opaque to callers.

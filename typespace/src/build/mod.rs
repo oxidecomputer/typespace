@@ -68,6 +68,7 @@ pub enum Type<Id> {
     Float(String),
     String,
     JsonValue,
+    Never,
 }
 
 impl<Id> Type<Id> {
@@ -166,6 +167,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::Integer(_) => Vec::new(),
             Type::Float(_) => Vec::new(),
             Type::JsonValue => Vec::new(),
+            Type::Never => Vec::new(),
         }
     }
 
@@ -265,7 +267,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             | Type::Integer(_)
             | Type::Float(_)
             | Type::String
-            | Type::JsonValue => Vec::new(),
+            | Type::JsonValue
+            | Type::Never => Vec::new(),
         }
     }
 
@@ -353,7 +356,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             | Type::Integer(_)
             | Type::Float(_)
             | Type::String
-            | Type::JsonValue => Default::default(),
+            | Type::JsonValue
+            | Type::Never => Default::default(),
         }
     }
 
@@ -429,7 +433,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             | Type::Integer(_)
             | Type::Float(_)
             | Type::String
-            | Type::JsonValue => Vec::new(),
+            | Type::JsonValue
+            | Type::Never => Vec::new(),
         }
     }
 

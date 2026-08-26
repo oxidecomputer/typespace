@@ -613,6 +613,49 @@ fn test_native_type() {
     fn inner() {}
 }
 
+/// A `Type::Never` field renders as `::json_serde::Absent`, the leaf
+/// type's fully-qualified external path--mirroring how `Type::JsonValue`
+/// renders as `::serde_json::Value`--and is unconditionally
+/// `#[serde(skip)]`ped: `Absent`'s `Serialize` impl always errors, so
+/// the field must never be serialized.
+#[test]
+fn test_never_field() {
+    let mut builder = TypespaceBuilder::new(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize),
+    );
+
+    builder.insert("never".to_string(), Type::Never).unwrap();
+
+    builder
+        .insert(
+            "Gone".to_string(),
+            Struct::new()
+                .name("Gone")
+                .properties(vec![StructProperty::new("value", "never".to_string())])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_field.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::Gone {
+            value: ::json_serde::Absent,
+        };
+
+        // The skip is unconditional: serializing produces an empty
+        // object (Absent's Serialize would error if it were ever
+        // invoked), and deserializing an empty object succeeds,
+        // filling the field via Absent's Default.
+        assert_eq!(serde_json::to_string(&value).unwrap(), "{}");
+        assert!(serde_json::from_str::<import::Gone>("{}").is_ok());
+    }
+}
+
 #[test]
 fn test_compound_field_types() {
     let mut builder = TypespaceBuilder::new(

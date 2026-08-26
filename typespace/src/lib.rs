@@ -40,7 +40,8 @@
 //!     (also `::json_serde::deserialize_some`);
 //!   - a [`build::TupleStruct`] with a `rest` field (its serde impls use
 //!     `::json_serde::FlattenedSequenceSerializer` and
-//!     `::json_serde::FlattenedSequenceDeserializer`).
+//!     `::json_serde::FlattenedSequenceDeserializer`);
+//!   - a [`build::Type::Never`] (rendered as `::json_serde::Absent`).
 //!
 //!   The `::json_serde` path itself follows
 //!   [`settings::Settings::with_json_serde_crate`], for consumers that
@@ -826,6 +827,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 Std::Unqualified => quote! { String },
             },
             Type::JsonValue => quote! { ::serde_json::Value },
+            Type::Never => quote! { ::json_serde::Absent },
             Type::Unit => quote! { () },
         }
     }
@@ -879,6 +881,26 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         };
 
         let ty_ident = self.render_ident(type_id);
+
+        // A Never property is always absent, regardless of its declared
+        // state: ::json_serde::Absent has exactly one value and its
+        // Serialize impl always errors, so the field is skipped in both
+        // directions (deserialization fills it via Absent's Default).
+        if matches!(ty, Type::Never) {
+            serde_options.push(quote! { skip });
+            let serde = quote! {
+                #[serde(
+                    #( #serde_options ),*
+                )]
+            };
+            let vis_pub = vis_pub.then(|| quote! { pub });
+            let rust_name_ident = format_ident!("{rust_name}");
+            return quote! {
+                #description
+                #serde
+                #vis_pub #rust_name_ident: #ty_ident
+            };
+        }
 
         let std_opt_type = match &self.settings.std {
             Std::FullyQualified => quote! { ::std::option::Option },
@@ -1084,6 +1106,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // This isn't a runtime error that could be handled; it's a
             // programming error.
             Type::JsonValue => panic!("Default value for JsonValue is not supported"),
+
+            // Unreachable: render_struct_property short-circuits Never
+            // properties (always #[serde(skip)]) before any state
+            // handling, so no state-specific skip logic runs for them.
+            Type::Never => unreachable!("Never properties are skipped before state handling"),
         }
     }
 }
