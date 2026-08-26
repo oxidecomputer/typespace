@@ -1490,13 +1490,13 @@ fn test_trait_impls_conflict() {
     assert_eq!(conflicts.len(), 1);
     let conflict = &conflicts[0];
     assert!(matches!(conflict.required, TypespaceTrait::Eq));
-    assert!(matches!(conflict.origin, RequirementOrigin::Requested));
+    assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
     assert_eq!(conflict.offender, "float");
     assert_eq!(
         conflict.to_string(),
         "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
          required because `Holder` passes the requirement to its field `value`\n    \
-         required because settings request `Eq` for all types"
+         required because global settings require `Eq` of all types"
     );
 }
 

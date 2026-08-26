@@ -60,10 +60,11 @@
 pub mod build;
 pub mod error;
 pub mod settings;
+pub(crate) mod trait_resolution;
 pub(crate) mod value_tokens;
 pub mod view;
 
-use std::collections::{btree_map::Entry, BTreeMap, BTreeSet, VecDeque};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
@@ -72,7 +73,7 @@ use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct,
 };
-use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
+use crate::error::Error;
 use crate::settings::{OptionalNullable, Settings, Std};
 
 // 6/25/2025
@@ -417,7 +418,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // it on a disposable copy of the graph.
         let mut types = self.types.clone();
         build_commons(&mut types);
-        push_traits(&mut types, &self.settings)?;
+        trait_resolution::resolve_traits(&mut types, &self.settings)?;
         Ok(())
     }
 
@@ -507,7 +508,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
         build_commons(&mut types);
         break_cycles(&mut types, make_box_id);
-        push_traits(&mut types, &settings)?;
+        trait_resolution::resolve_traits(&mut types, &settings)?;
 
         Ok(Typespace { types, settings })
     }
@@ -1210,378 +1211,5 @@ where
                 }
             }
         }
-    }
-}
-
-fn push_traits<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Settings) -> Result<(), Error<Id>>
-where
-    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
-{
-    /// A pending trait requirement: `traits` are required of `target`,
-    /// tracing back to `origin` along the hops in `path`.
-    struct WorkItem<Id> {
-        target: Id,
-        traits: TypespaceTraitSet,
-        origin: RequirementOrigin<Id>,
-        path: Vec<PathStep<Id>>,
-    }
-
-    // First, look through all types to determine what traits are required of
-    // various children. The requirement sets come from settings: the
-    // configured map and set types state what they demand of their key
-    // and element types (the built-in defaults demand the Ord family).
-    let mut work = types
-        .iter()
-        .filter_map(|(type_id, ty)| match ty {
-            Type::Map(key_schema_ref, _) => Some(WorkItem {
-                target: key_schema_ref.clone(),
-                traits: settings.map_key_traits.clone(),
-                origin: RequirementOrigin::MapKey(type_id.clone()),
-                path: Vec::new(),
-            }),
-            Type::Set(element_schema_ref) => Some(WorkItem {
-                target: element_schema_ref.clone(),
-                traits: settings.set_element_traits.clone(),
-                origin: RequirementOrigin::SetElement(type_id.clone()),
-                path: Vec::new(),
-            }),
-            _ => None,
-        })
-        .collect::<VecDeque<_>>();
-
-    // Traits requested via Settings::with_trait_impl seed the trait set of
-    // every named type. We route the seeds through the normal work queue
-    // rather than writing them into TypeCommonBuilt directly so that they
-    // propagate to contained types--and are checked against native and
-    // built-in leaf types--exactly like structural requirements.
-    if !settings.required_traits.is_empty() {
-        work.extend(
-            types
-                .iter()
-                .filter(|(_, ty)| ty.is_named())
-                .map(|(type_id, _)| WorkItem {
-                    target: type_id.clone(),
-                    traits: settings.required_traits.clone(),
-                    origin: RequirementOrigin::Requested,
-                    path: Vec::new(),
-                }),
-        );
-    }
-
-    let mut conflicts = Vec::<TraitConflict<Id>>::new();
-
-    // Split `traits` into those present in `unsupported` and the rest.
-    let split = |traits: &TypespaceTraitSet, unsupported: &[TypespaceTrait]| {
-        let bad = traits
-            .iter()
-            .filter(|tt| unsupported.contains(tt))
-            .copied()
-            .collect::<Vec<_>>();
-        let rest = traits
-            .iter()
-            .filter(|tt| !unsupported.contains(tt))
-            .copied()
-            .collect::<TypespaceTraitSet>();
-        (bad, rest)
-    };
-
-    // Drop Default from a requirement set: used at containers (vec, map,
-    // set, option) that implement Default regardless of their element
-    // types.
-    let strip_default = |traits: TypespaceTraitSet| {
-        traits
-            .iter()
-            .filter(|tt| !matches!(tt, TypespaceTrait::Default))
-            .copied()
-            .collect::<TypespaceTraitSet>()
-    };
-
-    // Traits no container can provide.
-    const CONTAINER_UNSUPPORTED: &[TypespaceTrait] =
-        &[TypespaceTrait::Display, TypespaceTrait::FromStr];
-
-    // In each iteration, we need to assert the set of required traits to the
-    // current type. If the current type is generated, that means adding the
-    // traits and pushing children. If the type is **not** generated (native or
-    // otherwise external to our control), we need to check that is implements
-    // (or is capable of implementing) the required traits; if it doesn't (or
-    // can't), we'll produce an error. We don't stop on the first failure, but
-    // want to identify as many, distinct failures as is reasonable and as
-    // would be useful for a consumer.
-    while let Some(WorkItem {
-        target,
-        traits,
-        origin,
-        path,
-    }) = work.pop_front()
-    {
-        let ty = types.get_mut(&target).unwrap();
-
-        // Record one conflict per unsatisfiable trait at this type.
-        let mut conflict = |bad: Vec<TypespaceTrait>, reason: OffenderReason| {
-            conflicts.extend(bad.into_iter().map(|required| TraitConflict {
-                required,
-                origin: origin.clone(),
-                path: path.clone(),
-                offender: target.clone(),
-                reason: reason.clone(),
-            }));
-        };
-
-        // Extend the path with a hop leaving the current type.
-        let hop = |relation: Relation| {
-            let mut next = path.clone();
-            next.push(PathStep {
-                type_id: target.clone(),
-                relation,
-            });
-            next
-        };
-
-        // Every named type absorbs requirements into its built trait set;
-        // requirements then flow onward to its contained children. For a
-        // type alias the "contained child" is its target, so requirements
-        // imposed on the alias reach the type it names.
-        let common_built = match ty {
-            Type::NewtypeStruct(NewtypeStruct { common, .. })
-            | Type::Enum(Enum { common, .. })
-            | Type::Struct(Struct { common, .. })
-            | Type::UnitStruct(UnitStruct { common, .. })
-            | Type::TupleStruct(TupleStruct { common, .. })
-            | Type::TypeAlias(TypeAlias { common, .. }) => Some(common.built.as_mut().unwrap()),
-
-            _ => None,
-        };
-
-        if let Some(common) = common_built {
-            let built_traits = &mut common.traits;
-            // Collect the traits that this type doesn't already have.
-            let mut new_traits = TypespaceTraitSet::empty();
-
-            for trait_name in traits {
-                if !built_traits.contains(&trait_name) {
-                    built_traits.add(trait_name);
-                    new_traits.add(trait_name);
-                }
-            }
-
-            if !new_traits.is_empty() {
-                for (relation, child_id) in ty.contained_children_related() {
-                    work.push_back(WorkItem {
-                        target: child_id,
-                        traits: new_traits.clone(),
-                        origin: origin.clone(),
-                        path: hop(relation),
-                    });
-                }
-            }
-        } else {
-            match ty {
-                Type::Enum(_)
-                | Type::Struct(_)
-                | Type::UnitStruct(_)
-                | Type::TupleStruct(_)
-                | Type::NewtypeStruct(_)
-                | Type::TypeAlias(_) => unreachable!(),
-
-                Type::Native(Native { name, impls, .. }) => {
-                    let missing_traits = traits.difference(impls).copied().collect::<Vec<_>>();
-                    let reason = OffenderReason::NativeMissingImpl {
-                        type_name: name.clone(),
-                    };
-                    conflict(missing_traits, reason);
-                }
-
-                // Pass the buck... except for Default, which Option<T>
-                // implements no matter what T is.
-                Type::Option(schema_ref) => {
-                    let pass = strip_default(traits);
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: schema_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-                Type::Box(schema_ref) => {
-                    work.push_back(WorkItem {
-                        target: schema_ref.clone(),
-                        traits,
-                        origin,
-                        path: hop(Relation::Boxed),
-                    });
-                }
-
-                // Vec<T> and arrays impl everything we care about--except for
-                // Display and FromStr--as long as T implemented them. Vec<T>
-                // additionally implements Default unconditionally.
-                Type::Vec(schema_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "Vec".to_string(),
-                        },
-                    );
-                    let pass = strip_default(rest);
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: schema_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-                Type::Array(schema_ref, _) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "array".to_string(),
-                        },
-                    );
-                    if !rest.is_empty() {
-                        work.push_back(WorkItem {
-                            target: schema_ref.clone(),
-                            traits: rest,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-                // Tuples implement everything except for Display and FromStr
-                // as long as all their component types do as well.
-                Type::Tuple(schema_refs) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "tuple".to_string(),
-                        },
-                    );
-                    if !rest.is_empty() {
-                        for schema_ref in schema_refs {
-                            work.push_back(WorkItem {
-                                target: schema_ref.clone(),
-                                traits: rest.clone(),
-                                origin: origin.clone(),
-                                path: hop(Relation::Element),
-                            });
-                        }
-                    }
-                }
-
-                // Like Vec, the map and set containers implement the traits
-                // we care about--except for Display and FromStr--as long as
-                // their key/value/element types do; both implement Default
-                // unconditionally.
-                Type::Map(key_ref, value_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "map".to_string(),
-                        },
-                    );
-                    let pass = strip_default(rest);
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: key_ref.clone(),
-                            traits: pass.clone(),
-                            origin: origin.clone(),
-                            path: hop(Relation::Key),
-                        });
-                        work.push_back(WorkItem {
-                            target: value_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Value),
-                        });
-                    }
-                }
-                Type::Set(element_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "set".to_string(),
-                        },
-                    );
-                    let pass = strip_default(rest);
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: element_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-
-                // Floating-point types have no total ordering, no equality
-                // relation, and no hash.
-                Type::Float(name) => {
-                    let (bad, _) = split(
-                        &traits,
-                        &[
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::Eq,
-                            TypespaceTrait::Hash,
-                        ],
-                    );
-                    let reason = OffenderReason::Primitive {
-                        type_name: name.clone(),
-                    };
-                    conflict(bad, reason);
-                }
-
-                // Integers and booleans implement every trait we track.
-                Type::Integer(_) | Type::Boolean => (),
-
-                // The unit type implements everything except Display and
-                // FromStr.
-                Type::Unit => {
-                    let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "()".to_string(),
-                        },
-                    );
-                }
-
-                // String implements every trait we track.
-                Type::String => (),
-
-                // JsonValue implements everything except for Eq, Ord,
-                // PartialOrd, and Hash.
-                Type::JsonValue => {
-                    let (bad, _) = split(
-                        &traits,
-                        &[
-                            TypespaceTrait::Eq,
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::PartialOrd,
-                            TypespaceTrait::Hash,
-                        ],
-                    );
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "serde_json::Value".to_string(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    if conflicts.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::TraitConflicts { conflicts })
     }
 }

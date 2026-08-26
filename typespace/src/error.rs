@@ -207,6 +207,11 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                 "native type `{type_name}` (id `{offender}`) does not \
                  declare the required trait `{required}`"
             )?,
+            OffenderReason::TypeCannotImplement { kind } => write!(
+                f,
+                "the generated {kind} with id `{offender}` cannot \
+                 implement the required trait `{required}`"
+            )?,
         }
         // Render the chain innermost first, rustc style: each hop names
         // the type that passed the requirement along and the relation it
@@ -233,11 +238,11 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                      implement `{required}`"
                 )
             }
-            RequirementOrigin::Requested => {
+            RequirementOrigin::GlobalSettings => {
                 write!(
                     f,
-                    "\n    required because settings request `{required}` \
-                     for all types"
+                    "\n    required because global settings require \
+                     `{required}` of all types"
                 )
             }
         }
@@ -253,9 +258,9 @@ pub enum RequirementOrigin<Id> {
     /// The requirement applies to the element type of the set with this
     /// ID.
     SetElement(Id),
-    /// The requirement was requested for all named types via
-    /// [`Settings::with_trait_impl`](crate::settings::Settings::with_trait_impl).
-    Requested,
+    /// The requirement applies to every named type, via
+    /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).
+    GlobalSettings,
 }
 
 /// One hop in a trait requirement's propagation path.
@@ -328,5 +333,12 @@ pub enum OffenderReason {
     NativeMissingImpl {
         /// The Rust type path of the native type.
         type_name: String,
+    },
+    /// A generated type that cannot implement the trait in any form:
+    /// no derive exists and rendering has no manual implementation for
+    /// the combination--`Display` on a struct, say.
+    TypeCannotImplement {
+        /// The kind of type (`"struct"`, `"enum"`, ...).
+        kind: &'static str,
     },
 }

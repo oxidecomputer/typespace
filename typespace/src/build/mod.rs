@@ -364,8 +364,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// keep the two functions in sync. Container types that trait
     /// propagation handles directly (box, vec, map, set) report no
     /// children here, exactly as `contained_children_mut` does.
-    pub(crate) fn contained_children_related(&self) -> Vec<(crate::Relation, Id)> {
-        use crate::Relation;
+    pub(crate) fn contained_children_related(&self) -> Vec<(crate::error::Relation, Id)> {
+        use crate::error::Relation;
         match self {
             Type::Enum(Enum { variants, .. }) => {
                 let mut out = Vec::new();
