@@ -1072,18 +1072,13 @@ fn test_duplicate_type_names() {
         name,
         first,
         second,
-    }) = builder.validate()
+    }) = builder.finalize(no_cycles)
     else {
-        panic!("expected validate to fail with a duplicate type name");
+        panic!("expected finalize to fail with a duplicate type name");
     };
     assert_eq!(name, "Twin");
     assert_eq!(first, "first");
     assert_eq!(second, "second");
-
-    assert!(matches!(
-        builder.finalize(no_cycles),
-        Err(Error::DuplicateTypeName { .. })
-    ));
 }
 
 // Type's variants are not sealed, so an unbuilt shape can be smuggled into
@@ -1644,9 +1639,8 @@ fn test_native_map_key() {
         )
         .unwrap();
 
-    // validate() reports the conflicts and leaves the builder usable.
-    let Err(Error::TraitConflicts { conflicts }) = builder.validate() else {
-        panic!("expected validate to fail with trait conflicts");
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
     };
     assert_eq!(conflicts.len(), 4);
     for conflict in &conflicts {
@@ -1667,12 +1661,6 @@ fn test_native_map_key() {
          required trait `Eq`\n    \
          required because keys of map `map` must implement `Eq`"
     );
-
-    // finalize reports the same failure.
-    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
-        panic!("expected finalize to fail with trait conflicts");
-    };
-    assert_eq!(conflicts.len(), 4);
 
     // Declaring the comparison impls fixes the conflict.
     let declared = [
@@ -1705,6 +1693,5 @@ fn test_native_map_key() {
         )
         .unwrap();
 
-    builder.validate().expect("validate passes");
     builder.finalize(no_cycles).expect("finalize passes");
 }

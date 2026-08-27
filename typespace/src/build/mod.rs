@@ -272,7 +272,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
-
     /// Children that this type "contains" (i.e. cycle-breaking candidates).
     pub fn contained_children(&self) -> Vec<Id> {
         match self {
@@ -489,4 +488,3 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 }
-

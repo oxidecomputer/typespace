@@ -407,29 +407,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         }
     }
 
-    /// Validate the type graph without consuming the builder.
-    ///
-    /// Runs the same checks as [`finalize`](Self::finalize)--settings
-    /// validity, dangling references, type-name uniqueness, and
-    /// trait-requirement propagation--and reports the same errors,
-    /// including every [`TraitConflict`] collected. Containment cycles are not broken
-    /// (that requires minting box IDs), so conflict paths lack the
-    /// `Boxed` hops that finalization would introduce; requirements
-    /// propagate identically either way because a box only forwards
-    /// them.
-    pub fn validate(&self) -> Result<(), Error<Id>> {
-        self.check_derives()?;
-        self.check_references()?;
-        self.check_type_names()?;
-
-        // Trait propagation writes into each type's built state, so run
-        // it on a disposable copy of the graph.
-        let mut types = self.types.clone();
-        build_commons(&mut types);
-        trait_resolution::resolve_traits(&mut types, &self.settings)?;
-        Ok(())
-    }
-
     /// Reject unparseable extra derives so that rendering--which is
     /// infallible--can rely on them parsing.
     fn check_derives(&self) -> Result<(), Error<Id>> {
