@@ -17,6 +17,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use log::debug;
+
 use crate::build::{
     EnumTagType, Native, NewtypeConstraints, NewtypeStruct, Struct, TupleStruct, Type,
 };
@@ -39,9 +41,10 @@ where
 {
     required_resolution(types, settings)?;
 
-    // Desired-trait resolution (the greatest-fixed-point phase over
-    // settings.desired_traits) lands with its own tests; until then it
-    // is a deliberate no-op and desired_traits is silently ignored.
+    // The desired phase runs only once every required trait is
+    // settled: it counts what required resolution granted as present,
+    // and never takes any of it away.
+    desired_resolution(types, settings);
 
     Ok(())
 }
@@ -70,6 +73,10 @@ fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     }
     traits
 }
+
+// Traits no container can provide.
+const CONTAINER_UNSUPPORTED: &[TypespaceTrait] =
+    &[TypespaceTrait::Display, TypespaceTrait::FromStr];
 
 /// What a named type can do about one required trait.
 ///
@@ -317,10 +324,6 @@ where
             .copied()
             .collect::<TypespaceTraitSet>()
     };
-
-    // Traits no container can provide.
-    const CONTAINER_UNSUPPORTED: &[TypespaceTrait] =
-        &[TypespaceTrait::Display, TypespaceTrait::FromStr];
 
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means consulting
@@ -662,9 +665,310 @@ where
     }
 }
 
+/// `trait_name` and every trait that cannot survive without it.
+///
+/// The supertrait closure run backwards: `Ord` needs `PartialOrd`,
+/// `Eq`, and `PartialEq`, and `Eq` and `PartialOrd` each need
+/// `PartialEq`, so a type that loses one of those loses everything
+/// resting on it.
+fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = TypespaceTrait> {
+    let dependents: &'static [TypespaceTrait] = match trait_name {
+        TypespaceTrait::PartialEq => &[
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialOrd,
+            TypespaceTrait::Ord,
+        ],
+        TypespaceTrait::Eq | TypespaceTrait::PartialOrd => &[TypespaceTrait::Ord],
+        _ => &[],
+    };
+    std::iter::once(trait_name).chain(dependents.iter().copied())
+}
+
+/// Whether `ty` provides `trait_name`, given `has`.
+///
+/// `has` records what the types `ty` is built from still have. A
+/// named type answers from the feasibility table: an impossible
+/// trait is never provided, a derived or forwarded one needs every
+/// contained child, and a manually realized one needs only the targets
+/// that realization obligates--often none at all, as with an attached
+/// default value. Containers and built-in types answer with the rules
+/// required resolution applies to them, hop for hop: a container
+/// forwards a trait to its parameters, except that no container has
+/// `Display` or `FromStr` and `Option`, `Vec`, maps, and sets provide
+/// `Default` whatever they hold.
+fn provides<Id>(
+    ty: &Type<Id>,
+    trait_name: TypespaceTrait,
+    has: &BTreeMap<Id, TypespaceTraitSet>,
+) -> bool
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let child_has = |child: &Id| {
+        has.get(child)
+            .is_some_and(|traits| traits.contains(&trait_name))
+    };
+
+    if ty.is_named() {
+        match feasibility(ty, trait_name) {
+            Feasibility::Impossible => false,
+            Feasibility::Derivable | Feasibility::Forward => ty
+                .contained_children_related()
+                .iter()
+                .all(|(_, child)| child_has(child)),
+            Feasibility::ManuallyRealizable(obligations) => obligations
+                .iter()
+                .all(|(_, obligated)| child_has(obligated)),
+        }
+    } else {
+        let supported = !CONTAINER_UNSUPPORTED.contains(&trait_name);
+        let is_default = matches!(trait_name, TypespaceTrait::Default);
+
+        match ty {
+            Type::Enum(_)
+            | Type::Struct(_)
+            | Type::UnitStruct(_)
+            | Type::TupleStruct(_)
+            | Type::NewtypeStruct(_)
+            | Type::TypeAlias(_) => unreachable!(),
+
+            Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
+
+            // Pass the buck... except for Default, which Option<T>
+            // implements no matter what T is.
+            Type::Option(schema_ref) => is_default || child_has(schema_ref),
+            Type::Box(schema_ref) => child_has(schema_ref),
+
+            // Vec<T> and the map and set containers implement the
+            // traits we care about--except for Display and
+            // FromStr--as long as their parameters do; all three
+            // implement Default unconditionally.
+            Type::Vec(schema_ref) | Type::Set(schema_ref) => {
+                supported && (is_default || child_has(schema_ref))
+            }
+            Type::Map(key_ref, value_ref) => {
+                supported && (is_default || (child_has(key_ref) && child_has(value_ref)))
+            }
+
+            // Arrays and tuples forward everything they can provide,
+            // Default included.
+            Type::Array(schema_ref, _) => supported && child_has(schema_ref),
+            Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
+
+            // Integers, booleans, and String implement every trait we
+            // track.
+            Type::Integer(_) | Type::Boolean | Type::String => true,
+
+            // The unit type and ::json_serde::Absent implement
+            // everything except Display and FromStr.
+            Type::Unit | Type::Never => supported,
+
+            // Floating-point types have no total ordering, no equality
+            // relation, and no hash.
+            Type::Float(_) => !matches!(
+                trait_name,
+                TypespaceTrait::Ord | TypespaceTrait::Eq | TypespaceTrait::Hash
+            ),
+
+            // JsonValue implements everything except for Eq, Ord,
+            // PartialOrd, and Hash.
+            Type::JsonValue => !matches!(
+                trait_name,
+                TypespaceTrait::Eq
+                    | TypespaceTrait::Ord
+                    | TypespaceTrait::PartialOrd
+                    | TypespaceTrait::Hash
+            ),
+        }
+    }
+}
+
+/// The traits required resolution granted `type_id`.
+///
+/// `None` for a type with no trait set of its own.
+fn granted_traits<'a, Id>(
+    types: &'a BTreeMap<Id, Type<Id>>,
+    type_id: &Id,
+) -> Option<&'a TypespaceTraitSet>
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    types
+        .get(type_id)
+        .and_then(|ty| ty.common())
+        .and_then(|common| common.built.as_ref())
+        .map(|built| &built.traits)
+}
+
+/// One type's loss of one desired trait, yet to propagate.
+struct Loss<Id> {
+    loser: Id,
+    trait_name: TypespaceTrait,
+}
+
+/// The desired phase's working state.
+///
+/// What each type still has, and the losses waiting to reach the
+/// types that refer to the loser.
+struct Poison<Id> {
+    has: BTreeMap<Id, TypespaceTraitSet>,
+    queue: VecDeque<Loss<Id>>,
+}
+
+impl<Id> Poison<Id>
+where
+    Id: Clone + Ord + std::fmt::Display,
+{
+    /// Take `trait_name` and its dependents from `loser`.
+    ///
+    /// Each trait that was still there is queued for propagation.
+    /// `blocker` is the type whose own loss caused this one, or
+    /// `loser` itself when the type simply cannot provide the trait;
+    /// it names the cause in the log line. `granted` is what required
+    /// resolution gave the type: those traits stay, since phase 1
+    /// proved them realizable through every hop below.
+    fn lose(
+        &mut self,
+        loser: &Id,
+        trait_name: TypespaceTrait,
+        blocker: &Id,
+        granted: Option<&TypespaceTraitSet>,
+    ) {
+        let traits = self.has.get_mut(loser).unwrap();
+        for lost in strip_dependents(trait_name) {
+            if granted.is_some_and(|granted| granted.contains(&lost)) {
+                continue;
+            }
+            if traits.remove(lost) {
+                debug!("desired trait {lost} dropped from {loser}, blocked by {blocker}");
+                self.queue.push_back(Loss {
+                    loser: loser.clone(),
+                    trait_name: lost,
+                });
+            }
+        }
+    }
+}
+
+/// Give every named type the desired traits nothing blocks.
+///
+/// Each type starts out assumed to have every desired trait. The
+/// traits a type cannot provide seed a work queue, and each loss
+/// poisons that trait in the types that refer to the loser, which
+/// poison their own referrers in turn, until the queue drains. A
+/// referrer only loses the trait if it can no longer provide it, so a
+/// hop that absorbs the loss--`Vec<T>` keeps `Default` however `T`
+/// fares--stops the poison there.
+///
+/// Running the queue along referrer edges is required resolution's
+/// descent in reverse, and it needs no rule for cycles: a recursive
+/// type keeps a trait precisely because nothing ever poisoned it.
+///
+/// What survives is granted family by family: a trait the request
+/// closure added rides on the trait that asked for it and goes when it
+/// goes.
+///
+/// Losses are silent. A desired trait that does not survive is absent
+/// from the built set with nothing recorded, which is the whole
+/// contrast with a required trait.
+fn desired_resolution<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Settings)
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    // Every member of the request closure has to be evaluated, whether
+    // or not it was desired directly, since a family survives only if
+    // all of it does.
+    let desired = close_supertraits(settings.desired_traits.clone());
+    if desired.is_empty() {
+        return;
+    }
+
+    // Each desired trait paired with the supertraits its request
+    // closure adds. A closure member is not desired on its own
+    // account--it is there so that a granted derive compiles--so a
+    // family is granted or dropped whole: a type that cannot have Eq
+    // has no use for the PartialEq that Eq's closure asked for.
+    let families = settings
+        .desired_traits
+        .iter()
+        .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
+        .collect::<Vec<_>>();
+
+    // The inverse of Type::children: the types referring to each type,
+    // which is the direction a loss travels. Type::children reports
+    // nothing for a native type, so a native's type parameters are not
+    // reached from here.
+    let referrers = types.iter().fold(
+        BTreeMap::<Id, Vec<Id>>::new(),
+        |mut referrers, (type_id, ty)| {
+            for child in ty.children() {
+                referrers.entry(child).or_default().push(type_id.clone());
+            }
+            referrers
+        },
+    );
+
+    let mut state = Poison {
+        has: types
+            .keys()
+            .map(|type_id| (type_id.clone(), desired.clone()))
+            .collect(),
+        queue: VecDeque::new(),
+    };
+
+    // Seed the queue with what a type cannot provide even with every
+    // constituent assumed capable: a native or built-in leaf without
+    // the impl, a container that has no such impl at all, and a named
+    // type whose kind rules the trait out.
+    let seeds = types
+        .iter()
+        .flat_map(|(type_id, ty)| {
+            desired
+                .iter()
+                .filter(|trait_name| !provides(ty, **trait_name, &state.has))
+                .map(|trait_name| (type_id.clone(), *trait_name))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for (type_id, trait_name) in seeds {
+        let granted = granted_traits(types, &type_id);
+        state.lose(&type_id, trait_name, &type_id, granted);
+    }
+
+    while let Some(Loss { loser, trait_name }) = state.queue.pop_front() {
+        for referrer in referrers.get(&loser).into_iter().flatten() {
+            let ty = types.get(referrer).unwrap();
+            if state.has[referrer].contains(&trait_name) && !provides(ty, trait_name, &state.has) {
+                let granted = granted_traits(types, referrer);
+                state.lose(referrer, trait_name, &loser, granted);
+            }
+        }
+    }
+
+    // A named type's built set is what required resolution absorbed
+    // plus the desired families that survived whole.
+    for (type_id, ty) in types.iter_mut() {
+        if let Some(common) = ty.common_mut() {
+            let survivors = state.has.remove(type_id).unwrap();
+            let built = common.built.as_mut().unwrap();
+            for family in &families {
+                if family
+                    .iter()
+                    .all(|trait_name| survivors.contains(trait_name))
+                {
+                    for trait_name in family.iter() {
+                        built.traits.add(*trait_name);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
+        build::{Native, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::Settings,
@@ -1061,5 +1365,732 @@ mod tests {
         // This should panic per the new render_derives guard, even though
         // finalize() succeeded without error.
         let _ = ts.to_codespace();
+    }
+
+    // Desired-trait resolution (phase 2). Every test below states what
+    // the greatest-fixed-point phase must do with `desired_traits`; a
+    // desired trait a type cannot realize is dropped with no error and
+    // no record, which is the whole contrast with a required trait.
+
+    /// The trait set holding exactly `traits`.
+    fn trait_set(traits: impl IntoIterator<Item = TypespaceTrait>) -> TypespaceTraitSet {
+        traits.into_iter().collect()
+    }
+
+    /// [`Settings::minimal`] with each of `traits` desired. Minimal
+    /// settings require nothing, so a built trait set holds exactly
+    /// what the desired phase granted.
+    fn minimal_with_desired(traits: impl IntoIterator<Item = TypespaceTrait>) -> Settings {
+        traits
+            .into_iter()
+            .fold(Settings::minimal(), Settings::with_desired_trait)
+    }
+
+    /// A struct whose every field realizes a desired trait takes it:
+    /// `u32` and `String` are both `Eq` and `Hash`.
+    #[test]
+    fn desired_granted_on_capable_struct() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Eq, TypespaceTrait::Hash]),
+            {
+                struct S {
+                    count: u32,
+                    name: String,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        // Desiring Eq desires PartialEq: the request closure applies to
+        // desired demands exactly as it does to required ones.
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::Hash,
+            ])
+        );
+    }
+
+    /// Desiring `Ord` alone desires the whole comparison family: the
+    /// supertrait closure runs over the desired demand set as well, or
+    /// a granted `Ord` would render a derive that does not compile.
+    #[test]
+    fn desired_request_closure_expands_ord() {
+        let builder = typespace_builder!(minimal_with_desired([TypespaceTrait::Ord]), {
+            struct S {
+                name: String,
+            }
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Ord,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+            ])
+        );
+    }
+
+    // REVIEW: "recomputing it into a strip" doesn't really make any sense
+    /// A trait that is both required and desired is granted once and
+    /// never stripped: phase 1 absorbs it, and phase 2 counts a phase-1
+    /// grant as true rather than recomputing it into a strip. This one
+    /// passes with the desired phase absent, because phase 1 alone
+    /// produces the expected set; phase 2 must leave that set alone.
+    #[test]
+    fn desired_trait_already_required_survives() {
+        let builder = typespace_builder!(
+            Settings::minimal()
+                .with_required_trait(TypespaceTrait::Eq)
+                .with_desired_trait(TypespaceTrait::Eq),
+            {
+                struct Inner {
+                    count: u32,
+                }
+
+                struct Outer {
+                    inner: Inner,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let expected = trait_set([TypespaceTrait::Eq, TypespaceTrait::PartialEq]);
+        assert_eq!(built_traits(&typespace, "Outer"), expected);
+        assert_eq!(built_traits(&typespace, "Inner"), expected);
+    }
+
+    /// An alias has no impl site of its own, so its desired outcome is
+    /// its target's: the alias of a capable struct takes the trait and
+    /// the alias of a blocked struct does not.
+    #[test]
+    fn desired_forwards_through_alias() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct Capable {
+                    count: u32,
+                }
+
+                struct Blocked {
+                    weight: f64,
+                }
+
+                type CapableAlias = Capable;
+
+                type BlockedAlias = Blocked;
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let with_eq = trait_set([
+            TypespaceTrait::Clone,
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+        ]);
+        assert_eq!(built_traits(&typespace, "Capable"), with_eq);
+        assert_eq!(built_traits(&typespace, "CapableAlias"), with_eq);
+
+        let without_eq = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "Blocked"), without_eq);
+        assert_eq!(built_traits(&typespace, "BlockedAlias"), without_eq);
+    }
+
+    /// Containers answer structurally from their parameters: `Vec<T>`,
+    /// `Map<K, V>`, `Set<T>`, and `Option<T>` are all `Eq` when their
+    /// parameters are.
+    #[test]
+    fn desired_evaluates_container_structure() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct S {
+                    list: Vec<u32>,
+                    lookup: Map<String, u32>,
+                    unique: Set<u32>,
+                    maybe: Nullable<u32>,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+            ])
+        );
+    }
+
+    /// A container whose parameter blocks a desired trait blocks it for
+    /// the type holding the container: an `f64` element, an `f64` map
+    /// value, and an `f64` inside an `Option` each cost `Eq` while
+    /// leaving `Clone` alone. A set is absent here because a set
+    /// element that cannot be `Eq` is a phase-1 conflict (the default
+    /// set element requirements are the `Ord` family), so the blocked
+    /// set case is pinned by `desired_blocked_by_set_element` instead.
+    #[test]
+    fn desired_blocked_by_container_parameter() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct InVec {
+                    list: Vec<f64>,
+                }
+
+                struct InMapValue {
+                    lookup: Map<String, f64>,
+                }
+
+                struct InOption {
+                    maybe: Nullable<f64>,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "InVec"), only_clone);
+        assert_eq!(built_traits(&typespace, "InMapValue"), only_clone);
+        assert_eq!(built_traits(&typespace, "InOption"), only_clone);
+    }
+
+    /// A float has no total ordering, no equality relation, and no
+    /// hash, so a struct with an `f64` field loses `Eq`, `Ord`, and
+    /// `Hash`--and keeps `Clone`, `Debug`, `PartialEq`, and
+    /// `PartialOrd`, which floats do provide. The kept half is the
+    /// point: stripping is per trait, not a blanket rejection of the
+    /// type.
+    #[test]
+    fn float_field_strips_ordering_family_keeps_rest() {
+        let builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Eq,
+                TypespaceTrait::Ord,
+                TypespaceTrait::Hash,
+            ]),
+            {
+                struct S {
+                    weight: f64,
+                    name: String,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::PartialOrd,
+            ])
+        );
+    }
+
+    // REVIEW: "costs"? use some different term
+    /// A `JsonValue` field costs the same traits an `f64` field does,
+    /// plus `PartialOrd`: the ground truth for `Type::JsonValue` in
+    /// `required_resolution` is that `serde_json::Value` implements
+    /// everything except `Eq`, `Ord`, `PartialOrd`, and `Hash`. Losing
+    /// `PartialOrd` strips `Ord` a second way, so `Clone`, `Debug`, and
+    /// `PartialEq` are all that survive.
+    ///
+    /// ATTN REVIEWER: that ground truth is stale. `serde_json::Value`
+    /// derives `Eq` (since well before the 1.0.148 this workspace
+    /// depends on) and derives `Hash` as of the 1.0.151 in Cargo.lock;
+    /// it implements neither `PartialOrd` nor `Ord`. Correcting the
+    /// `Type::JsonValue` arm changes this test's expectation to keep
+    /// `Eq` and `Hash`.
+    ///
+    ///
+    #[test]
+    fn json_value_field_strips_ordering_family() {
+        let builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Eq,
+                TypespaceTrait::Ord,
+                TypespaceTrait::Hash,
+            ]),
+            {
+                struct S {
+                    blob: JsonValue,
+                    name: String,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::PartialEq,
+            ])
+        );
+    }
+
+    /// Stripping runs the supertrait closure in reverse: losing
+    /// `PartialEq` also loses `Eq`, `PartialOrd`, and `Ord`, whatever
+    /// the constituents claim about those traits on their own.
+    ///
+    /// The native here declares an incoherent set on purpose--`Eq`,
+    /// `Ord`, and `Hash` with neither `PartialEq` nor `PartialOrd`--so
+    /// that a per-trait answer and a closed answer differ: taken one
+    /// trait at a time the struct would keep `Eq` and `Ord`, and only
+    /// the reverse closure removes them.
+    #[test]
+    fn strip_closure_removes_supertrait_dependents() {
+        let mut builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Eq,
+                TypespaceTrait::Ord,
+                TypespaceTrait::Hash,
+            ]),
+            {
+                struct S {
+                    odd: Weird,
+                }
+            }
+        );
+
+        // The macro has no syntax for native types, so this one is
+        // inserted by hand under the id the field references.
+        // REVIEW: remember to fix this once we do have native syntax
+        builder
+            .insert(
+                "Weird".to_string(),
+                Type::Native(Native::new(
+                    "weird::Weird",
+                    trait_set([
+                        TypespaceTrait::Clone,
+                        TypespaceTrait::Debug,
+                        TypespaceTrait::Eq,
+                        TypespaceTrait::Ord,
+                        TypespaceTrait::Hash,
+                    ]),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Hash,
+            ])
+        );
+    }
+
+    /// A blocked leaf strips its trait from every named type that
+    /// reaches it, not just the one that holds it: the float is two
+    /// containment hops below `Top`, and `Top` loses `Eq` all the same.
+    #[test]
+    fn blocked_leaf_strips_through_two_hops() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct Bottom {
+                    weight: f64,
+                }
+
+                struct Middle {
+                    bottom: Bottom,
+                }
+
+                struct Top {
+                    middle: Middle,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "Bottom"), only_clone);
+        assert_eq!(built_traits(&typespace, "Middle"), only_clone);
+        assert_eq!(built_traits(&typespace, "Top"), only_clone);
+    }
+
+    /// A cycle is assumed to satisfy a desired trait until something in
+    /// it says otherwise: `A` and `B` refer to each other and every
+    /// other constituent is capable, so both keep `Eq`. Assuming false
+    /// on the cycle instead would strip `Eq` from both.
+    ///
+    /// The `Box` is written out rather than left to finalize's cycle
+    /// breaking so that the graph under test is exactly the one
+    /// described here.
+    #[test]
+    fn desired_survives_cycle_through_box() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct A {
+                    b: Box<B>,
+                    count: u32,
+                }
+
+                struct B {
+                    a: Box<A>,
+                    name: String,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let with_eq = trait_set([
+            TypespaceTrait::Clone,
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+        ]);
+        assert_eq!(built_traits(&typespace, "A"), with_eq);
+        assert_eq!(built_traits(&typespace, "B"), with_eq);
+    }
+
+    /// Optimism on a cycle is not credulity: one `f64` anywhere in the
+    /// cycle costs `Eq` for every member of it, including the member
+    /// that holds no float itself. `A` reaches the float only by going
+    /// around the cycle, so a strip that stopped at the type nearest
+    /// the blocker would leave `A` wrongly holding `Eq`.
+    #[test]
+    fn cycle_with_blocker_strips_every_scc_member() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct A {
+                    b: Box<B>,
+                }
+
+                struct B {
+                    a: Box<A>,
+                    weight: f64,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "A"), only_clone);
+        assert_eq!(built_traits(&typespace, "B"), only_clone);
+    }
+
+    /// The same unsatisfiable trait fails loudly when required and
+    /// quietly when desired. Requiring `Eq` of a struct with an `f64`
+    /// field is `Error::TraitConflicts`, exactly as
+    /// `map_key_conflict_reports_path` and
+    /// `required_display_on_struct_conflicts` expect of a required
+    /// trait; desiring it finalizes successfully with `Eq` simply
+    /// absent from the built set, with no conflict, no recorded state,
+    /// and nothing to query.
+    #[test]
+    fn infeasible_desired_is_silent_where_required_conflicts() {
+        let required = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Eq),
+            {
+                struct S {
+                    weight: f64,
+                }
+            }
+        );
+
+        let Err(err) = required.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+
+        let desired = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct S {
+                    weight: f64,
+                }
+            }
+        );
+
+        let typespace = desired
+            .finalize(no_cycles)
+            .expect("a desired trait that cannot be realized is dropped, not reported");
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// A struct has no `Display` and no `FromStr` under any realization,
+    /// so desiring them drops them without an error, while the desired
+    /// traits the struct can realize are unaffected.
+    #[test]
+    fn desired_display_on_struct_dropped_silently() {
+        let builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Display,
+                TypespaceTrait::FromStr,
+            ]),
+            {
+                struct S {
+                    name: String,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// An enum with no attached default value cannot implement
+    /// `Default`: there is no derive for it and no `#[default]` variant
+    /// is invented. Desiring `Default` therefore drops it silently,
+    /// while an enum that does carry a default value takes it.
+    #[test]
+    fn desired_default_on_enum_without_value_dropped() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                enum Plain {
+                    Red,
+                    Green,
+                }
+
+                #[default = "Red"]
+                enum WithValue {
+                    Red,
+                    Green,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "Plain"),
+            trait_set([TypespaceTrait::Clone])
+        );
+        assert_eq!(
+            built_traits(&typespace, "WithValue"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+    }
+
+    /// An attached default value realizes `Default` with a hand-written
+    /// impl that asks nothing of the type's fields: `S` takes `Default`
+    /// even though its `Color` field cannot implement `Default` at all.
+    #[test]
+    fn desired_default_from_attached_value_needs_nothing_of_fields() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                enum Color {
+                    Red,
+                    Green,
+                }
+
+                #[default = { count: 0, color: "Red" }]
+                struct S {
+                    count: u32,
+                    color: Color,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&typespace, "Color"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// A desired trait imposes no requirement on anything. Desiring
+    /// `Ord` everywhere reaches a native that declares only `Clone` and
+    /// `Debug`; the native is not in conflict, finalization succeeds,
+    /// and the struct holding it simply goes without the comparison
+    /// family. A required `Ord` in the same graph would be
+    /// `OffenderReason::NativeMissingImpl`.
+    #[test]
+    fn desired_imposes_no_requirement_on_native() {
+        let mut builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Ord,
+            ]),
+            {
+                struct S {
+                    plain: Plain,
+                }
+            }
+        );
+
+        // The macro has no syntax for native types, so this one is
+        // inserted by hand under the id the field references.
+        // REVIEW: remmeber to replace
+        builder
+            .insert(
+                "Plain".to_string(),
+                Type::Native(Native::new(
+                    "plain::Plain",
+                    trait_set([TypespaceTrait::Clone, TypespaceTrait::Debug]),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let typespace = builder
+            .finalize(no_cycles)
+            .expect("a desired trait never becomes a requirement on a native");
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Debug])
+        );
+    }
+
+    /// A set element that cannot realize a desired trait costs the
+    /// holder that trait and nothing else. The native declares the
+    /// `Ord` family the default set element requirements demand, so
+    /// phase 1 is satisfied, and it declares no `Hash`, so the desired
+    /// `Hash` is dropped.
+    #[test]
+    fn desired_blocked_by_set_element() {
+        let mut builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Hash]),
+            {
+                struct S {
+                    unique: Set<Ordered>,
+                }
+            }
+        );
+
+        // The macro has no syntax for native types, so this one is
+        // inserted by hand under the id the element references.
+        builder
+            .insert(
+                "Ordered".to_string(),
+                Type::Native(Native::new(
+                    "ordered::Ordered",
+                    trait_set([
+                        TypespaceTrait::Clone,
+                        TypespaceTrait::Debug,
+                        TypespaceTrait::Eq,
+                        TypespaceTrait::PartialEq,
+                        TypespaceTrait::Ord,
+                        TypespaceTrait::PartialOrd,
+                    ]),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// A newtype's `Display` is its inner value's `Display`, which is
+    /// an obligation when `Display` is required and only a question
+    /// when it is desired: the inner struct is asked whether it can
+    /// implement `Display`, answers no, and is neither modified nor
+    /// reported. The newtype goes without.
+    #[test]
+    fn desired_display_does_not_obligate_newtype_inner() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                struct Inner {
+                    count: u32,
+                }
+
+                struct Wrapper(Inner);
+            }
+        );
+
+        let typespace = builder
+            .finalize(no_cycles)
+            .expect("a desired trait never becomes a requirement on a field");
+
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "Wrapper"), only_clone);
+        assert_eq!(built_traits(&typespace, "Inner"), only_clone);
+    }
+
+    /// The `Settings::all_traits` preset over a struct with a float:
+    /// the required set lands whole, and of the desired set
+    /// `PartialEq`, `PartialOrd`, and `Default` survive while
+    /// `Display` and `FromStr` (impossible for a struct) and `Eq`,
+    /// `Ord`, and `Hash` (blocked by the float) are dropped.
+    #[test]
+    fn all_traits_preset_over_float_struct() {
+        let builder = typespace_builder!(Settings::all_traits(), {
+            struct S {
+                weight: f64,
+                name: String,
+            }
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Serialize,
+                TypespaceTrait::Deserialize,
+                TypespaceTrait::JsonSchema,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Default,
+            ])
+        );
     }
 }
