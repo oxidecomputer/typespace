@@ -910,6 +910,39 @@ mod tests {
         assert_eq!(built_traits(&typespace, "S"), expected);
     }
 
+    /// A `native` item declares only the traits it lists: unlike a
+    /// required trait set, which closes over supertraits, `Ord` here
+    /// does not also mean `PartialOrd` or `Eq`.
+    #[test]
+    fn native_traits_add_no_supertraits() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            native ::chrono::NaiveDate: Eq + PartialEq + Ord + PartialOrd;
+
+            type DateMap = Map<::chrono::NaiveDate, String>;
+        });
+        builder.finalize(no_cycles).expect("finalization succeeds");
+
+        // `Ord` alone implies nothing: the other three map key
+        // requirements are still missing.
+        let builder = typespace_builder!(Settings::minimal(), {
+            native ::chrono::NaiveDate: Ord;
+
+            type DateMap = Map<::chrono::NaiveDate, String>;
+        });
+        let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+            panic!("expected finalization to report trait conflicts");
+        };
+        assert_eq!(conflicts.len(), 3, "conflicts: {conflicts:#?}");
+        for conflict in &conflicts {
+            assert_eq!(conflict.offender, "::chrono::NaiveDate");
+            assert!(matches!(
+                &conflict.reason,
+                OffenderReason::NativeMissingImpl { type_name }
+                    if type_name == "::chrono::NaiveDate"
+            ));
+        }
+    }
+
     #[test]
     #[ignore]
     fn required_display_panics_at_render_not_finalize() {

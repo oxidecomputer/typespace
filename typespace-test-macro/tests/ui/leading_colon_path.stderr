@@ -1,5 +1,5 @@
-error: unsupported type syntax in typespace_builder!: expected a plain, unqualified type name (not `::Foo`, `foo::Foo`, or `<T as Trait>::Foo`)
- --> tests/ui/leading_colon_path.rs:7:19
+error: unsupported type syntax in typespace_builder!: a plain type name takes no leading `::`, and a native type's path needs two or more segments (`::std::path::PathBuf`)
+ --> tests/ui/leading_colon_path.rs:8:19
   |
-7 |             name: ::String,
+8 |             name: ::String,
   |                   ^^^^^^^^

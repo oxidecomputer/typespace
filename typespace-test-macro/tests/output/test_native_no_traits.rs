@@ -1,0 +1,38 @@
+fn expansion() {
+    {
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
+        builder
+            .insert(
+                "chrono::NaiveDate".to_string(),
+                ::typespace::build::Type::Native(
+                    ::typespace::build::Native::new(
+                        "chrono::NaiveDate",
+                        ::typespace::TypespaceTraitSet::empty(),
+                        [].into_iter().collect(),
+                    ),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Event".to_string(),
+                ::typespace::build::Struct::<String>::new()
+                    .name("Event")
+                    .properties([
+                        ::typespace::build::StructProperty::new(
+                                "when",
+                                "chrono::NaiveDate".to_string(),
+                            )
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+    };
+}

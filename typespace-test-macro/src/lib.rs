@@ -67,6 +67,9 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   same type collapse to one id: source whitespace is never
 ///   part of it, and an array length written in hex normalizes to
 ///   decimal. Inserted once even if referenced repeatedly.
+/// - `native` item: its path verbatim, keeping the leading `::` (if one
+///   was written), including any generic arguments, e.g.
+///   `"::foo::Wrapper<Inner>"`.
 /// - `Nullable<T>` and `OptionalNullable<T>` both wrap `T` in the same
 ///   anonymous `Option` node, id `"Nullable<T>"`: referencing a given
 ///   `T` through either form reuses one node instead of inserting
@@ -81,13 +84,14 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Item forms
 ///
 /// | Syntax                               | Builds                    |
-/// |---------------------------------------|---------------------------|
+/// |--------------------------------------|---------------------------|
 /// | `struct N { f: Ty, .. }`             | `Struct`                  |
 /// | `struct N(Ty);`                      | `NewtypeStruct`           |
 /// | `struct N(Ty, Ty, ..);`              | `TupleStruct`             |
 /// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`      |
 /// | `enum N { .. }`                      | `Enum`                    |
 /// | `type N = Ty;`                       | `TypeAlias`               |
+/// | `native P;` / `native P: Tr + Tr;`   | `Native`                  |
 ///
 /// Enum variants: `V` unit; `V(Ty)` single payload (`VariantDetails::Item`);
 /// `V(Ty, Ty, ..)` tuple payload; `V { f: Ty, .. }` struct payload. A
@@ -96,8 +100,12 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Types
 ///
 /// A bare name not listed below is a named reference to that item's id.
-/// Only a plain, unqualified name is accepted: `foo::Bar`, `::Bar`, and
-/// `<T as Trait>::Bar` are all rejected, everywhere a type appears.
+/// A path of two or more segments (`chrono::NaiveDate`,
+/// `::std::path::PathBuf`) names a native type, which a `native` item
+/// has to declare first. Two other paths are rejected everywhere a type
+/// appears: `::Bar`, one segment behind a leading `::`, is not a Rust
+/// type path, and `<T as Trait>::Bar` names nothing this grammar can
+/// resolve.
 ///
 /// Primitives (each an anonymous node): `String`, `bool`,
 /// `u8..=usize`/`i8..=isize`, `f32`/`f64`, `()`, `JsonValue`. Containers
@@ -119,6 +127,41 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `Option<T>`, and the bare (argument-less) forms `Optional`,
 /// `Nullable`, and `OptionalNullable`, are compile errors--each names
 /// a real ambiguity or an incomplete type, not a valid reference.
+///
+/// # Native types
+///
+/// `native P;` declares an externally defined type that generated code
+/// emits as the Rust path `P`; `native P: Tr + Tr;` also states the
+/// traits it implements.
+///
+/// ```ignore
+/// native chrono::NaiveDate;
+/// native ::std::path::PathBuf: Clone + Debug + Display + FromStr;
+/// native ::foo::Wrapper<Inner>: Clone + Debug;
+/// ```
+///
+/// `P` needs two or more segments, and its leading `::` is part of it:
+/// the path is emitted verbatim, so `chrono::NaiveDate` and
+/// `::chrono::NaiveDate` are two different native types, with different
+/// ids and different generated text. Generic arguments become the
+/// type's parameters, each lowered like any other type, so
+/// `::foo::Wrapper<Inner>` emits the name `::foo::Wrapper` alongside the
+/// single parameter id `Inner`.
+///
+/// Once declared, `P` goes wherever a type goes: a field's type, a
+/// variant payload, an alias target, a container's element, key, or
+/// value, a tuple component, and inside
+/// `Optional`/`Nullable`/`OptionalNullable`. Using a path no `native`
+/// item declared is an error at the use rather than a trait-less native
+/// conjured on the spot, and declaring one path twice is an error at
+/// the second declaration. Native paths are their own namespace, so no
+/// `native` item can collide with a `struct`/`enum`/`type` name.
+///
+/// A native declares only the traits it lists: `native P: Ord;` declares
+/// `Ord`, and neither `PartialOrd` nor `Eq`. The names it accepts are
+/// typespace's trait vocabulary: `Clone`, `Debug`, `Serialize`,
+/// `Deserialize`, `JsonSchema`, `Display`, `FromStr`, `Eq`, `PartialEq`,
+/// `Ord`, `PartialOrd`, `Hash`, and `Default`.
 ///
 /// # Attributes
 ///

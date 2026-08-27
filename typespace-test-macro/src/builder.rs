@@ -23,7 +23,10 @@
 //! (containers, primitives, `Nullable` wrappers) that item's types
 //! imply, de-duplicated by id so a repeated `Vec<u32>` or `u32` is only
 //! inserted once, and the named items declared so far (catching a
-//! reserved or duplicate item name at the point it's declared).
+//! reserved or duplicate item name at the point it's declared). A
+//! `native` item's path is tracked the same way, in its own namespace:
+//! using a path no `native` item has declared is an error (we don't create
+//! a trait-less node conjured into the graph).
 //!
 //! The generated code always qualifies typespace's own vocabulary as
 //! `::typespace::...`. It also resolves inside the `typespace` crate's own
@@ -100,6 +103,7 @@ enum Item {
     Struct(StructItem),
     Enum(EnumItem),
     Alias(AliasItem),
+    Native(NativeItem),
 }
 
 struct StructItem {
@@ -144,6 +148,17 @@ struct AliasItem {
     target: Type,
 }
 
+/// A `native P;` or `native P: Trait1 + Trait;` declaration: an externally
+/// defined type, named by the Rust path `P` generated code emits
+/// for it, declaring the traits it implements.
+struct NativeItem {
+    attrs: Vec<AttrEntry>,
+    /// The declared path, kept as a `Type` so the one path grammar in
+    /// [`name_or_native`] judges a declaration and a use alike.
+    ty: Type,
+    bounds: Vec<syn::Path>,
+}
+
 /// Parse a brace-delimited, comma-terminated list of `name: Type`
 /// fields: a struct's own fields, or a struct-shaped variant's.
 fn parse_fields(input: ParseStream) -> syn::Result<Vec<FieldItem>> {
@@ -174,6 +189,11 @@ fn parse_tuple_payload(input: ParseStream) -> syn::Result<Vec<Type>> {
     parenthesized!(content in input);
     let types = Punctuated::<Type, Token![,]>::parse_terminated(&content)?;
     Ok(types.into_iter().collect())
+}
+
+/// Make a custom keyword for `native`
+mod keyword {
+    syn::custom_keyword!(native);
 }
 
 impl Parse for Item {
@@ -236,8 +256,21 @@ impl Parse for Item {
                 attrs,
                 target,
             }))
+        } else if input.peek(keyword::native) {
+            input.parse::<keyword::native>()?;
+            let ty: Type = input.parse()?;
+            let bounds = if input.peek(Token![:]) {
+                input.parse::<Token![:]>()?;
+                Punctuated::<syn::Path, Token![+]>::parse_separated_nonempty(input)?
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            input.parse::<Token![;]>()?;
+            Ok(Item::Native(NativeItem { attrs, ty, bounds }))
         } else {
-            Err(input.error("expected `struct`, `enum`, or `type`"))
+            Err(input.error("expected `struct`, `enum`, `type`, or `native`"))
         }
     }
 }
@@ -590,12 +623,17 @@ const RESERVED_NAMES: &[&str] = &[
 /// types are lowered, de-duplicating anonymous nodes (containers,
 /// primitives, `Nullable` wrappers) by id so a repeated reference to
 /// the same anonymous type is only inserted once, and tracking the
-/// named items declared so far to catch a reserved or repeated name.
+/// named items and native paths declared so far to catch a reserved or
+/// repeated name, or a use of an undeclared native path.
 #[derive(Default)]
 struct Lowering {
     inserts: Vec<TokenStream>,
     anon_ids: BTreeSet<String>,
     named_ids: BTreeMap<String, Ident>,
+    /// Every `native` item declared so far, keyed by its id, holding
+    /// the path it was declared with so a second declaration of the
+    /// same path can point back at the first.
+    native_ids: BTreeMap<String, syn::Path>,
 }
 
 impl Lowering {
@@ -633,6 +671,25 @@ impl Lowering {
         }
         Ok(text)
     }
+
+    /// Claim `path` as a native type's id, and return it as a `String`.
+    /// Errors, spanned at `path`, if the same path was already declared
+    /// in this invocation, pointing back at that first declaration via
+    /// [`syn::Error::combine`]. Native paths are their own namespace:
+    /// every one has two or more segments, so none can collide with a
+    /// named item's single identifier or with [`RESERVED_NAMES`].
+    fn claim_native(&mut self, path: &syn::Path) -> syn::Result<String> {
+        let id = native_id(path)?;
+        match self.native_ids.insert(id.clone(), path.clone()) {
+            None => Ok(id),
+            Some(first) => {
+                let mut err =
+                    syn::Error::new_spanned(path, format!("duplicate native type `{id}`"));
+                err.combine(syn::Error::new_spanned(first, "previously declared here"));
+                Err(err)
+            }
+        }
+    }
 }
 
 impl BuilderInput {
@@ -643,6 +700,7 @@ impl BuilderInput {
                 Item::Struct(item) => lower_struct(item, &mut lowering)?,
                 Item::Enum(item) => lower_enum(item, &mut lowering)?,
                 Item::Alias(item) => lower_alias(item, &mut lowering)?,
+                Item::Native(item) => lower_native(item, &mut lowering)?,
             }
         }
         let settings = &self.settings;
@@ -847,6 +905,206 @@ fn lower_alias(item: &AliasItem, lowering: &mut Lowering) -> syn::Result<()> {
     Ok(())
 }
 
+fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
+    // No attributes are currently permitted for a native type.
+    let _ = claim_attrs(&item.attrs, &[])?;
+    let path = native_path(&item.ty)?;
+    let id = lowering.claim_native(path)?;
+    let name = path_text(path);
+    let impls = item
+        .bounds
+        .iter()
+        .map(native_trait_tokens)
+        .collect::<syn::Result<Vec<_>>>()?;
+    // An empty array literal would leave the element type unresolved,
+    // so the trait-less case names the empty set directly.
+    let impls_tokens = if impls.is_empty() {
+        quote! { ::typespace::TypespaceTraitSet::empty() }
+    } else {
+        quote! { [ #(#impls),* ].into_iter().collect::<::typespace::TypespaceTraitSet>() }
+    };
+    let parameter_ids = native_args(path)?
+        .into_iter()
+        .map(|arg| lower_type(arg, lowering))
+        .collect::<syn::Result<Vec<_>>>()?;
+    lowering.inserts.push(quote! {
+        builder.insert(
+            #id.to_string(),
+            ::typespace::build::Type::Native(
+                ::typespace::build::Native::new(
+                    #name,
+                    #impls_tokens,
+                    [ #(#parameter_ids.to_string()),* ].into_iter().collect(),
+                )
+            ),
+        ).unwrap();
+    });
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// Native types
+// ---------------------------------------------------------------------
+
+/// Every trait name a `native` item's bound list accepts: the
+/// `TypespaceTrait` variants, in declaration order, which is also the
+/// order the error for an unrecognized name lists them in.
+const NATIVE_TRAITS: &[&str] = &[
+    "Clone",
+    "Debug",
+    "Serialize",
+    "Deserialize",
+    "JsonSchema",
+    "Display",
+    "FromStr",
+    "Eq",
+    "PartialEq",
+    "Ord",
+    "PartialOrd",
+    "Hash",
+    "Default",
+];
+
+/// The `TypespaceTrait` a `native` item's bound names.
+///
+/// A native declares only the traits it lists: `native P: Ord;` gets no
+/// `PartialOrd` or `Eq` added, so trait propagation can catch an
+/// incomplete claim about someone else's type.
+fn native_trait_tokens(bound: &syn::Path) -> syn::Result<TokenStream> {
+    match bound.get_ident() {
+        Some(ident) if NATIVE_TRAITS.contains(&ident.to_string().as_str()) => {
+            Ok(quote! { ::typespace::TypespaceTrait::#ident })
+        }
+        _ => {
+            let accepted = NATIVE_TRAITS
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(syn::Error::new_spanned(
+                bound,
+                format!(
+                    "`{}` is not a trait typespace tracks; a native \
+                     type's bounds are drawn from {accepted}",
+                    path_text(bound)
+                ),
+            ))
+        }
+    }
+}
+
+/// The path a `native` item declares: anything else is rejected with
+/// the same message a use of it in a type position would get.
+fn native_path(ty: &Type) -> syn::Result<&syn::Path> {
+    match ty {
+        Type::Path(type_path) => match name_or_native(type_path, ty)? {
+            NameOrNative::Native(path) => Ok(path),
+            NameOrNative::Name(_) => Err(syn::Error::new_spanned(
+                ty,
+                "a native type's path needs two or more segments, e.g. \
+                 `native ::std::path::PathBuf;`",
+            )),
+        },
+        _ => Err(syn::Error::new_spanned(
+            ty,
+            "`native` needs a Rust type path, e.g. \
+             `native ::std::path::PathBuf;`",
+        )),
+    }
+}
+
+/// The Rust path text a native type is emitted as: its segment names
+/// joined by `::`, keeping the leading `::` if the input contains one.
+///
+/// Generic arguments are left out: they become `Native::parameters`,
+/// which the renderer emits after the name, so `::foo::Wrapper<Inner>`
+/// is the name `::foo::Wrapper` plus the one parameter id `Inner`.
+fn path_text(path: &syn::Path) -> String {
+    // Printing the path's tokens instead would give both the generic
+    // arguments and one space per token: `:: foo :: Wrapper < Inner >`.
+    let leading = if path.leading_colon.is_some() {
+        "::"
+    } else {
+        ""
+    };
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    format!("{leading}{}", segments.join("::"))
+}
+
+/// A native path's generic arguments, which belong to its last segment
+/// (`::foo::Wrapper<Inner>`); each becomes one `Native::parameters`
+/// entry, lowered like any other type.
+fn native_args(path: &syn::Path) -> syn::Result<Vec<&Type>> {
+    let last = path.segments.len() - 1;
+    let misplaced = path.segments.iter().enumerate().any(|(index, segment)| {
+        index != last && !matches!(segment.arguments, syn::PathArguments::None)
+    });
+    if misplaced {
+        return Err(syn::Error::new_spanned(
+            path,
+            "a native type's generic arguments belong to its last path \
+             segment, e.g. `::foo::Wrapper<Inner>`",
+        ));
+    }
+    match &path.segments[last].arguments {
+        syn::PathArguments::None => Ok(Vec::new()),
+        syn::PathArguments::AngleBracketed(args) => Ok(generic_type_args(&args.args)),
+        syn::PathArguments::Parenthesized(_) => Err(syn::Error::new_spanned(
+            path,
+            "unsupported type syntax in typespace_builder!",
+        )),
+    }
+}
+
+/// The graph id a native type is inserted under: its path text plus its
+/// argument ids, so `::foo::Wrapper<Vec<u32>>` is the id
+/// `"::foo::Wrapper<Vec<u32>>"`.
+///
+/// Like every other id here this is reconstructed from the parsed path
+/// rather than lifted from the source span (see [`anon_id`]), but the
+/// leading `::` is part of it: it appears in the emitted output, so
+/// `chrono::NaiveDate` and `::chrono::NaiveDate` are two different
+/// native types, not one path written two ways.
+fn native_id(path: &syn::Path) -> syn::Result<String> {
+    let name = path_text(path);
+    let parts = native_args(path)?
+        .into_iter()
+        .map(anon_id)
+        .collect::<syn::Result<Vec<_>>>()?;
+    if parts.is_empty() {
+        Ok(name)
+    } else {
+        Ok(format!("{name}<{}>", parts.join(", ")))
+    }
+}
+
+/// The id a use of a native path refers to, requiring that some
+/// `native` item earlier in the same invocation declared it.
+///
+/// An undeclared path is an error where it is written rather than a
+/// trait-less native inserted on the spot: a mistyped path should fail
+/// as a mistyped path, not later as a trait conflict against a type
+/// nobody declared.
+fn lower_native_use(path: &syn::Path, lowering: &Lowering) -> syn::Result<String> {
+    let id = native_id(path)?;
+    if lowering.native_ids.contains_key(&id) {
+        Ok(id)
+    } else {
+        Err(syn::Error::new_spanned(
+            path,
+            format!(
+                "`{id}` is not a declared native type; declare it first \
+                 with `native {id};`, or `native {id}: Clone + Debug;` \
+                 to state the traits it implements"
+            ),
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------
@@ -945,43 +1203,62 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
 /// generic arguments (`Foo<..>`), return its name and argument list.
 /// Used to recognize the wire-vocabulary wrappers (`Optional`,
 /// `OptionalNullable`) at a field's top level regardless of what else
-/// `lower_type` would make of them. `foo::Foo`, `::Foo`, and `<T as
-/// Trait>::Foo` are never this shape--they're rejected everywhere in
-/// this module (see `plain_path_segment`), not handled specially here.
+/// `lower_type` would make of them. A native path (`foo::Optional<T>`)
+/// and a qualified self-type never match, so neither can reach the wire
+/// vocabulary through this door; see [`name_or_native`].
 fn bare_generic_path(ty: &Type) -> Option<(&Ident, &Punctuated<syn::GenericArgument, Token![,]>)> {
     let Type::Path(type_path) = ty else {
         return None;
     };
-    let segment = plain_path_segment(type_path, ty).ok()?;
+    let NameOrNative::Name(segment) = name_or_native(type_path, ty).ok()? else {
+        return None;
+    };
     match &segment.arguments {
         syn::PathArguments::AngleBracketed(args) => Some((&segment.ident, &args.args)),
         _ => None,
     }
 }
 
-/// The single segment of a plain, unqualified type path: not `::Foo`
-/// (a leading `::`), not `foo::Foo` (more than one segment), and not
-/// `<T as Trait>::Foo` (a qualified self-type). typespace_builder!'s
-/// type grammar has no use for any of those, so every other path shape
-/// is rejected here with one message, rather than each accidentally
-/// being treated as a plain path further on (as `::Optional<T>` used
-/// to be, silently matching the `Optional` wire keyword).
-fn plain_path_segment<'a>(
-    type_path: &'a syn::TypePath,
-    ty: &Type,
-) -> syn::Result<&'a syn::PathSegment> {
-    let plain = type_path.qself.is_none()
-        && type_path.path.leading_colon.is_none()
-        && type_path.path.segments.len() == 1;
-    if plain {
-        Ok(&type_path.path.segments[0])
-    } else {
-        Err(syn::Error::new_spanned(
+/// A type path names either the macro's own vocabulary or a native type.
+enum NameOrNative<'a> {
+    /// A plain, unqualified name: the macro's own vocabulary (`String`,
+    /// `Vec<T>`, `Optional<T>`, ...) or a reference to a named item.
+    Name(&'a syn::PathSegment),
+    /// A native type's Rust path, which some `native` item declares.
+    Native(&'a syn::Path),
+}
+
+/// Read a type path as a plain name or as a native type's path.
+///
+/// One segment and no leading `::` is a plain name; two or more
+/// segments, with or without a leading `::`, is a native type's path.
+/// The `::` is part of that path's identity rather than punctuation to
+/// be normalized away, because the path is emitted verbatim.
+///
+/// Anything else is rejected here, so no later step has to consider it:
+/// a lone segment behind a leading `::` (`::String`, which is neither a
+/// plain name nor a Rust type path), and a qualified self-type
+/// (`<T as Trait>::Foo`), which names nothing this grammar can
+/// resolve.
+fn name_or_native<'a>(type_path: &'a syn::TypePath, ty: &Type) -> syn::Result<NameOrNative<'a>> {
+    match (
+        type_path.qself.is_some(),
+        type_path.path.leading_colon.is_some(),
+        type_path.path.segments.len(),
+    ) {
+        (true, _, _) => Err(syn::Error::new_spanned(
             ty,
-            "unsupported type syntax in typespace_builder!: expected a \
-             plain, unqualified type name (not `::Foo`, `foo::Foo`, or \
-             `<T as Trait>::Foo`)",
-        ))
+            "unsupported type syntax in typespace_builder!: a qualified \
+             self-type (`<T as Trait>::Foo`) names no type here",
+        )),
+        (false, false, 1) => Ok(NameOrNative::Name(&type_path.path.segments[0])),
+        (false, true, 1) => Err(syn::Error::new_spanned(
+            ty,
+            "unsupported type syntax in typespace_builder!: a plain type \
+             name takes no leading `::`, and a native type's path needs \
+             two or more segments (`::std::path::PathBuf`)",
+        )),
+        (false, _, _) => Ok(NameOrNative::Native(&type_path.path)),
     }
 }
 
@@ -990,7 +1267,10 @@ fn lower_path_type(
     ty: &Type,
     lowering: &mut Lowering,
 ) -> syn::Result<String> {
-    let segment = plain_path_segment(type_path, ty)?;
+    let segment = match name_or_native(type_path, ty)? {
+        NameOrNative::Native(path) => return lower_native_use(path, lowering),
+        NameOrNative::Name(segment) => segment,
+    };
     let name = segment.ident.to_string();
 
     // Scalars: no generics, one Type variant apiece.
@@ -1218,24 +1498,26 @@ fn anon_id(ty: &Type) -> syn::Result<String> {
             let len = array_len_anon_id(&array.len)?;
             Ok(format!("[{elem}; {len}]"))
         }
-        Type::Path(type_path) => {
-            let segment = plain_path_segment(type_path, ty)?;
-            let name = segment.ident.to_string();
-            match &segment.arguments {
-                syn::PathArguments::None => Ok(name),
-                syn::PathArguments::AngleBracketed(args) => {
-                    let parts = generic_type_args(&args.args)
-                        .into_iter()
-                        .map(anon_id)
-                        .collect::<syn::Result<Vec<_>>>()?;
-                    Ok(format!("{name}<{}>", parts.join(", ")))
+        Type::Path(type_path) => match name_or_native(type_path, ty)? {
+            NameOrNative::Native(path) => native_id(path),
+            NameOrNative::Name(segment) => {
+                let name = segment.ident.to_string();
+                match &segment.arguments {
+                    syn::PathArguments::None => Ok(name),
+                    syn::PathArguments::AngleBracketed(args) => {
+                        let parts = generic_type_args(&args.args)
+                            .into_iter()
+                            .map(anon_id)
+                            .collect::<syn::Result<Vec<_>>>()?;
+                        Ok(format!("{name}<{}>", parts.join(", ")))
+                    }
+                    syn::PathArguments::Parenthesized(_) => Err(syn::Error::new_spanned(
+                        ty,
+                        "unsupported type syntax in typespace_builder!",
+                    )),
                 }
-                syn::PathArguments::Parenthesized(_) => Err(syn::Error::new_spanned(
-                    ty,
-                    "unsupported type syntax in typespace_builder!",
-                )),
             }
-        }
+        },
         _ => Err(syn::Error::new_spanned(
             ty,
             "unsupported type syntax in typespace_builder!",
@@ -1478,6 +1760,82 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/builder_variant_shapes.rs", &out);
+    }
+
+    #[test]
+    fn test_native_no_traits() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                native chrono::NaiveDate;
+
+                struct Event {
+                    when: chrono::NaiveDate,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_no_traits.rs", &out);
+    }
+
+    #[test]
+    fn test_native_declared_traits() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                native ::std::path::PathBuf: Clone + Debug + Display + FromStr;
+
+                struct Config {
+                    path: ::std::path::PathBuf,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_declared_traits.rs", &out);
+    }
+
+    #[test]
+    fn test_native_generic_parameters() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Inner {
+                    count: u32,
+                }
+
+                native ::foo::Wrapper<Inner>: Clone + Debug;
+
+                type Wrapped = ::foo::Wrapper<Inner>;
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_generic_parameters.rs", &out);
+    }
+
+    #[test]
+    fn test_native_leading_colon_distinct() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                native chrono::NaiveDate: Clone;
+                native ::chrono::NaiveDate: Clone;
+
+                struct Span {
+                    start: chrono::NaiveDate,
+                    end: ::chrono::NaiveDate,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_leading_colon_distinct.rs", &out);
+    }
+
+    #[test]
+    fn test_native_in_containers() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                native ::uuid::Uuid: Clone + Debug + Eq + PartialEq + Ord + PartialOrd + Hash;
+
+                struct Batch {
+                    ids: Vec<::uuid::Uuid>,
+                    primary: Optional<::uuid::Uuid>,
+                    by_id: Map<::uuid::Uuid, String>,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_in_containers.rs", &out);
     }
 
     // Targeted behavioral checks (fast, string-match versions of a few

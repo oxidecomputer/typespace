@@ -1,0 +1,45 @@
+fn expansion() {
+    {
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
+        builder
+            .insert(
+                "::std::path::PathBuf".to_string(),
+                ::typespace::build::Type::Native(
+                    ::typespace::build::Native::new(
+                        "::std::path::PathBuf",
+                        [
+                            ::typespace::TypespaceTrait::Clone,
+                            ::typespace::TypespaceTrait::Debug,
+                            ::typespace::TypespaceTrait::Display,
+                            ::typespace::TypespaceTrait::FromStr,
+                        ]
+                            .into_iter()
+                            .collect::<::typespace::TypespaceTraitSet>(),
+                        [].into_iter().collect(),
+                    ),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Config".to_string(),
+                ::typespace::build::Struct::<String>::new()
+                    .name("Config")
+                    .properties([
+                        ::typespace::build::StructProperty::new(
+                                "path",
+                                "::std::path::PathBuf".to_string(),
+                            )
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+    };
+}

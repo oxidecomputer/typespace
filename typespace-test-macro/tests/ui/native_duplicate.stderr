@@ -1,0 +1,11 @@
+error: duplicate native type `::chrono::NaiveDate`
+ --> tests/ui/native_duplicate.rs:6:16
+  |
+6 |         native ::chrono::NaiveDate: Clone + Debug;
+  |                ^^^^^^^^^^^^^^^^^^^
+
+error: previously declared here
+ --> tests/ui/native_duplicate.rs:5:16
+  |
+5 |         native ::chrono::NaiveDate: Clone;
+  |                ^^^^^^^^^^^^^^^^^^^

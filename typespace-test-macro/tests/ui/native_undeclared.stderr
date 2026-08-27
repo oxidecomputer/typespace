@@ -1,0 +1,5 @@
+error: `chrono::NaiveDate` is not a declared native type; declare it first with `native chrono::NaiveDate;`, or `native chrono::NaiveDate: Clone + Debug;` to state the traits it implements
+ --> tests/ui/native_undeclared.rs:7:19
+  |
+7 |             when: chrono::NaiveDate,
+  |                   ^^^^^^^^^^^^^^^^^

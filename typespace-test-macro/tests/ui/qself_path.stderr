@@ -1,0 +1,5 @@
+error: unsupported type syntax in typespace_builder!: a qualified self-type (`<T as Trait>::Foo`) names no type here
+ --> tests/ui/qself_path.rs:7:19
+  |
+7 |             name: <u32 as Iterator>::Item,
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^

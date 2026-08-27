@@ -1,0 +1,5 @@
+error: a native type's path needs two or more segments, e.g. `native ::std::path::PathBuf;`
+ --> tests/ui/native_single_segment.rs:6:16
+  |
+6 |         native NaiveDate: Clone;
+  |                ^^^^^^^^^

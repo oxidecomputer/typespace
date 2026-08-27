@@ -1,0 +1,5 @@
+error: `Copy` is not a trait typespace tracks; a native type's bounds are drawn from `Clone`, `Debug`, `Serialize`, `Deserialize`, `JsonSchema`, `Display`, `FromStr`, `Eq`, `PartialEq`, `Ord`, `PartialOrd`, `Hash`, `Default`
+ --> tests/ui/native_unknown_trait.rs:6:45
+  |
+6 |         native ::chrono::NaiveDate: Clone + Copy;
+  |                                             ^^^^
