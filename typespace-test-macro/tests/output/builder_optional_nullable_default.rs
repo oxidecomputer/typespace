@@ -1,33 +1,43 @@
 fn expansion() {
     {
-        let mut builder = crate::TypespaceBuilder::<String>::new(Settings::typical());
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
         builder
-            .insert("u32".to_string(), crate::build::Type::Integer("u32".to_string()))
+            .insert(
+                "u32".to_string(),
+                ::typespace::build::Type::Integer("u32".to_string()),
+            )
             .unwrap();
         builder
             .insert(
                 "Inner".to_string(),
-                crate::build::Struct::<String>::new()
+                ::typespace::build::Struct::<String>::new()
                     .name("Inner")
                     .properties([
-                        crate::build::StructProperty::new("count", "u32".to_string())
-                            .with_state(crate::build::StructPropertyState::Required),
+                        ::typespace::build::StructProperty::new(
+                                "count",
+                                "u32".to_string(),
+                            )
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
                     ])
                     .build()
                     .unwrap(),
             )
             .unwrap();
-        builder.insert("String".to_string(), crate::build::Type::String).unwrap();
+        builder.insert("String".to_string(), ::typespace::build::Type::String).unwrap();
         builder
             .insert(
                 "Nullable<Inner>".to_string(),
-                crate::build::Type::Option("Inner".to_string()),
+                ::typespace::build::Type::Option("Inner".to_string()),
             )
             .unwrap();
         builder
             .insert(
                 "Widget".to_string(),
-                crate::build::Struct::<String>::new()
+                ::typespace::build::Struct::<String>::new()
                     .name("Widget")
                     .default(
                         ::serde_json::Value::Object(
@@ -45,20 +55,34 @@ fn expansion() {
                         ),
                     )
                     .properties([
-                        crate::build::StructProperty::new("name", "String".to_string())
-                            .with_state(crate::build::StructPropertyState::Required),
-                        crate::build::StructProperty::new("opt", "Inner".to_string())
-                            .with_state(crate::build::StructPropertyState::Optional),
-                        crate::build::StructProperty::new(
+                        ::typespace::build::StructProperty::new(
+                                "name",
+                                "String".to_string(),
+                            )
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
+                        ::typespace::build::StructProperty::new(
+                                "opt",
+                                "Inner".to_string(),
+                            )
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Optional,
+                            ),
+                        ::typespace::build::StructProperty::new(
                                 "nul",
                                 "Nullable<Inner>".to_string(),
                             )
-                            .with_state(crate::build::StructPropertyState::Required),
-                        crate::build::StructProperty::new(
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
+                        ::typespace::build::StructProperty::new(
                                 "both",
                                 "Nullable<Inner>".to_string(),
                             )
-                            .with_state(crate::build::StructPropertyState::Optional),
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Optional,
+                            ),
                     ])
                     .build()
                     .unwrap(),

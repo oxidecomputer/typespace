@@ -1,27 +1,32 @@
 fn expansion() {
     {
-        let mut builder = crate::TypespaceBuilder::<String>::new(Settings::typical());
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
         builder
-            .insert("f64".to_string(), crate::build::Type::Float("f64".to_string()))
+            .insert(
+                "f64".to_string(),
+                ::typespace::build::Type::Float("f64".to_string()),
+            )
             .unwrap();
         builder
             .insert(
                 "Shape".to_string(),
-                crate::build::Enum::<String>::new()
+                ::typespace::build::Enum::<String>::new()
                     .name("Shape")
-                    .tag_type(crate::build::EnumTagType::Internal {
+                    .tag_type(::typespace::build::EnumTagType::Internal {
                         tag: "kind".to_string(),
                     })
                     .variants([
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Circle",
-                            crate::build::VariantDetails::<
+                            ::typespace::build::VariantDetails::<
                                 String,
                             >::Item("f64".to_string()),
                         ),
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Empty",
-                            crate::build::VariantDetails::<String>::Unit,
+                            ::typespace::build::VariantDetails::<String>::Unit,
                         ),
                     ])
                     .build()

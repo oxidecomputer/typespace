@@ -26,13 +26,12 @@
 //! reserved or duplicate item name at the point it's declared).
 //!
 //! The generated code always qualifies typespace's own vocabulary as
-//! `crate::...`: this macro is only used from within the `typespace`
-//! crate's own tests (there is no consumer-facing path parameter), so
-//! `crate::` resolves to `typespace` at every real call site. Ids are
-//! always `String` (`Id = String`), so builder calls that would
-//! otherwise leave `Id` ambiguous (`Enum::new()`, `VariantDetails::Unit`,
-//! ...) are turbofished to `::<String>` rather than relying on
-//! inference through the whole chain.
+//! `::typespace::...`. It also resolves inside the `typespace` crate's own
+//! tests, because that crate's root declares `extern crate self as
+//! typespace;`. Ids are always `String` (`Id = String`), so builder calls that
+//! would otherwise leave `Id` ambiguous (`Enum::new()`,
+//! `VariantDetails::Unit`, ...) are turbofished to `::<String>` rather than
+//! relying on inference through the whole chain.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -391,12 +390,12 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
     match claims.get("default").copied() {
         None => Ok(base),
         Some(entry) => match &entry.value {
-            None => Ok(quote! { crate::build::StructPropertyState::Default }),
+            None => Ok(quote! { ::typespace::build::StructPropertyState::Default }),
             Some(value) => {
                 let tokens = value_tokens(value);
                 Ok(quote! {
-                    crate::build::StructPropertyState::DefaultValue(
-                        crate::build::JsonValue::new(#tokens)
+                    ::typespace::build::StructPropertyState::DefaultValue(
+                        ::typespace::build::JsonValue::new(#tokens)
                     )
                 })
             }
@@ -417,22 +416,22 @@ fn enum_tag_type(claims: &Claims) -> syn::Result<TokenStream> {
                 &entry.name,
                 "#[untagged] takes no value",
             )),
-            None => Ok(quote! { crate::build::EnumTagType::Untagged }),
+            None => Ok(quote! { ::typespace::build::EnumTagType::Untagged }),
         },
         (Some(entry), _, _) => Err(syn::Error::new_spanned(
             &entry.name,
             "#[untagged] cannot be combined with #[tag]/#[content]",
         )),
-        (None, None, None) => Ok(quote! { crate::build::EnumTagType::External }),
+        (None, None, None) => Ok(quote! { ::typespace::build::EnumTagType::External }),
         (None, Some(tag), None) => {
             let tag = expect_string_value(tag)?;
-            Ok(quote! { crate::build::EnumTagType::Internal { tag: #tag.to_string() } })
+            Ok(quote! { ::typespace::build::EnumTagType::Internal { tag: #tag.to_string() } })
         }
         (None, Some(tag), Some(content)) => {
             let tag = expect_string_value(tag)?;
             let content = expect_string_value(content)?;
             Ok(quote! {
-                crate::build::EnumTagType::Adjacent {
+                ::typespace::build::EnumTagType::Adjacent {
                     tag: #tag.to_string(),
                     content: #content.to_string(),
                 }
@@ -650,7 +649,7 @@ impl BuilderInput {
         let inserts = &lowering.inserts;
         Ok(quote! {
             {
-                let mut builder = crate::TypespaceBuilder::<String>::new(#settings);
+                let mut builder = ::typespace::TypespaceBuilder::<String>::new(#settings);
                 #( #inserts )*
                 builder
             }
@@ -672,7 +671,7 @@ fn lower_struct_properties(
             let state = field_state_override(&claims, base_state)?;
             let field_name = field.name.to_string();
             Ok(quote! {
-                crate::build::StructProperty::new(#field_name, #type_id.to_string())
+                ::typespace::build::StructProperty::new(#field_name, #type_id.to_string())
                     .with_state(#state)
             })
         })
@@ -693,7 +692,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
             lowering.inserts.push(quote! {
                 builder.insert(
                     #name.to_string(),
-                    crate::build::Struct::<String>::new()
+                    ::typespace::build::Struct::<String>::new()
                         .name(#name)
                         #default_tokens
                         .properties([ #(#props),* ])
@@ -710,7 +709,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
             lowering.inserts.push(quote! {
                 builder.insert(
                     #name.to_string(),
-                    crate::build::NewtypeStruct::new(#inner_id.to_string())
+                    ::typespace::build::NewtypeStruct::new(#inner_id.to_string())
                         .name(#name)
                         #default_tokens
                         .build()
@@ -726,7 +725,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
             lowering.inserts.push(quote! {
                 builder.insert(
                     #name.to_string(),
-                    crate::build::TupleStruct::<String>::new()
+                    ::typespace::build::TupleStruct::<String>::new()
                         .name(#name)
                         #default_tokens
                         .fields([ #(#ids.to_string()),* ])
@@ -750,7 +749,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
             lowering.inserts.push(quote! {
                 builder.insert(
                     #name.to_string(),
-                    crate::build::UnitStruct::new(#repr_tokens)
+                    ::typespace::build::UnitStruct::new(#repr_tokens)
                         .name(#name)
                         #default_tokens
                         .build::<String>()
@@ -775,7 +774,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
     lowering.inserts.push(quote! {
         builder.insert(
             #name.to_string(),
-            crate::build::Enum::<String>::new()
+            ::typespace::build::Enum::<String>::new()
                 .name(#name)
                 .tag_type(#tag_type_tokens)
                 #default_tokens
@@ -789,10 +788,10 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
 
 fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<TokenStream> {
     let details_tokens = match &variant.payload {
-        VariantPayload::Unit => quote! { crate::build::VariantDetails::<String>::Unit },
+        VariantPayload::Unit => quote! { ::typespace::build::VariantDetails::<String>::Unit },
         VariantPayload::Tuple(types) if types.len() == 1 => {
             let id = lower_type(&types[0], lowering)?;
-            quote! { crate::build::VariantDetails::<String>::Item(#id.to_string()) }
+            quote! { ::typespace::build::VariantDetails::<String>::Item(#id.to_string()) }
         }
         VariantPayload::Tuple(types) => {
             let ids = types
@@ -800,7 +799,7 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
                 .map(|ty| lower_type(ty, lowering))
                 .collect::<syn::Result<Vec<_>>>()?;
             quote! {
-                crate::build::VariantDetails::<String>::Tuple(
+                ::typespace::build::VariantDetails::<String>::Tuple(
                     [ #(#ids.to_string()),* ].into_iter().collect()
                 )
             }
@@ -808,7 +807,7 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
         VariantPayload::Struct(fields) => {
             let props = lower_struct_properties(fields, lowering)?;
             quote! {
-                crate::build::VariantDetails::<String>::Struct(
+                ::typespace::build::VariantDetails::<String>::Struct(
                     [ #(#props),* ].into_iter().collect()
                 )
             }
@@ -827,7 +826,7 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
     // for `Option<T: ToTokens>` interpolates the contents when `Some`
     // and emits nothing at all when `None`, so this needs no branch.
     Ok(quote! {
-        crate::build::EnumVariant::new(#variant_name, #details_tokens)
+        ::typespace::build::EnumVariant::new(#variant_name, #details_tokens)
             #with_rename
     })
 }
@@ -839,7 +838,7 @@ fn lower_alias(item: &AliasItem, lowering: &mut Lowering) -> syn::Result<()> {
     lowering.inserts.push(quote! {
         builder.insert(
             #name.to_string(),
-            crate::build::TypeAlias::<String>::new(#target_id.to_string())
+            ::typespace::build::TypeAlias::<String>::new(#target_id.to_string())
                 .name(#name)
                 .build()
                 .unwrap(),
@@ -866,17 +865,26 @@ fn lower_field_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<(String, 
             let type_args = generic_type_args(args);
             let inner = expect_one_arg(&type_args, ty)?;
             let id = lower_type(inner, lowering)?;
-            Ok((id, quote! { crate::build::StructPropertyState::Optional }))
+            Ok((
+                id,
+                quote! { ::typespace::build::StructPropertyState::Optional },
+            ))
         }
         Some((ident, args)) if ident == "OptionalNullable" => {
             let type_args = generic_type_args(args);
             let inner = expect_one_arg(&type_args, ty)?;
             let id = ensure_nullable(inner, lowering)?;
-            Ok((id, quote! { crate::build::StructPropertyState::Optional }))
+            Ok((
+                id,
+                quote! { ::typespace::build::StructPropertyState::Optional },
+            ))
         }
         _ => {
             let id = lower_type(ty, lowering)?;
-            Ok((id, quote! { crate::build::StructPropertyState::Required }))
+            Ok((
+                id,
+                quote! { ::typespace::build::StructPropertyState::Required },
+            ))
         }
     }
 }
@@ -889,7 +897,7 @@ fn lower_field_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<(String, 
 fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
     match ty {
         Type::Tuple(tuple) if tuple.elems.is_empty() => {
-            lowering.ensure_anon("()", quote! { crate::build::Type::Unit });
+            lowering.ensure_anon("()", quote! { ::typespace::build::Type::Unit });
             Ok("()".to_string())
         }
         Type::Tuple(tuple) => {
@@ -901,7 +909,7 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
             let id = anon_id(ty)?;
             lowering.ensure_anon(
                 &id,
-                quote! { crate::build::Type::Tuple([ #(#ids.to_string()),* ].into_iter().collect()) },
+                quote! { ::typespace::build::Type::Tuple([ #(#ids.to_string()),* ].into_iter().collect()) },
             );
             Ok(id)
         }
@@ -911,7 +919,7 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
             let id = anon_id(ty)?;
             lowering.ensure_anon(
                 &id,
-                quote! { crate::build::Type::Array(#elem_id.to_string(), #len) },
+                quote! { ::typespace::build::Type::Array(#elem_id.to_string(), #len) },
             );
             Ok(id)
         }
@@ -919,7 +927,7 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
             lowering.ensure_anon(
                 "Never",
                 quote! {
-                    crate::build::Type::Never
+                    ::typespace::build::Type::Never
                 },
             );
             Ok("Never".to_string())
@@ -988,29 +996,29 @@ fn lower_path_type(
     // Scalars: no generics, one Type variant apiece.
     match name.as_str() {
         "String" => {
-            lowering.ensure_anon("String", quote! { crate::build::Type::String });
+            lowering.ensure_anon("String", quote! { ::typespace::build::Type::String });
             return Ok("String".to_string());
         }
         "bool" => {
-            lowering.ensure_anon("bool", quote! { crate::build::Type::Boolean });
+            lowering.ensure_anon("bool", quote! { ::typespace::build::Type::Boolean });
             return Ok("bool".to_string());
         }
         "JsonValue" => {
-            lowering.ensure_anon("JsonValue", quote! { crate::build::Type::JsonValue });
+            lowering.ensure_anon("JsonValue", quote! { ::typespace::build::Type::JsonValue });
             return Ok("JsonValue".to_string());
         }
         "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128"
         | "isize" => {
             lowering.ensure_anon(
                 &name,
-                quote! { crate::build::Type::Integer(#name.to_string()) },
+                quote! { ::typespace::build::Type::Integer(#name.to_string()) },
             );
             return Ok(name);
         }
         "f32" | "f64" => {
             lowering.ensure_anon(
                 &name,
-                quote! { crate::build::Type::Float(#name.to_string()) },
+                quote! { ::typespace::build::Type::Float(#name.to_string()) },
             );
             return Ok(name);
         }
@@ -1082,7 +1090,7 @@ fn lower_path_type(
                     let id = anon_id(ty)?;
                     lowering.ensure_anon(
                         &id,
-                        quote! { crate::build::Type::Vec(#inner_id.to_string()) },
+                        quote! { ::typespace::build::Type::Vec(#inner_id.to_string()) },
                     );
                     Ok(id)
                 }
@@ -1092,7 +1100,7 @@ fn lower_path_type(
                     let id = anon_id(ty)?;
                     lowering.ensure_anon(
                         &id,
-                        quote! { crate::build::Type::Box(#inner_id.to_string()) },
+                        quote! { ::typespace::build::Type::Box(#inner_id.to_string()) },
                     );
                     Ok(id)
                 }
@@ -1102,7 +1110,7 @@ fn lower_path_type(
                     let id = anon_id(ty)?;
                     lowering.ensure_anon(
                         &id,
-                        quote! { crate::build::Type::Set(#inner_id.to_string()) },
+                        quote! { ::typespace::build::Type::Set(#inner_id.to_string()) },
                     );
                     Ok(id)
                 }
@@ -1114,7 +1122,7 @@ fn lower_path_type(
                     lowering.ensure_anon(
                         &id,
                         quote! {
-                            crate::build::Type::Map(#key_id.to_string(), #value_id.to_string())
+                            ::typespace::build::Type::Map(#key_id.to_string(), #value_id.to_string())
                         },
                     );
                     Ok(id)
@@ -1148,7 +1156,7 @@ fn ensure_nullable(inner: &Type, lowering: &mut Lowering) -> syn::Result<String>
     let id = format!("Nullable<{inner_anon_id}>");
     lowering.ensure_anon(
         &id,
-        quote! { crate::build::Type::Option(#inner_id.to_string()) },
+        quote! { ::typespace::build::Type::Option(#inner_id.to_string()) },
     );
     Ok(id)
 }

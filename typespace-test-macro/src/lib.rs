@@ -50,8 +50,8 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Expands to `{ let mut builder = TypespaceBuilder::<String>::new(S); ...;
 /// builder }`: every described type is inserted, plus every anonymous
 /// node its types imply; call `.finalize(...)` yourself on the result.
-/// Only usable from within the `typespace` crate itself (generated code
-/// is qualified as `crate::...`).
+/// Usable from any crate that depends on `typespace` (generated code
+/// is qualified as `::typespace::...`).
 ///
 /// # Ids
 ///

@@ -65,6 +65,13 @@ pub(crate) mod trait_resolution;
 pub(crate) mod value_tokens;
 pub mod view;
 
+// Binds the name `typespace` to this crate itself, so the absolute
+// `::typespace::...` paths that `typespace_builder!` emits (see
+// typespace-test-macro's builder module) resolve from any module in
+// this crate, including nested `#[cfg(test)]` modules, exactly as
+// they would from an external crate depending on `typespace`.
+extern crate self as typespace;
+
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream;

@@ -1,10 +1,12 @@
 fn expansion() {
     {
-        let mut builder = crate::TypespaceBuilder::<String>::new(Settings::typical());
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
         builder
             .insert(
                 "WidgetMarker".to_string(),
-                crate::build::UnitStruct::new(
+                ::typespace::build::UnitStruct::new(
                         ::serde_json::Value::Object(
                             [
                                 (

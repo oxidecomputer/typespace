@@ -1,47 +1,59 @@
 fn expansion() {
     {
-        let mut builder = crate::TypespaceBuilder::<String>::new(Settings::typical());
+        let mut builder = ::typespace::TypespaceBuilder::<
+            String,
+        >::new(Settings::typical());
         builder
-            .insert("u32".to_string(), crate::build::Type::Integer("u32".to_string()))
+            .insert(
+                "u32".to_string(),
+                ::typespace::build::Type::Integer("u32".to_string()),
+            )
             .unwrap();
         builder
             .insert(
                 "Point".to_string(),
-                crate::build::Struct::<String>::new()
+                ::typespace::build::Struct::<String>::new()
                     .name("Point")
                     .properties([
-                        crate::build::StructProperty::new("x", "u32".to_string())
-                            .with_state(crate::build::StructPropertyState::Required),
-                        crate::build::StructProperty::new("y", "u32".to_string())
-                            .with_state(crate::build::StructPropertyState::Required),
+                        ::typespace::build::StructProperty::new("x", "u32".to_string())
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
+                        ::typespace::build::StructProperty::new("y", "u32".to_string())
+                            .with_state(
+                                ::typespace::build::StructPropertyState::Required,
+                            ),
                     ])
                     .build()
                     .unwrap(),
             )
             .unwrap();
         builder
-            .insert("f64".to_string(), crate::build::Type::Float("f64".to_string()))
+            .insert(
+                "f64".to_string(),
+                ::typespace::build::Type::Float("f64".to_string()),
+            )
             .unwrap();
         builder
             .insert(
                 "Shape".to_string(),
-                crate::build::Enum::<String>::new()
+                ::typespace::build::Enum::<String>::new()
                     .name("Shape")
-                    .tag_type(crate::build::EnumTagType::External)
+                    .tag_type(::typespace::build::EnumTagType::External)
                     .variants([
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Empty",
-                            crate::build::VariantDetails::<String>::Unit,
+                            ::typespace::build::VariantDetails::<String>::Unit,
                         ),
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Circle",
-                            crate::build::VariantDetails::<
+                            ::typespace::build::VariantDetails::<
                                 String,
                             >::Item("f64".to_string()),
                         ),
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Line",
-                            crate::build::VariantDetails::<
+                            ::typespace::build::VariantDetails::<
                                 String,
                             >::Tuple(
                                 ["Point".to_string(), "Point".to_string()]
@@ -49,22 +61,26 @@ fn expansion() {
                                     .collect(),
                             ),
                         ),
-                        crate::build::EnumVariant::new(
+                        ::typespace::build::EnumVariant::new(
                             "Rect",
-                            crate::build::VariantDetails::<
+                            ::typespace::build::VariantDetails::<
                                 String,
                             >::Struct(
                                 [
-                                    crate::build::StructProperty::new(
+                                    ::typespace::build::StructProperty::new(
                                             "top_left",
                                             "Point".to_string(),
                                         )
-                                        .with_state(crate::build::StructPropertyState::Required),
-                                    crate::build::StructProperty::new(
+                                        .with_state(
+                                            ::typespace::build::StructPropertyState::Required,
+                                        ),
+                                    ::typespace::build::StructProperty::new(
                                             "bottom_right",
                                             "Point".to_string(),
                                         )
-                                        .with_state(crate::build::StructPropertyState::Required),
+                                        .with_state(
+                                            ::typespace::build::StructPropertyState::Required,
+                                        ),
                                 ]
                                     .into_iter()
                                     .collect(),
