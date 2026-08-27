@@ -1,0 +1,5 @@
+error: `Option` is ambiguous here: use `Optional<T>` (may be absent), `Nullable<T>` (may be null), or `OptionalNullable<T>` (either)
+ --> tests/ui/bare_option.rs:6:19
+  |
+6 |             name: Option<String>,
+  |                   ^^^^^^

@@ -1,0 +1,5 @@
+error: expected one of: curly braces, square brackets, string literal, `-`, integer literal, floating point literal, boolean literal, identifier
+ --> tests/ui/json_lookahead_fallback.rs:6:21
+  |
+6 |         #[default = @]
+  |                     ^

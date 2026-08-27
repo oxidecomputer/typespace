@@ -1,0 +1,5 @@
+error: unit struct requires #[json = <repr>]: the wire form must be stated explicitly
+ --> tests/ui/unit_struct_missing_json.rs:5:16
+  |
+5 |         struct Marker;
+  |                ^^^^^^

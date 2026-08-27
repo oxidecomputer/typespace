@@ -1,0 +1,11 @@
+error: duplicate `#[default]` attribute
+ --> tests/ui/duplicate_attribute.rs:7:15
+  |
+7 |             #[default = 2]
+  |               ^^^^^^^
+
+error: previously specified here
+ --> tests/ui/duplicate_attribute.rs:6:15
+  |
+6 |             #[default = 1]
+  |               ^^^^^^^

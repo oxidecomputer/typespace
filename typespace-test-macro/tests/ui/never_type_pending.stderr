@@ -1,0 +1,5 @@
+error: typespace does not model the never type yet
+ --> tests/ui/never_type_pending.rs:6:19
+  |
+6 |             name: !,
+  |                   ^

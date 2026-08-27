@@ -363,14 +363,15 @@ where
         };
 
         if ty.is_named() {
-            // Consult feasibility for each trait newly required of this
-            // named type. Derivable and forwarded (alias) traits share
-            // one obligation set--every contained child, via
-            // contained_children_related--so we batch them into a
-            // single push per child. Manually realized traits carry
-            // their own, often-empty, obligation lists, so each gets
-            // its own push. Impossible traits become conflicts and
-            // never enter the built set.
+            // Named types no longer absorb unconditionally: consult
+            // feasibility per required trait. Derivable and forwarded
+            // (alias) traits share one obligation set--every contained
+            // child, via contained_children_related--so we batch them
+            // and push once per child, exactly as unconditional
+            // absorption used to. Manually realized traits carry their
+            // own, often-empty, obligation list, so each gets its own
+            // push. Impossible traits become conflicts and are never
+            // absorbed.
             let mut derivable_new = TypespaceTraitSet::empty();
             let mut manual_pushes = Vec::<(TypespaceTrait, Vec<(Relation, Id)>)>::new();
 
@@ -656,15 +657,13 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        build::{
-            Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, Type,
-            VariantDetails,
-        },
+        build::{NewtypeStruct, Struct, StructProperty, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::Settings,
         Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     };
+    use typespace_test_macro::typespace_builder;
 
     /// The built trait set of the type with `id`.
     fn built_traits(typespace: &Typespace<String>, id: &str) -> TypespaceTraitSet {
@@ -686,42 +685,16 @@ mod tests {
     /// struct and the struct it contains, and nothing else lands.
     #[test]
     fn required_propagates_through_struct_graph() {
-        // struct Inner {
-        //     count: u32,
-        // }
-        //
-        // struct Outer {
-        //     name: String,
-        //     inner: Inner,
-        // }
-        let mut builder = TypespaceBuilder::new(Settings::typical());
-        builder.insert("string".to_string(), Type::String).unwrap();
-        builder
-            .insert("u32".to_string(), Type::Integer("u32".to_string()))
-            .unwrap();
-        builder
-            .insert(
-                "inner".to_string(),
-                Struct::new()
-                    .name("Inner")
-                    .properties(vec![StructProperty::new("count", "u32".to_string())])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
-        builder
-            .insert(
-                "outer".to_string(),
-                Struct::new()
-                    .name("Outer")
-                    .properties(vec![
-                        StructProperty::new("name", "string".to_string()),
-                        StructProperty::new("inner", "inner".to_string()),
-                    ])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(Settings::typical(), {
+            struct Inner {
+                count: u32,
+            }
+
+            struct Outer {
+                name: String,
+                inner: Inner,
+            }
+        });
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
@@ -733,8 +706,8 @@ mod tests {
         ]
         .into_iter()
         .collect::<TypespaceTraitSet>();
-        assert_eq!(built_traits(&typespace, "outer"), expected);
-        assert_eq!(built_traits(&typespace, "inner"), expected);
+        assert_eq!(built_traits(&typespace, "Outer"), expected);
+        assert_eq!(built_traits(&typespace, "Inner"), expected);
     }
 
     /// An unsatisfiable requirement reports a coherent chain: the
@@ -743,32 +716,17 @@ mod tests {
     /// per ancestor.
     #[test]
     fn map_key_conflict_reports_path() {
-        // struct KeyStruct {
-        //     weight: f64,
-        // }
-        //
-        // BTreeMap<KeyStruct, String>
-        let mut builder = TypespaceBuilder::new(Settings::minimal());
-        builder
-            .insert("f64".to_string(), Type::Float("f64".to_string()))
-            .unwrap();
-        builder.insert("string".to_string(), Type::String).unwrap();
-        builder
-            .insert(
-                "key".to_string(),
-                Struct::new()
-                    .name("KeyStruct")
-                    .properties(vec![StructProperty::new("weight", "f64".to_string())])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
-        builder
-            .insert(
-                "map".to_string(),
-                Type::Map("key".to_string(), "string".to_string()),
-            )
-            .unwrap();
+        // The Map<KeyStruct, String> node has to be reachable from some
+        // item for typespace_builder! to insert it (unlike the builder,
+        // it has no way to insert a type with no name and no
+        // reference); a throwaway alias is the closest fit.
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct KeyStruct {
+                weight: f64,
+            }
+
+            type KeyStructMap = Map<KeyStruct, String>;
+        });
 
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
@@ -788,7 +746,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("no conflict for {required}"));
             assert!(matches!(
                 &conflict.origin,
-                RequirementOrigin::MapKey(id) if id == "map"
+                RequirementOrigin::MapKey(id) if id == "Map<KeyStruct, String>"
             ));
             assert_eq!(conflict.offender, "f64");
             assert!(matches!(
@@ -798,7 +756,7 @@ mod tests {
             // One hop: the key struct passes the requirement to its
             // field.
             assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
-            assert_eq!(conflict.path[0].type_id, "key");
+            assert_eq!(conflict.path[0].type_id, "KeyStruct");
             assert!(matches!(
                 &conflict.path[0].relation,
                 Relation::Field(name) if name == "weight"
@@ -810,22 +768,14 @@ mod tests {
     /// manually is a finalization error, not a rendering panic.
     #[test]
     fn required_display_on_struct_conflicts() {
-        // struct S {
-        //     s: String,
-        // }
-        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Display);
-        let mut builder = TypespaceBuilder::new(settings);
-        builder.insert("string".to_string(), Type::String).unwrap();
-        builder
-            .insert(
-                "s".to_string(),
-                Struct::new()
-                    .name("S")
-                    .properties(vec![StructProperty::new("s", "string".to_string())])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            {
+                struct S {
+                    s: String,
+                }
+            }
+        );
 
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
@@ -838,7 +788,7 @@ mod tests {
         let conflict = &conflicts[0];
         assert_eq!(conflict.required, TypespaceTrait::Display);
         assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
-        assert_eq!(conflict.offender, "s");
+        assert_eq!(conflict.offender, "S");
         assert!(conflict.path.is_empty(), "path: {:#?}", conflict.path);
         assert!(matches!(
             conflict.reason,
@@ -851,35 +801,24 @@ mod tests {
     /// requiring them succeeds and they land in the built trait set.
     #[test]
     fn required_display_on_simple_enum_accepted() {
-        // enum Color {
-        //     Red,
-        //     Green,
-        // }
-        let settings = Settings::minimal()
-            .with_required_trait(TypespaceTrait::Display)
-            .with_required_trait(TypespaceTrait::FromStr);
-        let mut builder = TypespaceBuilder::new(settings);
-        builder
-            .insert(
-                "color".to_string(),
-                Enum::new()
-                    .name("Color")
-                    .tag_type(EnumTagType::External)
-                    .variants(vec![
-                        EnumVariant::new("Red", VariantDetails::<String>::Unit),
-                        EnumVariant::new("Green", VariantDetails::Unit),
-                    ])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(
+            Settings::minimal()
+                .with_required_trait(TypespaceTrait::Display)
+                .with_required_trait(TypespaceTrait::FromStr),
+            {
+                enum Color {
+                    Red,
+                    Green,
+                }
+            }
+        );
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
         let expected = [TypespaceTrait::Display, TypespaceTrait::FromStr]
             .into_iter()
             .collect::<TypespaceTraitSet>();
-        assert_eq!(built_traits(&typespace, "color"), expected);
+        assert_eq!(built_traits(&typespace, "Color"), expected);
     }
 
     /// A `Never` field satisfies every trait `Settings::typical`
@@ -888,6 +827,9 @@ mod tests {
     /// json-serde/src/lib.rs), so a struct containing one finalizes
     /// without conflicts and the field's own trait set matches the
     /// struct's.
+    ///
+    /// Hand-written rather than using typespace_builder!: the macro
+    /// rejects `!` until typespace models the never type.
     #[test]
     fn never_field_satisfies_typical_settings() {
         // struct S {
@@ -967,22 +909,14 @@ mod tests {
     /// compile.
     #[test]
     fn supertrait_closure_expands_ord() {
-        // struct S {
-        //     name: String,
-        // }
-        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Ord);
-        let mut builder = TypespaceBuilder::new(settings);
-        builder.insert("string".to_string(), Type::String).unwrap();
-        builder
-            .insert(
-                "s".to_string(),
-                Struct::new()
-                    .name("S")
-                    .properties(vec![StructProperty::new("name", "string".to_string())])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Ord),
+            {
+                struct S {
+                    name: String,
+                }
+            }
+        );
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
@@ -994,6 +928,6 @@ mod tests {
         ]
         .into_iter()
         .collect::<TypespaceTraitSet>();
-        assert_eq!(built_traits(&typespace, "s"), expected);
+        assert_eq!(built_traits(&typespace, "S"), expected);
     }
 }

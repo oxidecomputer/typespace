@@ -1,105 +1,9 @@
 // Copyright 2026 Oxide Computer Company
 
-use std::str::FromStr;
-
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{
-    parse::{Parse, ParseStream},
-    parse_macro_input, Expr, ItemFn, LitStr, Token,
-};
 
-struct MacroArgs {
-    filename: LitStr,
-    output_expr: Expr,
-}
-
-impl Parse for MacroArgs {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let filename: LitStr = input.parse()?;
-        let _comma: Token![,] = input.parse()?;
-        let output_expr: Expr = input.parse()?;
-        Ok(MacroArgs {
-            filename,
-            output_expr,
-        })
-    }
-}
-
-fn pretty_tokens(output_expr: &Expr) -> proc_macro2::TokenStream {
-    quote! {
-        {
-            let __output_tokens = #output_expr;
-            let __file: ::syn::File = ::syn::parse2(__output_tokens)
-                .expect("failed to parse rendered output as Rust file");
-            ::prettyplease::unparse(&__file)
-        }
-    }
-}
-
-fn expand_missing_file(filename: &str, output_expr: &Expr) -> proc_macro2::TokenStream {
-    let pretty = pretty_tokens(output_expr);
-    quote! {
-        {
-            let __snapshot_path = ::std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(#filename);
-            let __content: ::std::string::String = #pretty;
-            if let Some(parent) = __snapshot_path.parent() {
-                ::std::fs::create_dir_all(parent).ok();
-            }
-            ::std::fs::write(&__snapshot_path, &__content)
-                .expect("failed to write snapshot");
-            // This forces re-evaluation of the macro if the snapshot file
-            // changes.
-            let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/", #filename));
-            panic!(
-                "snapshot file created, run tests again: {}",
-                __snapshot_path.display()
-            );
-        }
-    }
-}
-
-fn expand_inner(
-    filename: &str,
-    output_expr: &Expr,
-    file_tokens: proc_macro2::TokenStream,
-    body_stmts: &[syn::Stmt],
-) -> proc_macro2::TokenStream {
-    let pretty = pretty_tokens(output_expr);
-    quote! {
-        {
-            // This forces re-evaluation of the macro if the snapshot file
-            // changes.
-            let _ = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/",
-            #filename));
-
-            let __snapshot_path = ::std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(#filename);
-            let __content: ::std::string::String = #pretty;
-            let __needs_update = match ::std::fs::read_to_string(&__snapshot_path) {
-                Ok(ref existing) => existing != &__content,
-                Err(_) => true,
-            };
-            if __needs_update {
-                if let Some(parent) = __snapshot_path.parent() {
-                    ::std::fs::create_dir_all(parent).ok();
-                }
-                ::std::fs::write(&__snapshot_path, __content)
-                    .expect("failed to write snapshot");
-                panic!(
-                    "snapshot updated, run tests again: {}",
-                    __snapshot_path.display()
-                );
-            }
-            mod import {
-                use super::*;
-                #file_tokens
-            }
-            #( #body_stmts )*
-        }
-    }
-}
+mod builder;
+mod snapshot;
 
 /// Attribute macro for snapshot-testing rendered Rust code.
 ///
@@ -113,114 +17,128 @@ fn expand_inner(
 /// ```
 ///
 /// The annotated function is replaced by an inline block that:
-/// 1. Evaluates the expression, pretty-prints it, and compares against the snapshot file;
-///    updates + panics if different.
-/// 2. Embeds the snapshot file content as `mod import { ... }` (read at macro expansion time).
+/// 1. Evaluates the expression, pretty-prints it, and compares against
+///    the snapshot file; updates + panics if different.
+/// 2. Embeds the snapshot file content as `mod import { ... }` (read at
+///    macro expansion time).
 /// 3. Runs the original function body.
 ///
 /// The annotated function must have no parameters.
 #[proc_macro_attribute]
 pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(attr as MacroArgs);
-    let func = parse_macro_input!(item as ItemFn);
-
-    if !func.sig.inputs.is_empty() {
-        return syn::Error::new_spanned(
-            &func.sig.inputs,
-            "check_and_include: function must have no parameters",
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    let filename_str = args.filename.value();
-    let output_expr = &args.output_expr;
-    let body_stmts = &func.block.stmts;
-
-    let manifest_dir = match std::env::var("CARGO_MANIFEST_DIR") {
-        Ok(dir) => dir,
-        Err(_) => {
-            return syn::Error::new_spanned(
-                &args.filename,
-                "CARGO_MANIFEST_DIR is not set; cannot resolve snapshot path",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    let snapshot_path = std::path::Path::new(&manifest_dir).join(&filename_str);
-
-    let file_tokens: proc_macro2::TokenStream = match std::fs::read_to_string(&snapshot_path) {
-        Err(_) => {
-            // We create a file so that our later use of `include_str!` will
-            // succeed.
-            let _ = std::fs::write(&snapshot_path, "");
-            return expand_missing_file(&filename_str, output_expr).into();
-        }
-
-        // If the file is zero-length, we assume that we made it in a previous
-        // run to satisfy the condition above, but something went wrong. We'll
-        // treat this as a file that needs to be created.
-        Ok(content) if content.trim().is_empty() => {
-            return expand_missing_file(&filename_str, output_expr).into();
-        }
-
-        Ok(content) => match proc_macro2::TokenStream::from_str(&content) {
-            Ok(ts) => ts,
-            Err(e) => {
-                return syn::Error::new_spanned(
-                    &args.filename,
-                    format!(
-                        "snapshot file {} contains invalid Rust ({}): \
-                         fix or delete it to regenerate",
-                        snapshot_path.display(),
-                        e
-                    ),
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-    };
-
-    expand_inner(&filename_str, output_expr, file_tokens, body_stmts).into()
+    snapshot::expand(attr, item)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use syn::parse_quote;
-
-    #[test]
-    fn test_expansion_missing_file() {
-        let output_expr: Expr = parse_quote! { ts.render() };
-        let expanded = expand_missing_file("tests/output/missing.rs", &output_expr);
-        let wrapped: syn::File = parse_quote! { fn wrapper() { #expanded } };
-        let out = prettyplease::unparse(&wrapped);
-        expectorate::assert_contents("tests/output/test_expansion_missing_file.rs", &out);
-    }
-
-    #[test]
-    fn test_expansion() {
-        let output_expr: Expr = parse_quote! { ts.render() };
-        let file_tokens: proc_macro2::TokenStream = parse_quote! {
-            pub struct MyType(pub String);
-        };
-        let body_stmts: Vec<syn::Stmt> = parse_quote! {
-            let value = import::MyType("hello".to_string());
-            assert_eq!(value.0, "hello");
-        };
-
-        let expanded = expand_inner(
-            "tests/output/my_type.rs",
-            &output_expr,
-            file_tokens,
-            &body_stmts,
-        );
-
-        let wrapped: syn::File = parse_quote! { fn wrapper() { #expanded } };
-        let out = prettyplease::unparse(&wrapped);
-        expectorate::assert_contents("tests/output/test_expansion.rs", &out);
-    }
+/// Build a `TypespaceBuilder<String>` from Rust-like type descriptions.
+///
+/// ```ignore
+/// let builder = typespace_builder!(Settings::typical(), {
+///     struct Inner {
+///         count: u32,
+///     }
+///
+///     #[default = { name: "anon", inner: { count: 0 } }]
+///     struct Outer {
+///         name: String,
+///         inner: Optional<Inner>,
+///     }
+///
+///     enum Color { Red, Green }
+/// });
+/// ```
+///
+/// Expands to `{ let mut builder = TypespaceBuilder::<String>::new(S); ...;
+/// builder }`: every described type is inserted, plus every anonymous
+/// node its types imply; call `.finalize(...)` yourself on the result.
+/// Only usable from within the `typespace` crate itself (generated code
+/// is qualified as `crate::...`).
+///
+/// # Ids
+///
+/// `TypespaceBuilder` is generic over an Id; this macro fixes it to
+/// `String` and assigns one to each type as follows:
+///
+/// - Named item (`struct`/`enum`/`type`): its name verbatim, e.g.
+///   `"Outer"`.
+/// - Anonymous node (container, primitive, `Nullable` wrapper): an id
+///   reconstructed from its parsed type, not lifted from source text,
+///   e.g. `"Vec<u32>"`, `"Map<KeyStruct, String>"`. Because it's
+///   reconstructed rather than copied, different ways of writing the
+///   same type collapse to one id: source whitespace is never
+///   part of it, and an array length written in hex normalizes to
+///   decimal. Inserted once even if referenced repeatedly.
+/// - `Nullable<T>` and `OptionalNullable<T>` both wrap `T` in the same
+///   anonymous `Option` node, id `"Nullable<T>"`: referencing a given
+///   `T` through either form reuses one node instead of inserting
+///   two `Option`-shaped types for it.
+///
+/// An item's name can't be one the macro's own vocabulary already uses
+/// as an id (`String`, `Vec`, `Optional`, ...), and can't repeat a name
+/// already declared in the same invocation; both are spanned compile
+/// errors rather than the runtime `DuplicateTypeId` they'd otherwise
+/// surface as.
+///
+/// # Item forms
+///
+/// | Syntax                               | Builds                    |
+/// |---------------------------------------|---------------------------|
+/// | `struct N { f: Ty, .. }`             | `Struct`                  |
+/// | `struct N(Ty);`                      | `NewtypeStruct`           |
+/// | `struct N(Ty, Ty, ..);`              | `TupleStruct`             |
+/// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`      |
+/// | `enum N { .. }`                      | `Enum`                    |
+/// | `type N = Ty;`                       | `TypeAlias`               |
+///
+/// Enum variants: `V` unit; `V(Ty)` single payload (`VariantDetails::Item`);
+/// `V(Ty, Ty, ..)` tuple payload; `V { f: Ty, .. }` struct payload. A
+/// struct-shaped variant's fields follow the same rules as a struct's.
+///
+/// # Types
+///
+/// A bare name not listed below is a named reference to that item's id.
+/// Only a plain, unqualified name is accepted: `foo::Bar`, `::Bar`, and
+/// `<T as Trait>::Bar` are all rejected, everywhere a type appears.
+///
+/// Primitives (each an anonymous node): `String`, `bool`,
+/// `u8..=usize`/`i8..=isize`, `f32`/`f64`, `()`, `JsonValue`. Containers
+/// (each an anonymous node): `Vec<T>`, `Box<T>`, `Map<K, V>`, `Set<T>`,
+/// `[T; N]`, `(A, B, ..)`. `Map`/`Set` are typespace markers, not Rust
+/// types--the rendered container is a settings decision, so
+/// `HashMap`/`BTreeMap`/`HashSet`/`BTreeSet` are rejected with an error
+/// pointing at `Map`/`Set` instead. `!` parses (a field can be declared
+/// never-set) but is rejected: typespace has no never-type model yet.
+///
+/// Non-Rust vocabulary for optionality and nullability:
+///
+/// | Syntax                 | Where           | Meaning              |
+/// |------------------------|-----------------|-----------------------|
+/// | `Optional<T>`          | field top level | may be omitted        |
+/// | `Nullable<T>`          | anywhere        | may be `T` or `null`  |
+/// | `OptionalNullable<T>`  | field top level | omitted or `null`     |
+///
+/// `Option<T>`, and the bare (argument-less) forms `Optional`,
+/// `Nullable`, and `OptionalNullable`, are compile errors--each names
+/// a real ambiguity or an incomplete type, not a valid reference.
+///
+/// # Attributes
+///
+/// - Field `#[default]`: `StructPropertyState::Default`.
+/// - Field `#[default = V]`: `StructPropertyState::DefaultValue(V)`.
+/// - Type-level `#[default = V]`: the type's `.default(V)`.
+/// - Unit struct `#[json = V]`: its wire repr (required; any JSON).
+/// - Unit variant `#[json = "name"]`: its serde rename (string only).
+/// - Enum tagging: `EnumTagType::External` (default), `#[untagged]`,
+///   `#[tag = "t"]` (internal), `#[tag = "t", content = "c"]`
+///   (adjacent).
+///
+/// An attribute used somewhere other than the list above--an unknown
+/// name, or a real one in the wrong place (`#[untagged]` on a struct) --
+/// is a compile error naming the mistake, as is repeating one.
+///
+/// `V` is JSON-ish: objects (`{ k: v, .. }`, unquoted-ident or
+/// string-literal keys), arrays, strings, numbers,
+/// `true`, `false`, `null`, nested arbitrarily, trailing commas permitted.
+#[proc_macro]
+pub fn typespace_builder(input: TokenStream) -> TokenStream {
+    builder::expand(input.into()).into()
 }

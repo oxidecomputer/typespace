@@ -1,0 +1,5 @@
+error: `HashMap` is a Rust type; typespace_builder! expects `Map<K, V>` (the rendered container is a settings decision)
+ --> tests/ui/std_container_name.rs:8:22
+  |
+8 |             by_name: HashMap<String, u32>,
+  |                      ^^^^^^^

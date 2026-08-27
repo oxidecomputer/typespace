@@ -1,0 +1,5 @@
+error: `#[untagged]` is only valid on an enum
+ --> tests/ui/misplaced_attribute.rs:5:11
+  |
+5 |         #[untagged]
+  |           ^^^^^^^^

@@ -1,0 +1,32 @@
+fn expansion() {
+    {
+        let mut builder = crate::TypespaceBuilder::<String>::new(Settings::typical());
+        builder
+            .insert(
+                "WidgetMarker".to_string(),
+                crate::build::UnitStruct::new(
+                        ::serde_json::Value::Object(
+                            [
+                                (
+                                    "kind".to_string(),
+                                    ::serde_json::Value::String("widget".to_string()),
+                                ),
+                                (
+                                    "version".to_string(),
+                                    ::serde_json::Value::Number(
+                                        ::serde_json::Number::from(1i64),
+                                    ),
+                                ),
+                            ]
+                                .into_iter()
+                                .collect(),
+                        ),
+                    )
+                    .name("WidgetMarker")
+                    .build::<String>()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+    };
+}

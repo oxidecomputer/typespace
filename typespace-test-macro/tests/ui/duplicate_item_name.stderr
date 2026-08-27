@@ -1,0 +1,11 @@
+error: duplicate item `Widget`
+ --> tests/ui/duplicate_item_name.rs:9:14
+  |
+9 |         enum Widget {
+  |              ^^^^^^
+
+error: previously defined here
+ --> tests/ui/duplicate_item_name.rs:5:16
+  |
+5 |         struct Widget {
+  |                ^^^^^^

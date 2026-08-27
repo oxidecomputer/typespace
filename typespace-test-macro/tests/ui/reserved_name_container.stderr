@@ -1,0 +1,5 @@
+error: `Vec` is reserved for typespace_builder!'s own type vocabulary and can't name an item
+ --> tests/ui/reserved_name_container.rs:5:16
+  |
+5 |         struct Vec {
+  |                ^^^

@@ -1,0 +1,5 @@
+error: `Optional` may only appear as a field's top-level type: "may be absent" is a property of a field, not a type
+ --> tests/ui/optional_in_nested_position.rs:6:24
+  |
+6 |             items: Vec<Optional<String>>,
+  |                        ^^^^^^^^

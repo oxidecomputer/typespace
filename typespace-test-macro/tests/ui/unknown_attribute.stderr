@@ -1,0 +1,5 @@
+error: unknown attribute `#[dfeault]`
+ --> tests/ui/unknown_attribute.rs:5:11
+  |
+5 |         #[dfeault = 1]
+  |           ^^^^^^^

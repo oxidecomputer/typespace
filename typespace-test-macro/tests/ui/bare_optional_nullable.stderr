@@ -1,0 +1,5 @@
+error: `Nullable` needs a type argument: `Nullable<T>`
+ --> tests/ui/bare_optional_nullable.rs:7:19
+  |
+7 |             name: Nullable,
+  |                   ^^^^^^^^

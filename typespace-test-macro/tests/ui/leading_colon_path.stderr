@@ -1,0 +1,5 @@
+error: unsupported type syntax in typespace_builder!: expected a plain, unqualified type name (not `::Foo`, `foo::Foo`, or `<T as Trait>::Foo`)
+ --> tests/ui/leading_colon_path.rs:7:19
+  |
+7 |             name: ::String,
+  |                   ^^^^^^^^
