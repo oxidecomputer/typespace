@@ -1485,6 +1485,9 @@ fn expect_two_args<'a>(args: &'a [&'a Type], whole: &Type) -> syn::Result<(&'a T
 fn anon_id(ty: &Type) -> syn::Result<String> {
     match ty {
         Type::Tuple(tuple) if tuple.elems.is_empty() => Ok("()".to_string()),
+        // `!` names the same anonymous node wherever it appears, so this
+        // is the id `lower_type` registers it under.
+        Type::Never(_) => Ok("Never".to_string()),
         Type::Tuple(tuple) => {
             let parts = tuple
                 .elems
@@ -1883,6 +1886,25 @@ mod tests {
             out.contains("requires #[json"),
             "expected the missing-#[json] guidance in: {out}"
         );
+    }
+
+    /// `!` is usable inside the containers, tuples, and arrays whose
+    /// ids route through `anon_id`, not only as a whole field type.
+    #[test]
+    fn test_never_in_containers() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Test {
+                    vec: Vec<!>,
+                    map: Map<String, !>,
+                    boxed: Box<!>,
+                    tuple: (u32, !),
+                    array: [!; 3],
+                    nested: Optional<Vec<!>>,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_never_in_containers.rs", &out);
     }
 
     #[test]
