@@ -623,7 +623,8 @@ fn test_never_field() {
     let mut builder = TypespaceBuilder::new(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
-            .with_required_trait(TypespaceTrait::Deserialize),
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::Debug),
     );
 
     builder.insert("never".to_string(), Type::Never).unwrap();
@@ -653,6 +654,7 @@ fn test_never_field() {
         // filling the field via Absent's Default.
         assert_eq!(serde_json::to_string(&value).unwrap(), "{}");
         assert!(serde_json::from_str::<import::Gone>("{}").is_ok());
+        assert!(serde_json::from_str::<import::Gone>(r#"{ "value": null }"#).is_err());
     }
 }
 

@@ -882,12 +882,16 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
         let ty_ident = self.render_ident(type_id);
 
-        // A Never property is always absent, regardless of its declared
-        // state: ::json_serde::Absent has exactly one value and its
-        // Serialize impl always errors, so the field is skipped in both
-        // directions (deserialization fills it via Absent's Default).
+        // A Never property is always absent. We model this with the
+        // ::json_serde::Absent type. It must have #[serde(default)] since it
+        // cannot be deserialized, and #[serde(skip_serializing_if =
+        // "::json_serde::always")] because it cannot be serialized (and to
+        // work around schemars bugs in all versions).
         if matches!(ty, Type::Never) {
-            serde_options.push(quote! { skip });
+            serde_options.push(quote! { default });
+            serde_options.push(quote! {
+                skip_serializing_if = "::json_serde::always"
+            });
             let serde = quote! {
                 #[serde(
                     #( #serde_options ),*
@@ -1107,9 +1111,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // programming error.
             Type::JsonValue => panic!("Default value for JsonValue is not supported"),
 
-            // Unreachable: render_struct_property short-circuits Never
-            // properties (always #[serde(skip)]) before any state
-            // handling, so no state-specific skip logic runs for them.
+            // render_struct_property short-circuits Never properties.
             Type::Never => unreachable!("Never properties are skipped before state handling"),
         }
     }

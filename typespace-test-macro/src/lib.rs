@@ -105,8 +105,8 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `[T; N]`, `(A, B, ..)`. `Map`/`Set` are typespace markers, not Rust
 /// types--the rendered container is a settings decision, so
 /// `HashMap`/`BTreeMap`/`HashSet`/`BTreeSet` are rejected with an error
-/// pointing at `Map`/`Set` instead. `!` parses (a field can be declared
-/// never-set) but is rejected: typespace has no never-type model yet.
+/// pointing at `Map`/`Set` instead. `!` is an unsatisfiable type; use it
+/// for a struct property that must be absent or an array that must be empty.
 ///
 /// Non-Rust vocabulary for optionality and nullability:
 ///
