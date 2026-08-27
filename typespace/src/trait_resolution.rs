@@ -657,11 +657,10 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        build::{NewtypeStruct, Struct, StructProperty, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::Settings,
-        Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
+        Typespace, TypespaceTrait, TypespaceTraitSet,
     };
     use typespace_test_macro::typespace_builder;
 
@@ -827,26 +826,13 @@ mod tests {
     /// json-serde/src/lib.rs), so a struct containing one finalizes
     /// without conflicts and the field's own trait set matches the
     /// struct's.
-    ///
-    /// Hand-written rather than using typespace_builder!: the macro
-    /// rejects `!` until typespace models the never type.
     #[test]
     fn never_field_satisfies_typical_settings() {
-        // struct S {
-        //     gone: Never,
-        // }
-        let mut builder = TypespaceBuilder::new(Settings::typical());
-        builder.insert("never".to_string(), Type::Never).unwrap();
-        builder
-            .insert(
-                "s".to_string(),
-                Struct::new()
-                    .name("S")
-                    .properties(vec![StructProperty::new("gone", "never".to_string())])
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(Settings::typical(), {
+            struct S {
+                gone: !,
+            }
+        });
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
@@ -858,7 +844,7 @@ mod tests {
         ]
         .into_iter()
         .collect::<TypespaceTraitSet>();
-        assert_eq!(built_traits(&typespace, "s"), expected);
+        assert_eq!(built_traits(&typespace, "S"), expected);
     }
 
     /// `::json_serde::Absent` has no `Display` impl (see
@@ -869,19 +855,12 @@ mod tests {
     /// at the newtype.
     #[test]
     fn required_display_conflicts_on_never_field() {
-        // struct Wrapper(Never);
-        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Display);
-        let mut builder = TypespaceBuilder::new(settings);
-        builder.insert("never".to_string(), Type::Never).unwrap();
-        builder
-            .insert(
-                "wrapper".to_string(),
-                NewtypeStruct::new("never".to_string())
-                    .name("Wrapper")
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            {
+                struct Wrapper(!);
+            }
+        );
 
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
@@ -894,9 +873,9 @@ mod tests {
         let conflict = &conflicts[0];
         assert_eq!(conflict.required, TypespaceTrait::Display);
         assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
-        assert_eq!(conflict.offender, "never");
+        assert_eq!(conflict.offender, "Never");
         assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
-        assert_eq!(conflict.path[0].type_id, "wrapper");
+        assert_eq!(conflict.path[0].type_id, "Wrapper");
         assert!(matches!(conflict.path[0].relation, Relation::Inner));
         assert!(matches!(
             &conflict.reason,
@@ -929,5 +908,25 @@ mod tests {
         .into_iter()
         .collect::<TypespaceTraitSet>();
         assert_eq!(built_traits(&typespace, "S"), expected);
+    }
+
+    #[test]
+    #[ignore]
+    fn required_display_panics_at_render_not_finalize() {
+        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Display);
+        let builder = typespace_builder!(settings, {
+            enum Color {
+                Red,
+                Blue,
+            }
+        });
+
+        let ts = builder
+            .finalize(no_cycles)
+            .expect("finalize should succeed per with_required_trait docs");
+
+        // This should panic per the new render_derives guard, even though
+        // finalize() succeeded without error.
+        let _ = ts.to_codespace();
     }
 }

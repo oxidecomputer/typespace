@@ -582,6 +582,7 @@ const RESERVED_NAMES: &[&str] = &[
     "Set",
     "Option",
     "Optional",
+    "Never",
     "Nullable",
     "OptionalNullable",
 ];
@@ -914,10 +915,16 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
             );
             Ok(id)
         }
-        Type::Never(_) => Err(syn::Error::new_spanned(
-            ty,
-            "typespace does not model the never type yet",
-        )),
+        Type::Never(_) => {
+            lowering.ensure_anon(
+                "Never",
+                quote! {
+                    crate::build::Type::Never
+                },
+            );
+            Ok("Never".to_string())
+        }
+
         Type::Path(type_path) => lower_path_type(type_path, ty, lowering),
         _ => Err(syn::Error::new_spanned(
             ty,
@@ -1510,5 +1517,18 @@ mod tests {
             out.contains("requires #[json"),
             "expected the missing-#[json] guidance in: {out}"
         );
+    }
+
+    #[test]
+    fn struct_with_never_field() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Test {
+                    foo: String,
+                    bar: !,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/builder_struct_with_never.rs", &out);
     }
 }
