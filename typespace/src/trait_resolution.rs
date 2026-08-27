@@ -847,12 +847,9 @@ mod tests {
         assert_eq!(built_traits(&typespace, "S"), expected);
     }
 
-    /// `::json_serde::Absent` has no `Display` impl (see
-    /// json-serde/src/lib.rs). A newtype struct forwards a required
-    /// `Display` to its inner type unconditionally--`feasibility`'s
-    /// `NewtypeStruct` arm has no impossibility check of its own--so
-    /// wrapping a `Never` field surfaces the conflict at the leaf, not
-    /// at the newtype.
+    /// A newtype struct wrapping `Never` is rejected by validation
+    /// before trait resolution runs, so a required `Display` on
+    /// `Wrapper` never reaches the `Never` leaf to conflict over.
     #[test]
     fn required_display_conflicts_on_never_field() {
         let builder = typespace_builder!(
@@ -865,22 +862,11 @@ mod tests {
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
         };
-        let Error::TraitConflicts { conflicts } = err else {
-            panic!("expected TraitConflicts, got: {err}");
+        let Error::NeverInTransparentWrapper { wrapper, type_id } = err else {
+            panic!("expected NeverInTransparentWrapper, got: {err}");
         };
-
-        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
-        let conflict = &conflicts[0];
-        assert_eq!(conflict.required, TypespaceTrait::Display);
-        assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
-        assert_eq!(conflict.offender, "Never");
-        assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
-        assert_eq!(conflict.path[0].type_id, "Wrapper");
-        assert!(matches!(conflict.path[0].relation, Relation::Inner));
-        assert!(matches!(
-            &conflict.reason,
-            OffenderReason::Primitive { type_name } if type_name == "json_serde::Absent"
-        ));
+        assert_eq!(wrapper, "newtype struct");
+        assert_eq!(type_id, "Wrapper");
     }
 
     /// Requiring a trait requires its supertraits: Ord alone expands

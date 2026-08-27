@@ -1695,3 +1695,929 @@ fn test_native_map_key() {
 
     builder.finalize(no_cycles).expect("finalize passes");
 }
+
+// Tests for `Type::Never` in composite positions: containers, the
+// optional and nullable property states, tuples, arrays, generated item
+// bodies, aliases, and nesting. The bare `!` struct property is covered
+// by test_never_field above.
+
+// A builder carrying the settings these tests share: the serde traits
+// the round-trip assertions need, plus Debug so failures print
+// something useful. The `Never` node is pre-inserted under the id
+// "never".
+fn never_builder() -> TypespaceBuilder<String> {
+    let mut builder = TypespaceBuilder::new(
+        Settings::minimal()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::Debug),
+    );
+    builder.insert("never".to_string(), Type::Never).unwrap();
+    builder
+}
+
+// A struct with a single property: the carrier that puts a composite
+// type into a position serde can exercise.
+fn holder(name: &str, prop: &str, type_id: &str, state: StructPropertyState) -> Type<String> {
+    Struct::new()
+        .name(name)
+        .properties(vec![
+            StructProperty::new(prop, type_id.to_string()).with_state(state)
+        ])
+        .build()
+        .unwrap()
+}
+
+// `Vec<!>` is the "array that must be empty" case: the element type can
+// never be produced, so an empty vec round-trips and any element fails
+// in both directions.
+#[test]
+fn test_never_in_vec() {
+    let mut builder = never_builder();
+    builder
+        .insert("vec".to_string(), Type::Vec("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "VecHolder".to_string(),
+            holder("VecHolder", "values", "vec", StructPropertyState::Required),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_vec.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::VecHolder { values: Vec::new() };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
+        assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[]}"#).is_ok());
+
+        // An element cannot be serialized: Absent's Serialize always
+        // errors.
+        let full = import::VecHolder {
+            values: vec![::json_serde::Absent],
+        };
+        assert!(serde_json::to_string(&full).is_err());
+
+        // Any element on the wire fails to deserialize.
+        assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[null]}"#).is_err());
+        assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[1]}"#).is_err());
+    }
+}
+
+// `Set<!>` makes the same "must be empty" claim as `Vec<!>`, through
+// the set container.
+#[test]
+fn test_never_in_set() {
+    let mut builder = never_builder();
+    builder
+        .insert("set".to_string(), Type::Set("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "SetHolder".to_string(),
+            holder("SetHolder", "values", "set", StructPropertyState::Required),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_set.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::SetHolder { values: Vec::new() };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
+        assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[]}"#).is_ok());
+
+        let full = import::SetHolder {
+            values: vec![::json_serde::Absent],
+        };
+        assert!(serde_json::to_string(&full).is_err());
+
+        assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[null]}"#).is_err());
+        assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[1]}"#).is_err());
+    }
+}
+
+// `Map<String, !>` is a map that must be empty: no value can be
+// produced, so no entry can exist.
+#[test]
+fn test_never_in_map_value() {
+    let mut builder = never_builder();
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "map".to_string(),
+            Type::Map("string".to_string(), "never".to_string()),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "MapValueHolder".to_string(),
+            holder(
+                "MapValueHolder",
+                "entries",
+                "map",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_map_value.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::MapValueHolder {
+            entries: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"entries":{}}"#);
+        assert!(serde_json::from_str::<import::MapValueHolder>(r#"{"entries":{}}"#).is_ok());
+
+        let full = import::MapValueHolder {
+            entries: std::collections::BTreeMap::from([("k".to_string(), ::json_serde::Absent)]),
+        };
+        assert!(serde_json::to_string(&full).is_err());
+
+        assert!(
+            serde_json::from_str::<import::MapValueHolder>(r#"{"entries":{"k":null}}"#).is_err()
+        );
+    }
+}
+
+// `Map<!, String>` is the mirror case: no key can be produced, so the
+// map must be empty.
+#[test]
+fn test_never_in_map_key() {
+    let mut builder = never_builder();
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "map".to_string(),
+            Type::Map("never".to_string(), "string".to_string()),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "MapKeyHolder".to_string(),
+            holder(
+                "MapKeyHolder",
+                "entries",
+                "map",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_map_key.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::MapKeyHolder {
+            entries: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"entries":{}}"#);
+        assert!(serde_json::from_str::<import::MapKeyHolder>(r#"{"entries":{}}"#).is_ok());
+
+        let full = import::MapKeyHolder {
+            entries: std::collections::BTreeMap::from([(::json_serde::Absent, "v".to_string())]),
+        };
+        assert!(serde_json::to_string(&full).is_err());
+
+        assert!(serde_json::from_str::<import::MapKeyHolder>(r#"{"entries":{"k":"v"}}"#).is_err());
+    }
+}
+
+// An `Option<!>` property that must be present may be null and nothing
+// else: null round-trips, a present value does not.
+#[test]
+fn test_never_nullable() {
+    let mut builder = never_builder();
+    builder
+        .insert("option".to_string(), Type::Option("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "NullableHolder".to_string(),
+            holder(
+                "NullableHolder",
+                "value",
+                "option",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_nullable.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let null = import::NullableHolder { value: None };
+        assert_eq!(serde_json::to_string(&null).unwrap(), r#"{"value":null}"#);
+        assert!(serde_json::from_str::<import::NullableHolder>(r#"{"value":null}"#).is_ok());
+
+        let present = import::NullableHolder {
+            value: Some(::json_serde::Absent),
+        };
+        assert!(serde_json::to_string(&present).is_err());
+
+        assert!(serde_json::from_str::<import::NullableHolder>(r#"{"value":1}"#).is_err());
+
+        // The property is required, so omitting it is an error.
+        assert!(serde_json::from_str::<import::NullableHolder>("{}").is_err());
+    }
+}
+
+// A `!` property that may be absent behaves exactly like the bare `!`
+// property: the state does not change what a value that cannot exist
+// does on the wire.
+#[test]
+fn test_never_optional() {
+    let mut builder = never_builder();
+    builder
+        .insert(
+            "OptionalHolder".to_string(),
+            holder(
+                "OptionalHolder",
+                "value",
+                "never",
+                StructPropertyState::Optional,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_optional.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::OptionalHolder {
+            value: ::json_serde::Absent,
+        };
+        assert_eq!(serde_json::to_string(&value).unwrap(), "{}");
+        assert!(serde_json::from_str::<import::OptionalHolder>("{}").is_ok());
+        assert!(serde_json::from_str::<import::OptionalHolder>(r#"{"value":null}"#).is_err());
+    }
+}
+
+// An `Option<!>` property that may be absent accepts both wire forms it
+// names, omitted and null, and nothing else.
+#[test]
+fn test_never_optional_nullable() {
+    let mut builder = never_builder();
+    builder
+        .insert("option".to_string(), Type::Option("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "OptionalNullableHolder".to_string(),
+            holder(
+                "OptionalNullableHolder",
+                "value",
+                "option",
+                StructPropertyState::Optional,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_optional_nullable.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let absent = import::OptionalNullableHolder { value: None };
+        assert_eq!(serde_json::to_string(&absent).unwrap(), "{}");
+
+        assert!(serde_json::from_str::<import::OptionalNullableHolder>("{}").is_ok());
+        assert!(
+            serde_json::from_str::<import::OptionalNullableHolder>(r#"{"value":null}"#).is_ok()
+        );
+        assert!(serde_json::from_str::<import::OptionalNullableHolder>(r#"{"value":1}"#).is_err());
+
+        let present = import::OptionalNullableHolder {
+            value: Some(::json_serde::Absent),
+        };
+        assert!(serde_json::to_string(&present).is_err());
+    }
+}
+
+// `Box<T>` is transparent on the wire, so a `Box<!>` property would be
+// wire-identical to a bare `!` property but escape the skip logic that
+// makes a bare `!` property work (it only recognizes a property whose
+// immediate type is `Type::Never`). typespace rejects the wrapping
+// outright rather than render a struct that can never serialize or
+// deserialize.
+#[test]
+fn test_never_in_box() {
+    let mut builder = never_builder();
+    builder
+        .insert("boxed".to_string(), Type::Box("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "BoxHolder".to_string(),
+            holder("BoxHolder", "value", "boxed", StructPropertyState::Required),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "Box");
+    assert_eq!(type_id, "boxed");
+}
+
+// A tuple with a `!` component has no inhabitants: every component of a
+// tuple is written, so the tuple can never be produced.
+#[test]
+fn test_never_in_tuple() {
+    let mut builder = never_builder();
+    builder
+        .insert("integer".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "tuple".to_string(),
+            Type::Tuple(vec!["integer".to_string(), "never".to_string()]),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "TupleHolder".to_string(),
+            holder(
+                "TupleHolder",
+                "value",
+                "tuple",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_tuple.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::TupleHolder {
+            value: (1, ::json_serde::Absent),
+        };
+        assert!(serde_json::to_string(&value).is_err());
+        assert!(serde_json::from_str::<import::TupleHolder>(r#"{"value":[1,null]}"#).is_err());
+        assert!(serde_json::from_str::<import::TupleHolder>(r#"{"value":[1]}"#).is_err());
+    }
+}
+
+// A zero-length array of `!` is the only inhabited fixed-size array of
+// it: it round-trips as an empty JSON array.
+#[test]
+fn test_never_in_array_zero() {
+    let mut builder = never_builder();
+    builder
+        .insert("array".to_string(), Type::Array("never".to_string(), 0))
+        .unwrap();
+    builder
+        .insert(
+            "ArrayZeroHolder".to_string(),
+            holder(
+                "ArrayZeroHolder",
+                "values",
+                "array",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_array_zero.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::ArrayZeroHolder { values: [] };
+        assert_eq!(serde_json::to_string(&value).unwrap(), r#"{"values":[]}"#);
+        assert!(serde_json::from_str::<import::ArrayZeroHolder>(r#"{"values":[]}"#).is_ok());
+        assert!(serde_json::from_str::<import::ArrayZeroHolder>(r#"{"values":[null]}"#).is_err());
+    }
+}
+
+// A non-empty fixed-size array of `!` demands elements that can never
+// be produced, so it has no inhabitants.
+#[test]
+fn test_never_in_array_three() {
+    let mut builder = never_builder();
+    builder
+        .insert("array".to_string(), Type::Array("never".to_string(), 3))
+        .unwrap();
+    builder
+        .insert(
+            "ArrayThreeHolder".to_string(),
+            holder(
+                "ArrayThreeHolder",
+                "values",
+                "array",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_array_three.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::ArrayThreeHolder {
+            values: [::json_serde::Absent; 3],
+        };
+        assert!(serde_json::to_string(&value).is_err());
+        assert!(
+            serde_json::from_str::<import::ArrayThreeHolder>(r#"{"values":[null,null,null]}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<import::ArrayThreeHolder>(r#"{"values":[]}"#).is_err());
+    }
+}
+
+// A newtype struct wrapping `!` would be transparent on the wire, so it
+// would be wire-identical to a bare `!` property but escape the skip
+// logic that makes a bare `!` property work (it only recognizes a
+// property whose immediate type is `Type::Never`). typespace rejects
+// the wrapping outright rather than render a type that can never
+// serialize or deserialize.
+#[test]
+fn test_never_newtype_struct() {
+    let mut builder = never_builder();
+    builder
+        .insert(
+            "NeverNewtype".to_string(),
+            NewtypeStruct::new("never".to_string())
+                .name("NeverNewtype")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "newtype struct");
+    assert_eq!(type_id, "NeverNewtype");
+}
+
+// A tuple struct writes every field, so one with a `!` field has no
+// inhabitants.
+#[test]
+fn test_never_tuple_struct() {
+    let mut builder = never_builder();
+    builder
+        .insert("integer".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "NeverTupleStruct".to_string(),
+            TupleStruct::new()
+                .name("NeverTupleStruct")
+                .fields(vec!["integer".to_string(), "never".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_tuple_struct.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let value = import::NeverTupleStruct(1, ::json_serde::Absent);
+        assert!(serde_json::to_string(&value).is_err());
+        assert!(serde_json::from_str::<import::NeverTupleStruct>("[1,null]").is_err());
+    }
+}
+
+// An enum variant whose single payload is `!` cannot be selected; the
+// other variants are unaffected.
+#[test]
+fn test_never_enum_item_variant() {
+    let mut builder = never_builder();
+    builder
+        .insert("integer".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "ItemEnum".to_string(),
+            Enum::new()
+                .name("ItemEnum")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new("Gone", VariantDetails::Item("never".to_string())),
+                    EnumVariant::new("Kept", VariantDetails::Item("integer".to_string())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_enum_item_variant.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let gone = import::ItemEnum::Gone(::json_serde::Absent);
+        assert!(serde_json::to_string(&gone).is_err());
+        assert!(serde_json::from_str::<import::ItemEnum>(r#"{"Gone":null}"#).is_err());
+
+        let kept = import::ItemEnum::Kept(1);
+        assert_eq!(serde_json::to_string(&kept).unwrap(), r#"{"Kept":1}"#);
+        assert!(serde_json::from_str::<import::ItemEnum>(r#"{"Kept":1}"#).is_ok());
+    }
+}
+
+// An enum variant with a `!` among its tuple payload cannot be
+// selected.
+#[test]
+fn test_never_enum_tuple_variant() {
+    let mut builder = never_builder();
+    builder
+        .insert("integer".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "TupleEnum".to_string(),
+            Enum::new()
+                .name("TupleEnum")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new(
+                        "Gone",
+                        VariantDetails::Tuple(vec!["integer".to_string(), "never".to_string()]),
+                    ),
+                    EnumVariant::new("Kept", VariantDetails::Item("integer".to_string())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_enum_tuple_variant.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let gone = import::TupleEnum::Gone(1, ::json_serde::Absent);
+        assert!(serde_json::to_string(&gone).is_err());
+        assert!(serde_json::from_str::<import::TupleEnum>(r#"{"Gone":[1,null]}"#).is_err());
+
+        assert!(serde_json::from_str::<import::TupleEnum>(r#"{"Kept":1}"#).is_ok());
+    }
+}
+
+// A struct-shaped variant's `!` field follows the same rule as a
+// struct's: the property must be absent, and the variant stays
+// selectable.
+#[test]
+fn test_never_enum_struct_variant() {
+    let mut builder = never_builder();
+    builder
+        .insert("integer".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "StructEnum".to_string(),
+            Enum::new()
+                .name("StructEnum")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new(
+                        "Gone",
+                        VariantDetails::Struct(vec![StructProperty::new(
+                            "gone",
+                            "never".to_string(),
+                        )]),
+                    ),
+                    EnumVariant::new("Kept", VariantDetails::Item("integer".to_string())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_enum_struct_variant.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let gone = import::StructEnum::Gone {
+            gone: ::json_serde::Absent,
+        };
+        assert_eq!(serde_json::to_string(&gone).unwrap(), r#"{"Gone":{}}"#);
+        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{}}"#).is_ok());
+        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{"gone":null}}"#).is_err());
+    }
+}
+
+// A type alias is transparent, so an alias for `!` would be
+// wire-identical to a bare `!` property but escape the skip logic that
+// makes a bare `!` property work (it only recognizes a property whose
+// immediate type is `Type::Never`). typespace rejects the alias outright
+// rather than render a struct that can never serialize or deserialize.
+#[test]
+fn test_never_type_alias() {
+    let mut builder = never_builder();
+    builder
+        .insert(
+            "NeverAlias".to_string(),
+            TypeAlias::new("never".to_string())
+                .name("NeverAlias")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "AliasHolder".to_string(),
+            holder(
+                "AliasHolder",
+                "value",
+                "NeverAlias",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "type alias");
+    assert_eq!(type_id, "NeverAlias");
+}
+
+// Nesting does not change the rule: the outer vec may hold empty inner
+// vecs, and nothing deeper than that can exist.
+#[test]
+fn test_never_in_nested_vec() {
+    let mut builder = never_builder();
+    builder
+        .insert("vec".to_string(), Type::Vec("never".to_string()))
+        .unwrap();
+    builder
+        .insert("vec_vec".to_string(), Type::Vec("vec".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "NestedHolder".to_string(),
+            holder(
+                "NestedHolder",
+                "values",
+                "vec_vec",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_nested_vec.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::NestedHolder { values: Vec::new() };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
+
+        let one_empty = import::NestedHolder {
+            values: vec![Vec::new()],
+        };
+        assert_eq!(
+            serde_json::to_string(&one_empty).unwrap(),
+            r#"{"values":[[]]}"#
+        );
+
+        assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[]}"#).is_ok());
+        assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[[]]}"#).is_ok());
+        assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[[1]]}"#).is_err());
+
+        let deep = import::NestedHolder {
+            values: vec![vec![::json_serde::Absent]],
+        };
+        assert!(serde_json::to_string(&deep).is_err());
+    }
+}
+
+// An optional property whose type is `Vec<!>` may be omitted or an
+// empty array.
+#[test]
+fn test_never_optional_vec() {
+    let mut builder = never_builder();
+    builder
+        .insert("vec".to_string(), Type::Vec("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "OptionalVecHolder".to_string(),
+            holder(
+                "OptionalVecHolder",
+                "values",
+                "vec",
+                StructPropertyState::Optional,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_optional_vec.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let absent = import::OptionalVecHolder { values: None };
+        assert_eq!(serde_json::to_string(&absent).unwrap(), "{}");
+
+        let empty = import::OptionalVecHolder {
+            values: Some(Vec::new()),
+        };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
+
+        assert!(serde_json::from_str::<import::OptionalVecHolder>("{}").is_ok());
+        assert!(serde_json::from_str::<import::OptionalVecHolder>(r#"{"values":[]}"#).is_ok());
+        assert!(serde_json::from_str::<import::OptionalVecHolder>(r#"{"values":[1]}"#).is_err());
+    }
+}
+
+// Trait resolution reaches `Never` through a container: under
+// Settings::typical() a struct with a `Vec<!>` property finalizes and
+// derives the whole typical trait set.
+#[test]
+fn test_never_in_vec_typical_traits() {
+    let mut builder = TypespaceBuilder::new(Settings::typical());
+    builder.insert("never".to_string(), Type::Never).unwrap();
+    builder
+        .insert("vec".to_string(), Type::Vec("never".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "TypicalVecHolder".to_string(),
+            holder(
+                "TypicalVecHolder",
+                "values",
+                "vec",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_in_vec_typical_traits.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let empty = import::TypicalVecHolder {
+            values: ::std::vec::Vec::new(),
+        };
+        let cloned = empty.clone();
+        assert_eq!(serde_json::to_string(&cloned).unwrap(), r#"{"values":[]}"#);
+        assert!(format!("{empty:?}").contains("TypicalVecHolder"));
+    }
+}
+
+// A required Display reaches through Box to a leaf that cannot
+// implement it, and stops at the container for the containers that
+// cannot forward it.
+//
+// The Box half uses a unit leaf rather than Never: wrapping Never in a
+// Box is rejected by validation before trait resolution ever runs (see
+// test_never_in_box), so it cannot stand in for "a leaf Display cannot
+// reach" here. The unit type shares Never's relevant property for this
+// test--CONTAINER_UNSUPPORTED makes it impossible for Display--without
+// tripping the wrapper check.
+#[test]
+fn test_never_under_container_display_conflict() {
+    let mut boxed =
+        TypespaceBuilder::new(Settings::minimal().with_required_trait(TypespaceTrait::Display));
+    boxed.insert("unit".to_string(), Type::Unit).unwrap();
+    boxed
+        .insert("boxed".to_string(), Type::Box("unit".to_string()))
+        .unwrap();
+    boxed
+        .insert(
+            "BoxWrapper".to_string(),
+            NewtypeStruct::new("boxed".to_string())
+                .name("BoxWrapper")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = boxed.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
+    };
+
+    // Box<T> forwards every trait to T, so the offender is the unit
+    // leaf, reached through the newtype's inner type and the box.
+    assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Display);
+    assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
+    assert_eq!(conflict.offender, "unit");
+    assert!(matches!(
+        &conflict.reason,
+        OffenderReason::Primitive { type_name } if type_name == "()"
+    ));
+
+    let mut vectored =
+        TypespaceBuilder::new(Settings::minimal().with_required_trait(TypespaceTrait::Display));
+    vectored.insert("never".to_string(), Type::Never).unwrap();
+    vectored
+        .insert("vec".to_string(), Type::Vec("never".to_string()))
+        .unwrap();
+    vectored
+        .insert(
+            "VecWrapper".to_string(),
+            NewtypeStruct::new("vec".to_string())
+                .name("VecWrapper")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = vectored.finalize(no_cycles) else {
+        panic!("expected finalize to fail with trait conflicts");
+    };
+
+    // Vec<T> implements Display for no T, so the conflict is reported
+    // at the container rather than passed down to the Never.
+    assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Display);
+    assert!(matches!(
+        &conflict.reason,
+        OffenderReason::Primitive { type_name } if type_name == "Vec"
+    ));
+}
+
+// Tests for the rejection of `Type::Never` behind a transparent
+// wrapper: a `Box`, a type alias, or a `#[serde(transparent)]` newtype
+// struct. Each is checked directly against every type in the graph, so
+// the tests below need not route the wrapper through a property, or
+// even through anything that references it, to trigger the check.
+
+// A type alias for `!` is rejected even when nothing else in the graph
+// references the alias.
+#[test]
+fn test_never_alias_rejected_unreferenced() {
+    let mut builder = never_builder();
+    builder
+        .insert(
+            "NeverAlias".to_string(),
+            TypeAlias::new("never".to_string())
+                .name("NeverAlias")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "type alias");
+    assert_eq!(type_id, "NeverAlias");
+}
+
+// `Box<!>` is rejected no matter how deeply it sits in the graph:
+// `Vec<Box<!>>` is the same meaningless indirection as a bare `Box<!>`.
+#[test]
+fn test_never_boxed_rejected_when_nested_in_vec() {
+    let mut builder = never_builder();
+    builder
+        .insert("boxed".to_string(), Type::Box("never".to_string()))
+        .unwrap();
+    builder
+        .insert("vec".to_string(), Type::Vec("boxed".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "VecOfBoxedHolder".to_string(),
+            holder(
+                "VecOfBoxedHolder",
+                "values",
+                "vec",
+                StructPropertyState::Required,
+            ),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "Box");
+    assert_eq!(type_id, "boxed");
+}
+
+// A newtype struct wrapping `!` is rejected even when nothing else in
+// the graph references it.
+#[test]
+fn test_never_newtype_struct_rejected_unreferenced() {
+    let mut builder = never_builder();
+    builder
+        .insert(
+            "NeverNewtype".to_string(),
+            NewtypeStruct::new("never".to_string())
+                .name("NeverNewtype")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInTransparentWrapper { wrapper, type_id }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInTransparentWrapper");
+    };
+    assert_eq!(wrapper, "newtype struct");
+    assert_eq!(type_id, "NeverNewtype");
+}

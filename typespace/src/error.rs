@@ -122,6 +122,24 @@ where
         child_id: Id,
     },
 
+    /// A transparent wrapper (`Box`, type alias, transparent newtype) may not
+    /// have a Never type as its payload.
+    ///
+    /// Each of these wrappers is transparent on the wire, so a `Never` wrapped
+    /// in one is wire-identical to a bare `Never` property. Rather than
+    /// handling this case, we explicitly disallow these constructions.
+    #[error(
+        "the {wrapper} with id `{type_id}` wraps `Type::Never`, which \
+         adds no meaning over `Type::Never` alone"
+    )]
+    NeverInTransparentWrapper {
+        /// The kind of wrapper (`"Box"`, `"type alias"`, or `"newtype
+        /// struct"`).
+        wrapper: &'static str,
+        /// The id of the wrapper type.
+        type_id: Id,
+    },
+
     /// Trait requirements that types in the graph cannot satisfy.
     ///
     /// Every conflict found during propagation is collected; the list

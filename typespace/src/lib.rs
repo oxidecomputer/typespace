@@ -458,6 +458,54 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
+    /// Reject `Type::Never` used as the payload of a transparent
+    /// wrapper: a `Box`, a type alias, or a `#[serde(transparent)]`
+    /// newtype struct.
+    ///
+    /// Each of these wrappers is transparent on the wire, so wrapping
+    /// `Never` in one produces a field that is wire-identical to a bare
+    /// `Never` property but escapes the property-side skip logic, which
+    /// only recognizes a property whose immediate type is `Type::Never`.
+    /// None of the three wrappers add expressive power over a bare
+    /// `Never`--each is just another name for "nothing"--so this rejects
+    /// them outright rather than teaching rendering to see through them.
+    ///
+    /// Only the immediate inner or target type is checked; there is no
+    /// recursion through chains of wrappers. None is needed: a chain
+    /// such as `type B = A` where `type A = !` bottoms out at a wrapper
+    /// that directly contains `Never` (`A`), and that wrapper alone
+    /// fails this check, which fails validation for the whole graph.
+    fn check_never_wrappers(&self) -> Result<(), Error<Id>> {
+        for (type_id, typ) in &self.types {
+            match typ {
+                Type::Box(inner) if matches!(self.types.get(inner), Some(Type::Never)) => {
+                    return Err(Error::NeverInTransparentWrapper {
+                        wrapper: "Box",
+                        type_id: type_id.clone(),
+                    });
+                }
+                Type::TypeAlias(TypeAlias { target, .. })
+                    if matches!(self.types.get(target), Some(Type::Never)) =>
+                {
+                    return Err(Error::NeverInTransparentWrapper {
+                        wrapper: "type alias",
+                        type_id: type_id.clone(),
+                    });
+                }
+                Type::NewtypeStruct(NewtypeStruct { inner, .. })
+                    if matches!(self.types.get(inner), Some(Type::Never)) =>
+                {
+                    return Err(Error::NeverInTransparentWrapper {
+                        wrapper: "newtype struct",
+                        type_id: type_id.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Finalize the typespace.
     ///
     /// Verifies that every ID referenced by a type names an inserted
@@ -485,6 +533,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         self.check_derives()?;
         self.check_references()?;
         self.check_type_names()?;
+        self.check_never_wrappers()?;
 
         let Self {
             mut types,
