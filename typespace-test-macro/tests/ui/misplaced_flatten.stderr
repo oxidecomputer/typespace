@@ -1,0 +1,5 @@
+error: `#[flatten]` is only valid on a field
+ --> tests/ui/misplaced_flatten.rs:5:11
+  |
+5 |         #[flatten]
+  |           ^^^^^^^

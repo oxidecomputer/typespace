@@ -1,0 +1,5 @@
+error: `#[rename]` requires a value: #[rename = "..."]
+ --> tests/ui/rename_missing_value.rs:6:15
+  |
+6 |             #[rename]
+  |               ^^^^^^

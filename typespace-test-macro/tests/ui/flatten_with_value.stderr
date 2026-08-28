@@ -1,0 +1,5 @@
+error: #[flatten] takes no value
+ --> tests/ui/flatten_with_value.rs:6:15
+  |
+6 |             #[flatten = "inner"]
+  |               ^^^^^^^

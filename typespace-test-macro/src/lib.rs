@@ -167,12 +167,21 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// - Field `#[default]`: `StructPropertyState::Default`.
 /// - Field `#[default = V]`: `StructPropertyState::DefaultValue(V)`.
+/// - Field `#[rename = "n"]`: `StructPropertySerde::Rename("n")`, the
+///   property's wire name.
+/// - Field `#[flatten]`: `StructPropertySerde::Flatten`, splicing the
+///   property's own fields into this one's wire form.
 /// - Type-level `#[default = V]`: the type's `.default(V)`.
 /// - Unit struct `#[json = V]`: its wire repr (required; any JSON).
 /// - Unit variant `#[json = "name"]`: its serde rename (string only).
 /// - Enum tagging: `EnumTagType::External` (default), `#[untagged]`,
 ///   `#[tag = "t"]` (internal), `#[tag = "t", content = "c"]`
 ///   (adjacent).
+///
+/// `#[rename]` and `#[flatten]` are field-level only, valid wherever
+/// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds
+/// one treatment of a property's name, so a field carrying both is a
+/// compile error.
 ///
 /// An attribute used somewhere other than the list above--an unknown
 /// name, or a real one in the wrong place (`#[untagged]` on a struct) --

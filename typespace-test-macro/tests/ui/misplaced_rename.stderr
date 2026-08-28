@@ -1,0 +1,5 @@
+error: `#[rename]` is only valid on a field
+ --> tests/ui/misplaced_rename.rs:5:11
+  |
+5 |         #[rename = "widget"]
+  |           ^^^^^^

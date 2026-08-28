@@ -294,6 +294,8 @@ struct AttrEntry {
 const KNOWN_ATTRS: &[(&str, &str)] = &[
     ("default", "a struct, an enum, or a field"),
     ("json", "a unit struct or an enum variant"),
+    ("rename", "a field"),
+    ("flatten", "a field"),
     ("untagged", "an enum"),
     ("tag", "an enum"),
     ("content", "an enum"),
@@ -379,8 +381,9 @@ fn parse_one_attr_group(input: ParseStream) -> syn::Result<Vec<AttrEntry>> {
 }
 
 /// Require that `entry`'s value is a JSON string, for the attributes
-/// (`#[tag = "t"]`, a unit variant's `#[json = "name"]`) whose model
-/// only supports a string, not arbitrary JSON.
+/// (`#[tag = "t"]`, `#[rename = "n"]`, a unit variant's
+/// `#[json = "name"]`) whose model only supports a string, not
+/// arbitrary JSON.
 fn expect_string_value(entry: &AttrEntry) -> syn::Result<String> {
     match &entry.value {
         Some(serde_json::Value::String(s)) => Ok(s.clone()),
@@ -432,6 +435,39 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
                     )
                 })
             }
+        },
+    }
+}
+
+/// A field's `#[rename = "name"]` / `#[flatten]`, rendered as the
+/// property's `.with_json_name(...)` call (or nothing, if neither was
+/// claimed). `StructPropertySerde` holds one treatment of a property's
+/// name, so claiming both is a contradiction.
+fn field_json_name(claims: &Claims) -> syn::Result<Option<TokenStream>> {
+    let rename = claims.get("rename").copied();
+    let flatten = claims.get("flatten").copied();
+    match (rename, flatten) {
+        (None, None) => Ok(None),
+        (Some(rename), Some(_)) => Err(syn::Error::new_spanned(
+            &rename.name,
+            "#[rename] cannot be combined with #[flatten]",
+        )),
+        (Some(entry), None) => {
+            let json_name = expect_string_value(entry)?;
+            Ok(Some(quote! {
+                .with_json_name(
+                    ::typespace::build::StructPropertySerde::Rename(#json_name.to_string())
+                )
+            }))
+        }
+        (None, Some(entry)) => match entry.value {
+            Some(_) => Err(syn::Error::new_spanned(
+                &entry.name,
+                "#[flatten] takes no value",
+            )),
+            None => Ok(Some(quote! {
+                .with_json_name(::typespace::build::StructPropertySerde::Flatten)
+            })),
         },
     }
 }
@@ -725,12 +761,14 @@ fn lower_struct_properties(
         .iter()
         .map(|field| {
             let (type_id, base_state) = lower_field_type(&field.ty, lowering)?;
-            let claims = claim_attrs(&field.attrs, &["default"])?;
+            let claims = claim_attrs(&field.attrs, &["default", "rename", "flatten"])?;
             let state = field_state_override(&claims, base_state)?;
+            let json_name = field_json_name(&claims)?;
             let field_name = field.name.to_string();
             Ok(quote! {
                 ::typespace::build::StructProperty::new(#field_name, #type_id.to_string())
                     .with_state(#state)
+                    #json_name
             })
         })
         .collect::<syn::Result<Vec<_>>>()
@@ -1839,6 +1877,56 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/test_native_in_containers.rs", &out);
+    }
+
+    /// A field's serde name treatment: renamed, flattened, and a rename
+    /// alongside `#[default]`.
+    #[test]
+    fn test_native_field_serde_names() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Inner {
+                    value: u32,
+                }
+
+                struct Outer {
+                    #[rename = "my-field"]
+                    my_field: String,
+                    #[flatten]
+                    inner: Inner,
+                    #[default = 7, rename = "count-x"]
+                    count: u32,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_field_serde_names.rs", &out);
+    }
+
+    /// `#[rename]` and `#[flatten]` reach a struct-shaped variant's
+    /// fields, and compose with a bare `#[default]`.
+    #[test]
+    fn test_native_variant_field_serde_names() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Inner {
+                    value: u32,
+                }
+
+                enum Shape {
+                    Rect {
+                        #[rename = "top-left"]
+                        #[default]
+                        top_left: u32,
+                        #[flatten]
+                        inner: Inner,
+                    },
+                }
+            }
+        });
+        expectorate::assert_contents(
+            "tests/output/test_native_variant_field_serde_names.rs",
+            &out,
+        );
     }
 
     // Targeted behavioral checks (fast, string-match versions of a few

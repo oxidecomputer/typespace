@@ -1,0 +1,11 @@
+error: duplicate `#[flatten]` attribute
+ --> tests/ui/duplicate_flatten.rs:7:15
+  |
+7 |             #[flatten]
+  |               ^^^^^^^
+
+error: previously specified here
+ --> tests/ui/duplicate_flatten.rs:6:15
+  |
+6 |             #[flatten]
+  |               ^^^^^^^

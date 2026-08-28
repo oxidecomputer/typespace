@@ -1,0 +1,5 @@
+error: `#[rename]` requires a string value
+ --> tests/ui/rename_non_string_value.rs:6:15
+  |
+6 |             #[rename = 1]
+  |               ^^^^^^

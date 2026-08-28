@@ -522,51 +522,26 @@ fn test_type_alias() {
 
 #[test]
 fn test_struct_serde_rename_flatten() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
+        {
+            // Inner struct that will be flattened.
+            struct Inner {
+                value: u32,
+            }
+
+            // Outer struct with a renamed field and a flattened inner struct.
+            struct Outer {
+                #[rename = "my-field"]
+                my_field: String,
+                #[flatten]
+                inner: Inner,
+            }
+        }
     );
-
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    // Inner struct that will be flattened.
-    builder
-        .insert(
-            "Inner".to_string(),
-            Struct::new()
-                .name("Inner")
-                .properties(vec![StructProperty::new("value", int_id.clone())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    let inner_id = "Inner".to_string();
-
-    // Outer struct with a renamed field and a flattened inner struct.
-    builder
-        .insert(
-            "Outer".to_string(),
-            Struct::new()
-                .name("Outer")
-                .properties(vec![
-                    StructProperty::new("my_field", string_id.clone())
-                        .with_json_name(StructPropertySerde::Rename("my-field".to_string())),
-                    StructProperty::new("inner", inner_id)
-                        .with_json_name(StructPropertySerde::Flatten),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
 

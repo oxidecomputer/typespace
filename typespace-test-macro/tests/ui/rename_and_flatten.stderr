@@ -1,0 +1,5 @@
+error: #[rename] cannot be combined with #[flatten]
+ --> tests/ui/rename_and_flatten.rs:6:15
+  |
+6 |             #[rename = "inner"]
+  |               ^^^^^^
