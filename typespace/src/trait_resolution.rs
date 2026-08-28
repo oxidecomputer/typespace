@@ -1270,7 +1270,7 @@ mod tests {
     fn never_field_satisfies_typical_settings() {
         let builder = typespace_builder!(Settings::typical(), {
             struct S {
-                gone: !,
+                gone: Optional<!>,
             }
         });
 
@@ -2739,7 +2739,7 @@ mod tests {
             ]),
             {
                 struct S {
-                    gone: !,
+                    gone: Optional<!>,
                 }
             }
         );

@@ -588,11 +588,8 @@ fn test_native_type() {
     fn inner() {}
 }
 
-/// A `Type::Never` field renders as `::json_serde::Absent`, the leaf
-/// type's fully-qualified external path--mirroring how `Type::JsonValue`
-/// renders as `::serde_json::Value`--and is unconditionally
-/// `#[serde(skip)]`ped: `Absent`'s `Serialize` impl always errors, so
-/// the field must never be serialized.
+/// A required struct property is a value position; finalize rejects one
+/// whose type is `Type::Never`.
 #[test]
 fn test_never_field() {
     let mut builder = TypespaceBuilder::new(
@@ -615,19 +612,17 @@ fn test_never_field() {
         )
         .unwrap();
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_field.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let value = import::Gone {
-            value: ::json_serde::Absent,
-        };
-
-        // This type can't be serialized or deserialized.
-        assert!(serde_json::to_string(&value).is_err());
-        assert!(serde_json::from_str::<import::Gone>("{}").is_err());
-        assert!(serde_json::from_str::<import::Gone>(r#"{ "value": null }"#).is_err());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "property");
+    assert_eq!(name, "value");
+    assert_eq!(type_id, "Gone");
 }
 
 #[test]
@@ -1857,6 +1852,26 @@ fn test_never_optional() {
     }
 }
 
+/// A flattened property cannot be omitted, so `!` there is rejected.
+#[test]
+#[ignore]
+fn test_never_flattened_property() {
+    let builder = typespace_builder!(never_settings(), {
+        struct FlatHolder {
+            keep: u32,
+            #[flatten]
+            gone: Optional<!>,
+        }
+    });
+
+    let Err(Error::NeverInValuePosition { position, name, .. }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "property");
+    assert_eq!(name, "gone");
+}
+
 // A `!` property in the Default state has no default to fall back to.
 #[test]
 fn test_never_default_property() {
@@ -1955,8 +1970,7 @@ fn test_never_in_box() {
     assert_eq!(type_id, "Box<Never>");
 }
 
-// A tuple with a `!` component has no inhabitants: every component of a
-// tuple is written, so the tuple can never be produced.
+// A tuple component is a value position: rejected.
 #[test]
 fn test_never_in_tuple() {
     let builder = typespace_builder!(never_settings(), {
@@ -1965,17 +1979,17 @@ fn test_never_in_tuple() {
         }
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_in_tuple.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let value = import::TupleHolder {
-            value: (1, ::json_serde::Absent),
-        };
-        assert!(serde_json::to_string(&value).is_err());
-        assert!(serde_json::from_str::<import::TupleHolder>(r#"{"value":[1,null]}"#).is_err());
-        assert!(serde_json::from_str::<import::TupleHolder>(r#"{"value":[1]}"#).is_err());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "tuple component");
+    assert_eq!(name, "1");
+    assert_eq!(type_id, "(u32, Never)");
 }
 
 // A zero-length array of `!` is the only inhabited fixed-size array of
@@ -1999,8 +2013,7 @@ fn test_never_in_array_zero() {
     }
 }
 
-// A non-empty fixed-size array of `!` demands elements that can never
-// be produced, so it has no inhabitants.
+// A non-empty fixed-size array element is a value position: rejected.
 #[test]
 fn test_never_in_array_three() {
     let builder = typespace_builder!(never_settings(), {
@@ -2009,20 +2022,17 @@ fn test_never_in_array_three() {
         }
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_in_array_three.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let value = import::ArrayThreeHolder {
-            values: [::json_serde::Absent; 3],
-        };
-        assert!(serde_json::to_string(&value).is_err());
-        assert!(
-            serde_json::from_str::<import::ArrayThreeHolder>(r#"{"values":[null,null,null]}"#)
-                .is_err()
-        );
-        assert!(serde_json::from_str::<import::ArrayThreeHolder>(r#"{"values":[]}"#).is_err());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "array element");
+    assert_eq!(name, "item");
+    assert_eq!(type_id, "[Never; 3]");
 }
 
 // A newtype struct wrapping `!` would be transparent on the wire, so it
@@ -2045,22 +2055,24 @@ fn test_never_newtype_struct() {
     assert_eq!(type_id, "NeverNewtype");
 }
 
-// A tuple struct writes every field, so one with a `!` field has no
-// inhabitants.
+// A tuple struct field is a value position: rejected.
 #[test]
 fn test_never_tuple_struct() {
     let builder = typespace_builder!(never_settings(), {
         struct NeverTupleStruct(u32, !);
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_tuple_struct.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let value = import::NeverTupleStruct(1, ::json_serde::Absent);
-        assert!(serde_json::to_string(&value).is_err());
-        assert!(serde_json::from_str::<import::NeverTupleStruct>("[1,null]").is_err());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "tuple struct field");
+    assert_eq!(name, "1");
+    assert_eq!(type_id, "NeverTupleStruct");
 }
 
 // A `!` in a tuple struct's rest slot is rejected as a field is.
@@ -2097,8 +2109,7 @@ fn test_never_tuple_struct_rest() {
     assert_eq!(type_id, "RestTupleStruct");
 }
 
-// An enum variant whose single payload is `!` cannot be selected; the
-// other variants are unaffected.
+// An enum variant's item payload is a value position: rejected.
 #[test]
 fn test_never_enum_item_variant() {
     let builder = typespace_builder!(never_settings(), {
@@ -2108,22 +2119,21 @@ fn test_never_enum_item_variant() {
         }
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_enum_item_variant.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let gone = import::ItemEnum::Gone(::json_serde::Absent);
-        assert!(serde_json::to_string(&gone).is_err());
-        assert!(serde_json::from_str::<import::ItemEnum>(r#"{"Gone":null}"#).is_err());
-
-        let kept = import::ItemEnum::Kept(1);
-        assert_eq!(serde_json::to_string(&kept).unwrap(), r#"{"Kept":1}"#);
-        assert!(serde_json::from_str::<import::ItemEnum>(r#"{"Kept":1}"#).is_ok());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "variant payload");
+    assert_eq!(name, "Gone");
+    assert_eq!(type_id, "ItemEnum");
 }
 
-// An enum variant with a `!` among its tuple payload cannot be
-// selected.
+// An enum variant's tuple payload component is a value position:
+// rejected.
 #[test]
 fn test_never_enum_tuple_variant() {
     let builder = typespace_builder!(never_settings(), {
@@ -2133,21 +2143,21 @@ fn test_never_enum_tuple_variant() {
         }
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_enum_tuple_variant.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let gone = import::TupleEnum::Gone(1, ::json_serde::Absent);
-        assert!(serde_json::to_string(&gone).is_err());
-        assert!(serde_json::from_str::<import::TupleEnum>(r#"{"Gone":[1,null]}"#).is_err());
-
-        assert!(serde_json::from_str::<import::TupleEnum>(r#"{"Kept":1}"#).is_ok());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "variant payload component");
+    assert_eq!(name, "Gone.1");
+    assert_eq!(type_id, "TupleEnum");
 }
 
-// A struct-shaped variant's `!` field follows the same rule as a
-// struct's: the property must be absent, and the variant stays
-// selectable.
+// A struct-shaped variant's required field is a value position:
+// rejected.
 #[test]
 fn test_never_enum_struct_variant() {
     let builder = typespace_builder!(never_settings(), {
@@ -2157,18 +2167,17 @@ fn test_never_enum_struct_variant() {
         }
     });
 
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include("tests/output/test_never_enum_struct_variant.rs", ts.to_codespace().into_stream())]
-    fn inner() {
-        let gone = import::StructEnum::Gone {
-            gone: ::json_serde::Absent,
-        };
-        // This variant can't be serialized or deserialized.
-        assert!(serde_json::to_string(&gone).is_err());
-        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{}}"#).is_err());
-        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{"gone":null}}"#).is_err());
-    }
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "variant property");
+    assert_eq!(name, "Gone.gone");
+    assert_eq!(type_id, "StructEnum");
 }
 
 // A struct-shaped variant's `!` field that may be absent leaves the

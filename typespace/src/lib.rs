@@ -630,14 +630,31 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     where
         F: FnMut(&Id) -> Id,
     {
+        // TODO 9/1/2026
+        // We've lost sight of this comment vvvvvvv and it's order; fix.
+
         // Basic steps:
         // 1. Break containment cycles with Box types
         // 2. Propagate trait impls
         // 3. Type-specific finalization
 
+        // Validate that derives are parseable as Rust paths.
+        // TODO 9/1/2026
+        // We should cache this and save it in the finalized Typespace rather
+        // than saving the raw settings.
         self.check_derives()?;
+
+        // Ensure that every referenced type ID has been initialized.
         self.check_references()?;
+
+        // Check the uniqueness of type names.
         self.check_type_names()?;
+
+        // Disallow never (!) from being used in positions where a value would
+        // be required.
+        // TODO 9/1/2026 I hate this; I think we should be doing general type
+        // validation for which this is one kind of validation. There may be
+        // multiple passes: per-type and then intra-type.
         self.check_never_positions()?;
 
         let Self {
