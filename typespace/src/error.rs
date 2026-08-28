@@ -140,6 +140,38 @@ where
         type_id: Id,
     },
 
+    /// A position that requires a value has `Type::Never` as its type.
+    ///
+    /// `Never` renders as `::json_serde::Absent`, which can be neither
+    /// serialized nor deserialized, so it says something only where the
+    /// construct holding it can leave it out: a property that may be
+    /// absent, either side of a map, or the element of a vec, a set, or
+    /// a zero-length array. An `Option<Never>` is a value of its own,
+    /// `None`, and is legal wherever a value is required.
+    ///
+    /// Every other position demands a value that can never be produced,
+    /// which makes the type holding it a type with no values at all.
+    /// Rather than generate such a type, we disallow the construction.
+    #[error(
+        "the {position} `{name}` of the type with id `{type_id}` is \
+         `Type::Never`, which cannot provide the value the position \
+         requires"
+    )]
+    NeverInValuePosition {
+        /// The kind of position (`"property"`, `"tuple component"`,
+        /// `"tuple struct field"`, `"array element"`, `"variant
+        /// payload"`, `"variant payload component"`, or `"variant
+        /// property"`).
+        position: &'static str,
+        /// Which position within the type: a property's Rust name, a
+        /// field or component index, `"item"` for an array element, or a
+        /// variant's Rust name with `.property` or `.index` appended for
+        /// a struct-shaped or tuple variant.
+        name: String,
+        /// The id of the type that holds the position.
+        type_id: Id,
+    },
+
     /// Trait requirements that types in the graph cannot satisfy.
     ///
     /// Every conflict found during propagation is collected; the list

@@ -79,7 +79,7 @@ use quote::{format_ident, quote, ToTokens};
 
 use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
-    StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct,
+    StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
 };
 use crate::error::Error;
 use crate::settings::{OptionalNullable, Settings, Std};
@@ -458,52 +458,157 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
-    /// Reject `Type::Never` used as the payload of a transparent
-    /// wrapper: a `Box`, a type alias, or a `#[serde(transparent)]`
-    /// newtype struct.
+    /// Reject `Type::Never` in any position that requires a value.
     ///
+    /// `Never` renders as `::json_serde::Absent`, a type that can be
+    /// neither serialized nor deserialized, so it says something only
+    /// where the construct holding it can leave it out: a struct
+    /// property that may be absent
+    /// ([`StructPropertyState::Optional`]), including a struct-shaped
+    /// enum variant's field; either side of a map; and the element of a
+    /// vec, a set, or a zero-length array, each of which may be empty.
+    /// An `Option<Never>` is a value of its own--`None`--and so is
+    /// legal wherever a value is required.
+    ///
+    /// Every other position demands a value that can never be produced,
+    /// which makes the type holding it a type with no values at all: a
+    /// property that must be present or fall back to a default, a
+    /// tuple component, the element of a non-empty fixed-size array, a
+    /// tuple struct field, and an enum variant's item or tuple payload.
+    /// These report [`Error::NeverInValuePosition`].
+    ///
+    /// A transparent wrapper--a `Box`, a type alias, or a
+    /// `#[serde(transparent)]` newtype struct--requires a value as
+    /// well, and reports [`Error::NeverInTransparentWrapper`] instead.
     /// Each of these wrappers is transparent on the wire, so wrapping
     /// `Never` in one produces a field that is wire-identical to a bare
     /// `Never` property but escapes the property-side skip logic, which
-    /// only recognizes a property whose immediate type is `Type::Never`.
-    /// None of the three wrappers add expressive power over a bare
-    /// `Never`--each is just another name for "nothing"--so this rejects
-    /// them outright rather than teaching rendering to see through them.
+    /// only recognizes a property whose immediate type is
+    /// `Type::Never`. None of the three wrappers add expressive power
+    /// over a bare `Never`--each is just another name for
+    /// "nothing"--and the dedicated error says so rather than teaching
+    /// rendering to see through them.
     ///
-    /// Only the immediate inner or target type is checked; there is no
-    /// recursion through chains of wrappers. None is needed: a chain
-    /// such as `type B = A` where `type A = !` bottoms out at a wrapper
-    /// that directly contains `Never` (`A`), and that wrapper alone
-    /// fails this check, which fails validation for the whole graph.
-    fn check_never_wrappers(&self) -> Result<(), Error<Id>> {
-        for (type_id, typ) in &self.types {
-            match typ {
-                Type::Box(inner) if matches!(self.types.get(inner), Some(Type::Never)) => {
-                    return Err(Error::NeverInTransparentWrapper {
-                        wrapper: "Box",
-                        type_id: type_id.clone(),
-                    });
-                }
-                Type::TypeAlias(TypeAlias { target, .. })
-                    if matches!(self.types.get(target), Some(Type::Never)) =>
-                {
-                    return Err(Error::NeverInTransparentWrapper {
-                        wrapper: "type alias",
-                        type_id: type_id.clone(),
-                    });
-                }
-                Type::NewtypeStruct(NewtypeStruct { inner, .. })
-                    if matches!(self.types.get(inner), Some(Type::Never)) =>
-                {
-                    return Err(Error::NeverInTransparentWrapper {
-                        wrapper: "newtype struct",
-                        type_id: type_id.clone(),
-                    });
-                }
-                _ => {}
-            }
+    /// Only the immediate type in each position is checked; there is no
+    /// recursion. None is needed: every type in the graph is checked
+    /// here, so every position in the graph is checked. A chain such as
+    /// `type B = A` where `type A = !` bottoms out at a wrapper that
+    /// directly contains `Never` (`A`), and that wrapper alone fails
+    /// this check, which fails validation for the whole graph.
+    fn check_never_positions(&self) -> Result<(), Error<Id>> {
+        match self
+            .types
+            .iter()
+            .find_map(|(type_id, typ)| self.never_position(type_id, typ))
+        {
+            Some(err) => Err(err),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// The error for a position of `typ` that requires a value and whose
+    /// type is `Type::Never`, or `None` if `typ` has no such position.
+    /// `type_id` is the id of `typ`, reported as the type that holds the
+    /// position. See `check_never_positions` for the rule this applies.
+    fn never_position(&self, type_id: &Id, typ: &Type<Id>) -> Option<Error<Id>> {
+        let is_never = |id: &Id| matches!(self.types.get(id), Some(Type::Never));
+        let value_position = |position: &'static str, name: String| Error::NeverInValuePosition {
+            position,
+            name,
+            type_id: type_id.clone(),
+        };
+        let transparent_wrapper = |wrapper: &'static str| Error::NeverInTransparentWrapper {
+            wrapper,
+            type_id: type_id.clone(),
+        };
+        // The Rust name of the first property that requires a value--any
+        // state but Optional--and whose type is Never.
+        let never_property = |properties: &[StructProperty<Id>]| {
+            properties
+                .iter()
+                .find(|prop| {
+                    !matches!(prop.state, StructPropertyState::Optional) && is_never(&prop.type_id)
+                })
+                .map(|prop| prop.rust_name.clone())
+        };
+        // The index of the first component that is Never.
+        let never_component = |components: &[Id]| {
+            components
+                .iter()
+                .position(is_never)
+                .map(|index| index.to_string())
+        };
+
+        match typ {
+            Type::Struct(Struct { properties, .. }) => {
+                never_property(properties).map(|name| value_position("property", name))
+            }
+
+            Type::Enum(Enum { variants, .. }) => variants.iter().find_map(|variant| {
+                let variant_name = &variant.rust_name;
+                match &variant.details {
+                    VariantDetails::Unit => None,
+                    VariantDetails::Item(id) => is_never(id)
+                        .then(|| value_position("variant payload", variant_name.clone())),
+                    VariantDetails::Tuple(components) => never_component(components).map(|index| {
+                        value_position(
+                            "variant payload component",
+                            format!("{variant_name}.{index}"),
+                        )
+                    }),
+                    VariantDetails::Struct(properties) => never_property(properties).map(|name| {
+                        value_position("variant property", format!("{variant_name}.{name}"))
+                    }),
+                }
+            }),
+
+            // The rest type holds the items beyond the positional
+            // fields; it is required exactly as they are, so it counts
+            // as the field one past the last.
+            Type::TupleStruct(TupleStruct { fields, rest, .. }) => never_component(fields)
+                .or_else(|| {
+                    rest.as_ref()
+                        .filter(|id| is_never(id))
+                        .map(|_| fields.len().to_string())
+                })
+                .map(|index| value_position("tuple struct field", index)),
+
+            Type::Tuple(components) => {
+                never_component(components).map(|index| value_position("tuple component", index))
+            }
+
+            // An array of length zero holds no element, so the empty
+            // array is its one value; any other length demands elements.
+            Type::Array(id, length) => (*length > 0 && is_never(id))
+                .then(|| value_position("array element", "item".to_string())),
+
+            Type::Box(inner) => is_never(inner).then(|| transparent_wrapper("Box")),
+            Type::TypeAlias(TypeAlias { target, .. }) => {
+                is_never(target).then(|| transparent_wrapper("type alias"))
+            }
+            Type::NewtypeStruct(NewtypeStruct { inner, .. }) => {
+                is_never(inner).then(|| transparent_wrapper("newtype struct"))
+            }
+
+            // The positions that absorb a Never: an Option of it has the
+            // value None, and a vec, a set, or a map of it may be empty.
+            Type::Option(_) | Type::Vec(_) | Type::Set(_) | Type::Map(_, _) => None,
+
+            // A native type's parameters are the consumer's to
+            // interpret; typespace cannot tell whether one absorbs a
+            // Never the way a vec does.
+            Type::Native(_) => None,
+
+            // Types with no position that could hold a Never.
+            Type::UnitStruct(_)
+            | Type::Unit
+            | Type::Boolean
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String
+            | Type::JsonValue
+            | Type::Never => None,
+        }
     }
 
     /// Finalize the typespace.
@@ -533,7 +638,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         self.check_derives()?;
         self.check_references()?;
         self.check_type_names()?;
-        self.check_never_wrappers()?;
+        self.check_never_positions()?;
 
         let Self {
             mut types,
@@ -1050,12 +1155,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
                 quote! { ::json_serde::Absent }
             }
-            (_, TypeOfInterest::Never) => {
-                // TODO 8/28/2026
-                // I think I want this to be unreachable; I'd like to make sure
-                // people aren't doing this because it's a dumb thing to do.
-                ty_ident
-            }
+            (
+                StructPropertyState::Required
+                | StructPropertyState::Default
+                | StructPropertyState::DefaultValue(_),
+                TypeOfInterest::Never,
+            ) => unreachable!("finalization rejects a Never property that requires a value"),
         };
 
         let serde = (!serde_options.is_empty()).then(|| {
@@ -1152,8 +1257,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // programming error.
             Type::JsonValue => panic!("Default value for JsonValue is not supported"),
 
-            // render_struct_property short-circuits Never properties.
-            Type::Never => unreachable!("Never properties are skipped before state handling"),
+            // A Never property reaches this function in no state:
+            // finalization rejects every state that would, and the
+            // Optional state renders without a skip of this kind.
+            Type::Never => unreachable!("Never properties add no skip attribute"),
         }
     }
 }

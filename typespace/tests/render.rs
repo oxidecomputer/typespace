@@ -1857,6 +1857,52 @@ fn test_never_optional() {
     }
 }
 
+// A `!` property in the Default state has no default to fall back to.
+#[test]
+fn test_never_default_property() {
+    let builder = typespace_builder!(never_settings(), {
+        struct DefaultHolder {
+            #[default]
+            value: !,
+        }
+    });
+
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "property");
+    assert_eq!(name, "value");
+    assert_eq!(type_id, "DefaultHolder");
+}
+
+// A `!` property in the DefaultValue state cannot hold the given value.
+#[test]
+fn test_never_default_value_property() {
+    let builder = typespace_builder!(never_settings(), {
+        struct DefaultValueHolder {
+            #[default = null]
+            value: !,
+        }
+    });
+
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "property");
+    assert_eq!(name, "value");
+    assert_eq!(type_id, "DefaultValueHolder");
+}
+
 // An `Option<!>` property that may be absent accepts both wire forms it
 // names, omitted and null, and nothing else.
 #[test]
@@ -2017,6 +2063,40 @@ fn test_never_tuple_struct() {
     }
 }
 
+// A `!` in a tuple struct's rest slot is rejected as a field is.
+#[test]
+fn test_never_tuple_struct_rest() {
+    let mut builder = TypespaceBuilder::new(never_settings());
+
+    builder.insert("never".to_string(), Type::Never).unwrap();
+    builder
+        .insert("u32".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "RestTupleStruct".to_string(),
+            TupleStruct::new()
+                .name("RestTupleStruct")
+                .fields(vec!["u32".to_string()])
+                .rest("never".to_string())
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::NeverInValuePosition {
+        position,
+        name,
+        type_id,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to fail with NeverInValuePosition");
+    };
+    assert_eq!(position, "tuple struct field");
+    assert_eq!(name, "1");
+    assert_eq!(type_id, "RestTupleStruct");
+}
+
 // An enum variant whose single payload is `!` cannot be selected; the
 // other variants are unaffected.
 #[test]
@@ -2088,6 +2168,37 @@ fn test_never_enum_struct_variant() {
         assert!(serde_json::to_string(&gone).is_err());
         assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{}}"#).is_err());
         assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{"gone":null}}"#).is_err());
+    }
+}
+
+// A struct-shaped variant's `!` field that may be absent leaves the
+// variant selectable, with the field always omitted.
+#[test]
+fn test_never_optional_enum_struct_variant() {
+    let builder = typespace_builder!(never_settings(), {
+        enum OptionalStructEnum {
+            Gone { gone: Optional<!> },
+            Kept(u32),
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_never_optional_enum_struct_variant.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let gone = import::OptionalStructEnum::Gone {
+            gone: ::json_serde::Absent,
+        };
+        assert_eq!(serde_json::to_string(&gone).unwrap(), r#"{"Gone":{}}"#);
+        assert!(serde_json::from_str::<import::OptionalStructEnum>(r#"{"Gone":{}}"#).is_ok());
+        assert!(
+            serde_json::from_str::<import::OptionalStructEnum>(r#"{"Gone":{"gone":null}}"#)
+                .is_err()
+        );
+
+        let kept = import::OptionalStructEnum::Kept(1);
+        assert_eq!(serde_json::to_string(&kept).unwrap(), r#"{"Kept":1}"#);
+        assert!(serde_json::from_str::<import::OptionalStructEnum>(r#"{"Kept":1}"#).is_ok());
     }
 }
 
