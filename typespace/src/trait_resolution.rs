@@ -2093,4 +2093,415 @@ mod tests {
             ])
         );
     }
+    // Cases the batch above does not reach: the boundary between the
+    // required floor and a desired strip, the causal chain the skip
+    // log carries, per-hop absorption in both directions, the traits
+    // containers claim that std does not provide, and the depth the
+    // work queue has to survive.
+
+    /// A required trait outlives a desired strip in the same family.
+    #[test]
+    fn required_trait_survives_desired_strip_in_same_family() {
+        let mut builder = typespace_builder!(
+            Settings::minimal()
+                .with_required_trait(TypespaceTrait::Eq)
+                .with_desired_trait(TypespaceTrait::Ord),
+            {
+                struct S {
+                    stamp: PartialOnly,
+                }
+            }
+        );
+
+        // The macro has no syntax for native types, so this one is
+        // inserted by hand under the id the field references.
+        builder
+            .insert(
+                "PartialOnly".to_string(),
+                Type::Native(Native::new(
+                    "partial::PartialOnly",
+                    trait_set([TypespaceTrait::Eq, TypespaceTrait::PartialEq]),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Eq, TypespaceTrait::PartialEq])
+        );
+    }
+
+    /// Every captured log message, in the order logged.
+    static SKIP_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    struct SkipLogCapture;
+
+    impl log::Log for SkipLogCapture {
+        fn enabled(&self, _metadata: &log::Metadata) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record) {
+            SKIP_LOG.lock().unwrap().push(record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    static SKIP_LOG_CAPTURE: SkipLogCapture = SkipLogCapture;
+
+    /// Start capturing log messages. Tests run in one process and
+    /// share the capture, so each one matches only its own type ids.
+    fn capture_skip_log() {
+        log::set_logger(&SKIP_LOG_CAPTURE).ok();
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+
+    /// The message logged when `loser` loses `trait_name` to
+    /// `blocker`.
+    fn skip_line(trait_name: TypespaceTrait, loser: &str, blocker: &str) -> String {
+        format!("desired trait {trait_name} dropped from {loser}, blocked by {blocker}")
+    }
+
+    /// Whether any captured message is exactly `line`.
+    fn skip_logged(line: &str) -> bool {
+        SKIP_LOG.lock().unwrap().iter().any(|entry| entry == line)
+    }
+
+    /// The skip log names the constituent to blame at each hop.
+    #[test]
+    fn desired_skip_log_names_the_blocker_at_each_hop() {
+        capture_skip_log();
+
+        let builder = typespace_builder!(minimal_with_desired([TypespaceTrait::Eq]), {
+            struct ChainBottom {
+                weight: f64,
+            }
+
+            struct ChainMiddle {
+                bottom: ChainBottom,
+            }
+
+            struct ChainTop {
+                middle: ChainMiddle,
+            }
+        });
+
+        builder.finalize(no_cycles).unwrap();
+
+        for (loser, blocker) in [
+            ("ChainBottom", "f64"),
+            ("ChainMiddle", "ChainBottom"),
+            ("ChainTop", "ChainMiddle"),
+        ] {
+            let line = skip_line(TypespaceTrait::Eq, loser, blocker);
+            assert!(skip_logged(&line), "missing skip line: {line}");
+        }
+    }
+
+    /// A trait dropped by the strip closure is logged like any other.
+    #[test]
+    fn desired_skip_log_covers_strip_closure_removals() {
+        capture_skip_log();
+
+        let mut builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Eq, TypespaceTrait::Ord]),
+            {
+                struct StripHolder {
+                    odd: StripWeird,
+                }
+            }
+        );
+
+        // The macro has no syntax for native types, so this one is
+        // inserted by hand under the id the field references. It
+        // declares Eq and Ord without the partial pair on purpose: the
+        // holder's Eq and Ord die only by the strip closure.
+        builder
+            .insert(
+                "StripWeird".to_string(),
+                Type::Native(Native::new(
+                    "weird::StripWeird",
+                    trait_set([TypespaceTrait::Eq, TypespaceTrait::Ord]),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "StripHolder"),
+            TypespaceTraitSet::empty()
+        );
+        for trait_name in [
+            TypespaceTrait::PartialEq,
+            TypespaceTrait::PartialOrd,
+            TypespaceTrait::Eq,
+            TypespaceTrait::Ord,
+        ] {
+            let line = skip_line(trait_name, "StripHolder", "StripWeird");
+            assert!(skip_logged(&line), "missing skip line: {line}");
+        }
+    }
+
+    /// `Vec<T>` has no `Display`, whatever `T` has.
+    #[test]
+    fn desired_display_dropped_through_vec_inner() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                struct Wrapper(Vec<String>);
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "Wrapper"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// `Option<T>` has no `Display` either, whatever `T` has.
+    #[test]
+    fn desired_display_dropped_through_option_inner() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                struct Wrapper(Nullable<String>);
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "Wrapper"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// A required `Display` through an `Option` is a conflict.
+    #[test]
+    fn required_display_conflicts_through_option() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            {
+                struct Wrapper(Nullable<String>);
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+        assert!(
+            conflicts
+                .iter()
+                .any(|conflict| conflict.required == TypespaceTrait::Display),
+            "conflicts: {conflicts:#?}"
+        );
+    }
+
+    /// A hop that provides `Default` itself absorbs an inner loss.
+    #[test]
+    fn desired_default_absorbed_by_container_hop() {
+        let builder = typespace_builder!(minimal_with_desired([TypespaceTrait::Default]), {
+            enum NoDefault {
+                Red,
+                Green,
+            }
+
+            struct S {
+                list: Vec<NoDefault>,
+                maybe: Nullable<NoDefault>,
+            }
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&typespace, "NoDefault"),
+            TypespaceTraitSet::empty()
+        );
+    }
+
+    /// A container forwards one trait of a family without the rest.
+    #[test]
+    fn desired_partial_family_survives_float_in_vec() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::PartialEq, TypespaceTrait::Eq]),
+            {
+                struct S {
+                    list: Vec<f64>,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::PartialEq])
+        );
+    }
+
+    /// A supertrait is granted on its own account only when desired.
+    #[test]
+    fn desired_supertrait_survives_only_when_desired_directly() {
+        // PartialEq reaches the demand set only as Eq's supertrait, so
+        // a struct that cannot have Eq has no use for it.
+        let closure_only = typespace_builder!(minimal_with_desired([TypespaceTrait::Eq]), {
+            struct S {
+                weight: f64,
+            }
+        });
+
+        let typespace = closure_only.finalize(no_cycles).unwrap();
+        assert_eq!(built_traits(&typespace, "S"), TypespaceTraitSet::empty());
+
+        // Desired in its own right, PartialEq stands whether or not Eq
+        // survives.
+        let desired_directly = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Eq, TypespaceTrait::PartialEq]),
+            {
+                struct S {
+                    weight: f64,
+                }
+            }
+        );
+
+        let typespace = desired_directly.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::PartialEq])
+        );
+    }
+
+    /// A loss climbs through every container between it and a holder.
+    #[test]
+    fn desired_loss_climbs_nested_containers() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct S {
+                    deep: Map<String, Vec<Nullable<f64>>>,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// `::json_serde::Absent` supplies the std traits it derives.
+    #[test]
+    fn desired_never_field_keeps_derived_std_traits() {
+        let builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Eq,
+                TypespaceTrait::Hash,
+                TypespaceTrait::Default,
+            ]),
+            {
+                struct S {
+                    gone: !,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+                TypespaceTrait::Hash,
+                TypespaceTrait::Default,
+            ])
+        );
+    }
+
+    /// An untagged enum with a multi-value payload has no `Display`.
+    #[test]
+    fn desired_display_dropped_on_untagged_enum_with_tuple_variant() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                #[untagged]
+                enum Pair {
+                    Both(u32, String),
+                    One(u32),
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "Pair"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// A containment chain thousands of levels deep resolves.
+    #[test]
+    fn deep_containment_chain_resolves() {
+        use crate::build::{Struct, StructProperty};
+
+        const DEPTH: usize = 2000;
+
+        let mut builder = crate::TypespaceBuilder::new(minimal_with_desired([
+            TypespaceTrait::Clone,
+            TypespaceTrait::Eq,
+        ]));
+
+        // Each level holds the next, and the last holds a float, so
+        // the loss has to travel every hop of the chain. The work
+        // queue walks the chain rather than descending it, so the
+        // depth needs no stack.
+        for level in 0..DEPTH {
+            let next = match level + 1 == DEPTH {
+                true => "f64".to_string(),
+                false => format!("Level{}", level + 1),
+            };
+            builder
+                .insert(
+                    format!("Level{level}"),
+                    Struct::<String>::new()
+                        .name(format!("Level{level}"))
+                        .properties([StructProperty::new("next", next)])
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        builder
+            .insert("f64".to_string(), Type::Float("f64".to_string()))
+            .unwrap();
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        // The float takes Eq from every level, top and bottom alike.
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        assert_eq!(built_traits(&typespace, "Level0"), only_clone);
+        assert_eq!(
+            built_traits(&typespace, &format!("Level{}", DEPTH - 1)),
+            only_clone
+        );
+    }
 }
