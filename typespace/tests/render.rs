@@ -623,12 +623,9 @@ fn test_never_field() {
             value: ::json_serde::Absent,
         };
 
-        // The skip is unconditional: serializing produces an empty
-        // object (Absent's Serialize would error if it were ever
-        // invoked), and deserializing an empty object succeeds,
-        // filling the field via Absent's Default.
-        assert_eq!(serde_json::to_string(&value).unwrap(), "{}");
-        assert!(serde_json::from_str::<import::Gone>("{}").is_ok());
+        // This type can't be serialized or deserialized.
+        assert!(serde_json::to_string(&value).is_err());
+        assert!(serde_json::from_str::<import::Gone>("{}").is_err());
         assert!(serde_json::from_str::<import::Gone>(r#"{ "value": null }"#).is_err());
     }
 }
@@ -2087,8 +2084,9 @@ fn test_never_enum_struct_variant() {
         let gone = import::StructEnum::Gone {
             gone: ::json_serde::Absent,
         };
-        assert_eq!(serde_json::to_string(&gone).unwrap(), r#"{"Gone":{}}"#);
-        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{}}"#).is_ok());
+        // This variant can't be serialized or deserialized.
+        assert!(serde_json::to_string(&gone).is_err());
+        assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{}}"#).is_err());
         assert!(serde_json::from_str::<import::StructEnum>(r#"{"Gone":{"gone":null}}"#).is_err());
     }
 }
