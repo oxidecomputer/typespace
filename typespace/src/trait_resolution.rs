@@ -445,10 +445,18 @@ where
                     conflict(missing_traits, reason);
                 }
 
-                // Pass the buck... except for Default, which Option<T>
-                // implements no matter what T is.
+                // Option<T> implements everything we care about--except
+                // for Display and FromStr--as long as T implements them.
+                // Option<T> additionally implements Default unconditionally.
                 Type::Option(schema_ref) => {
-                    let pass = strip_default(traits);
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "Option".to_string(),
+                        },
+                    );
+                    let pass = strip_default(rest);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
                             target: schema_ref.clone(),
@@ -793,6 +801,112 @@ mod tests {
             conflict.reason,
             OffenderReason::TypeCannotImplement { kind: "struct" }
         ));
+    }
+
+    /// A required Display reaching an Option conflicts at the Option,
+    /// naming it as the offender, instead of forwarding to the element.
+    #[test]
+    fn required_display_on_option_conflicts() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            {
+                struct Wrapper(Nullable<String>);
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::Display);
+        assert_eq!(conflict.offender, "Nullable<String>");
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::Primitive { type_name } if type_name == "Option"
+        ));
+    }
+
+    /// The same as `required_display_on_option_conflicts`, for FromStr.
+    #[test]
+    fn required_fromstr_on_option_conflicts() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::FromStr),
+            {
+                struct Wrapper(Nullable<String>);
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::FromStr);
+        assert_eq!(conflict.offender, "Nullable<String>");
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::Primitive { type_name } if type_name == "Option"
+        ));
+    }
+
+    /// A trait an Option genuinely provides still passes through to the
+    /// element and is satisfied there: the default set-element traits
+    /// (the Ord family) reach Color through the Option and land on it.
+    #[test]
+    fn option_forwards_supported_trait_to_element() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            enum Color {
+                Red,
+                Green,
+            }
+
+            type ColorSet = Set<Nullable<Color>>;
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        let expected = [
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+            TypespaceTrait::Ord,
+            TypespaceTrait::PartialOrd,
+        ]
+        .into_iter()
+        .collect::<TypespaceTraitSet>();
+        assert_eq!(built_traits(&typespace, "Color"), expected);
+    }
+
+    /// A required Default is satisfied at the Option itself and never
+    /// reaches the element, which here could not provide it: a set
+    /// element required to be Default reaches Color only through the
+    /// Option, and Color's own built trait set stays empty.
+    #[test]
+    fn option_default_satisfied_without_reaching_element() {
+        let settings = Settings::minimal().with_set_type(
+            "::std::collections::HashSet",
+            [TypespaceTrait::Default].into_iter().collect(),
+        );
+        let builder = typespace_builder!(settings, {
+            enum Color {
+                Red,
+                Green,
+            }
+
+            type ColorSet = Set<Nullable<Color>>;
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert!(built_traits(&typespace, "Color").is_empty());
     }
 
     /// A required trait that a type realizes with a manual impl is
