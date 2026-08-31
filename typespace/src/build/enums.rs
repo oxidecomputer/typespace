@@ -191,6 +191,25 @@ impl<Id> Enum<Id> {
                 .iter()
                 .all(|variant| matches!(variant.details, VariantDetails::Unit))
     }
+
+    /// Whether the enum is untagged and every variant carries exactly
+    /// one payload (and the enum is nonempty).
+    ///
+    /// Such an enum's serialized form is exactly one variant payload's
+    /// serialized form, so it admits bespoke `Display` and `FromStr`
+    /// impls that forward to the payload types. A variant carrying no
+    /// payload, several payloads, or named fields has no single form
+    /// to forward to.
+    pub fn all_item_variants(&self) -> bool {
+        self.tag_type
+            .as_ref()
+            .is_some_and(|tag_type| *tag_type == EnumTagType::Untagged)
+            && !self.variants.is_empty()
+            && self
+                .variants
+                .iter()
+                .all(|variant| matches!(variant.details, VariantDetails::Item(_)))
+    }
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {

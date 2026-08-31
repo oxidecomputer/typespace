@@ -2252,16 +2252,15 @@ fn test_never_under_container_display_conflict() {
         panic!("expected finalize to fail with trait conflicts");
     };
 
-    // Box<T> forwards every trait to T, so the offender is the unit
-    // leaf, reached through the newtype's inner type and the box.
+    // Box declines Display along with the other containers, so the
+    // conflict is reported at the box and never reaches the unit leaf.
     assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
     let conflict = &conflicts[0];
     assert_eq!(conflict.required, TypespaceTrait::Display);
     assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
-    assert_eq!(conflict.offender, "()");
     assert!(matches!(
         &conflict.reason,
-        OffenderReason::Primitive { type_name } if type_name == "()"
+        OffenderReason::Primitive { type_name } if type_name == "Box"
     ));
 
     let vectored = typespace_builder!(

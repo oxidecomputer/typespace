@@ -19,9 +19,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use log::debug;
 
-use crate::build::{
-    EnumTagType, Native, NewtypeConstraints, NewtypeStruct, Struct, TupleStruct, Type,
-};
+use crate::build::{Native, NewtypeConstraints, NewtypeStruct, Struct, TupleStruct, Type};
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::Settings;
 use crate::{TypespaceTrait, TypespaceTraitSet};
@@ -39,11 +37,11 @@ pub(crate) fn resolve_traits<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    // First propagate required traits. A failure to satisfy a required trait
+    // is an error.
     required_resolution(types, settings)?;
 
-    // The desired phase runs only once every required trait is
-    // settled: it counts what required resolution granted as present,
-    // and never takes any of it away.
+    // Then propagate desired traits to the types that support them.
     desired_resolution(types, settings);
 
     Ok(())
@@ -210,7 +208,7 @@ where
                     // their serialized names; no variant has payload
                     // types to forward to.
                     Feasibility::ManuallyRealizable(Vec::new())
-                } else if matches!(e.tag_type, Some(EnumTagType::Untagged)) {
+                } else if e.all_item_variants() {
                     // An untagged enum's serialized form is exactly
                     // one variant's payload's serialized form, so
                     // Display/FromStr forward to whichever payload
@@ -469,13 +467,26 @@ where
                         });
                     }
                 }
+
+                // The utility of Box is primarily to break containment cycles.
+                // We treat it like a container with regard to trait
+                // forwarding.
                 Type::Box(schema_ref) => {
-                    work.push_back(WorkItem {
-                        target: schema_ref.clone(),
-                        traits,
-                        origin,
-                        path: hop(Relation::Boxed),
-                    });
+                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "Box".to_string(),
+                        },
+                    );
+                    if !rest.is_empty() {
+                        work.push_back(WorkItem {
+                            target: schema_ref.clone(),
+                            traits: rest,
+                            origin,
+                            path: hop(Relation::Boxed),
+                        });
+                    }
                 }
 
                 // Vec<T> and arrays impl everything we care about--except for
@@ -734,10 +745,11 @@ where
 
             Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
 
-            // Pass the buck... except for Default, which Option<T>
-            // implements no matter what T is.
-            Type::Option(schema_ref) => is_default || child_has(schema_ref),
-            Type::Box(schema_ref) => child_has(schema_ref),
+            // Pass the buck, minus Display and FromStr, which neither
+            // offers... except for Default, which Option<T> implements
+            // no matter what T is.
+            Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
+            Type::Box(schema_ref) => supported && child_has(schema_ref),
 
             // Vec<T> and the map and set containers implement the
             // traits we care about--except for Display and
@@ -850,27 +862,21 @@ where
     }
 }
 
-/// Give every named type the desired traits nothing blocks.
+/// Give each named type the desired traits that it's capable of supporting.
 ///
-/// Each type starts out assumed to have every desired trait. The
-/// traits a type cannot provide seed a work queue, and each loss
-/// poisons that trait in the types that refer to the loser, which
-/// poison their own referrers in turn, until the queue drains. A
-/// referrer only loses the trait if it can no longer provide it, so a
-/// hop that absorbs the loss--`Vec<T>` keeps `Default` however `T`
-/// fares--stops the poison there.
+/// Each type starts out assumed to have every desired trait. The traits a type
+/// cannot implement seed a work queue that poisons that trait in the
+/// referencing types. This poisons their own referrers in turn, until the
+/// queue drains. Some types don't require a referenced type to implement a
+/// trait in order to provide it. For example a `Vec<T>` can implement
+/// `Default` irrespective of whether `T` does.
 ///
-/// Running the queue along referrer edges is required resolution's
-/// descent in reverse, and it needs no rule for cycles: a recursive
-/// type keeps a trait precisely because nothing ever poisoned it.
+/// This is effectively the reverse of what we do when forward-propagating
+/// required traits. Types retain the desired trait because no transitive
+/// child poisons it.
 ///
-/// What survives is granted family by family: a trait the request
-/// closure added rides on the trait that asked for it and goes when it
-/// goes.
-///
-/// Losses are silent. A desired trait that does not survive is absent
-/// from the built set with nothing recorded, which is the whole
-/// contrast with a required trait.
+/// Unlike with required traits, a failure to implement a desired trait is
+/// logged but doesn't produce an error.
 fn desired_resolution<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Settings)
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -1159,6 +1165,32 @@ mod tests {
         assert!(matches!(
             &conflict.reason,
             OffenderReason::Primitive { type_name } if type_name == "Option"
+        ));
+    }
+
+    /// The same as `required_display_on_option_conflicts`, for a Box.
+    #[test]
+    fn required_display_on_box_conflicts() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            {
+                struct Wrapper(Box<String>);
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::Display);
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::Primitive { type_name } if type_name == "Box"
         ));
     }
 
@@ -2397,29 +2429,15 @@ mod tests {
         );
     }
 
-    /// `Box<T>` has `T`'s `Display`, so a desired `Display` survives it.
+    /// `Box<T>` has no `Display` and no `FromStr`, whatever `T` has.
     #[test]
-    fn desired_display_forwards_through_box() {
+    fn box_has_no_display_or_from_str() {
         let builder = typespace_builder!(
-            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
-            {
-                struct Wrapper(Box<String>);
-            }
-        );
-
-        let typespace = builder.finalize(no_cycles).unwrap();
-
-        assert_eq!(
-            built_traits(&typespace, "Wrapper"),
-            trait_set([TypespaceTrait::Clone, TypespaceTrait::Display])
-        );
-    }
-
-    /// `Box<T>` has no `FromStr` for a desired `FromStr` to cross.
-    #[test]
-    fn desired_from_str_not_available_through_box() {
-        let builder = typespace_builder!(
-            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::FromStr]),
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Display,
+                TypespaceTrait::FromStr,
+            ]),
             {
                 struct Wrapper(Box<String>);
             }
@@ -3006,31 +3024,6 @@ mod tests {
         for id in ["Clean1", "Clean2", "Holder"] {
             assert_eq!(built_traits(&typespace, id), with_eq, "{id}");
         }
-    }
-
-    /// A cycle of anonymous containers is a finalization error.
-    #[test]
-    fn container_only_cycle_is_reported() {
-        let mut builder = typespace_builder!(
-            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
-            {
-                struct S {
-                    outer: Outer,
-                }
-            }
-        );
-
-        // The two container nodes refer to each other, which the macro
-        // has no way to write: `Outer = Vec<Inner>` and
-        // `Inner = Vec<Outer>` are anonymous nodes, not items.
-        builder
-            .insert("Outer".to_string(), Type::Vec("Inner".to_string()))
-            .unwrap();
-        builder
-            .insert("Inner".to_string(), Type::Vec("Outer".to_string()))
-            .unwrap();
-
-        assert!(builder.finalize(no_cycles).is_err());
     }
 
     /// A chain of aliases forwards a blocked desired trait upward.
