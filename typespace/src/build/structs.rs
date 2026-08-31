@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 
-use log::debug;
 use quote::{format_ident, quote};
 
 use crate::build::{validate_ident, JsonValue, Type, TypeCommon, TypeCommonBuilt};
@@ -884,7 +883,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     built: Some(TypeCommonBuilt { traits }),
                 },
             inner,
-            constraints,
+            constraints: _,
         } = self
         else {
             unreachable!()
