@@ -114,13 +114,21 @@ struct StructItem {
 
 enum StructBody {
     Fields(Vec<FieldItem>),
-    Tuple(Vec<Type>),
+    Tuple(Vec<TupleField>),
     Unit,
 }
 
 struct FieldItem {
     attrs: Vec<AttrEntry>,
     name: Ident,
+    ty: Type,
+}
+
+/// One element of a tuple struct's body: a type, with the attributes
+/// (currently only `#[flatten]`, and only on the last element) that
+/// give it non-default treatment.
+struct TupleField {
+    attrs: Vec<AttrEntry>,
     ty: Type,
 }
 
@@ -180,15 +188,35 @@ fn parse_fields(input: ParseStream) -> syn::Result<Vec<FieldItem>> {
     Ok(fields)
 }
 
-/// Parse a parenthesized, comma-separated list of types: a struct's
-/// tuple body, or a variant's tuple payload. Arity is classified later,
-/// at lowering (`StructBody::Tuple`'s and `VariantPayload::Tuple`'s doc
-/// comments explain the split).
+/// Parse a parenthesized, comma-separated list of types: a variant's
+/// tuple payload. Arity is classified later, at lowering
+/// (`VariantPayload::Tuple`'s doc comment explains the split).
 fn parse_tuple_payload(input: ParseStream) -> syn::Result<Vec<Type>> {
     let content;
     parenthesized!(content in input);
     let types = Punctuated::<Type, Token![,]>::parse_terminated(&content)?;
     Ok(types.into_iter().collect())
+}
+
+/// Parse a parenthesized, comma-separated list of a struct's tuple
+/// fields, each an optionally-attributed type. Arity is classified
+/// later, at lowering (`StructBody::Tuple`'s doc comment explains the
+/// split).
+fn parse_struct_tuple_payload(input: ParseStream) -> syn::Result<Vec<TupleField>> {
+    let content;
+    parenthesized!(content in input);
+    let mut fields = Vec::new();
+    while !content.is_empty() {
+        let attrs = parse_attrs(&content)?;
+        let ty: Type = content.parse()?;
+        fields.push(TupleField { attrs, ty });
+        if content.peek(Token![,]) {
+            content.parse::<Token![,]>()?;
+        } else {
+            break;
+        }
+    }
+    Ok(fields)
 }
 
 /// Make a custom keyword for `native`
@@ -205,9 +233,9 @@ impl Parse for Item {
             let body = if input.peek(syn::token::Brace) {
                 StructBody::Fields(parse_fields(input)?)
             } else if input.peek(syn::token::Paren) {
-                let types = parse_tuple_payload(input)?;
+                let fields = parse_struct_tuple_payload(input)?;
                 input.parse::<Token![;]>()?;
-                StructBody::Tuple(types)
+                StructBody::Tuple(fields)
             } else {
                 input.parse::<Token![;]>()?;
                 StructBody::Unit
@@ -439,6 +467,20 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
     }
 }
 
+/// A claimed `#[flatten]`'s value, if any, is an error: the attribute
+/// is a bare marker. Shared by a named property's `#[flatten]` (in
+/// [`field_json_name`]) and a tuple struct's `#[flatten]` on its last
+/// field (in [`claimed_tuple_flatten`]).
+fn require_bare_flatten(entry: &AttrEntry) -> syn::Result<()> {
+    match &entry.value {
+        None => Ok(()),
+        Some(_) => Err(syn::Error::new_spanned(
+            &entry.name,
+            "#[flatten] takes no value",
+        )),
+    }
+}
+
 /// A field's `#[rename = "name"]` / `#[flatten]`, rendered as the
 /// property's `.with_json_name(...)` call (or nothing, if neither was
 /// claimed). `StructPropertySerde` holds one treatment of a property's
@@ -460,15 +502,51 @@ fn field_json_name(claims: &Claims) -> syn::Result<Option<TokenStream>> {
                 )
             }))
         }
-        (None, Some(entry)) => match entry.value {
-            Some(_) => Err(syn::Error::new_spanned(
-                &entry.name,
-                "#[flatten] takes no value",
-            )),
-            None => Ok(Some(quote! {
+        (None, Some(entry)) => {
+            require_bare_flatten(entry)?;
+            Ok(Some(quote! {
                 .with_json_name(::typespace::build::StructPropertySerde::Flatten)
-            })),
-        },
+            }))
+        }
+    }
+}
+
+/// A tuple struct's `#[flatten]`, validated across all its fields:
+/// claimed on at most one, only the last, holding no value. Returns
+/// the claimed entry, if any.
+fn claimed_tuple_flatten(fields: &[TupleField]) -> syn::Result<Option<&AttrEntry>> {
+    let flattens = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let claims = claim_attrs(&field.attrs, &["flatten"])?;
+            Ok(claims.get("flatten").copied().map(|entry| (index, entry)))
+        })
+        .collect::<syn::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    match flattens.as_slice() {
+        [] => Ok(None),
+        [(index, entry)] => {
+            require_bare_flatten(entry)?;
+            match *index == fields.len() - 1 {
+                true => Ok(Some(*entry)),
+                false => Err(syn::Error::new_spanned(
+                    &entry.name,
+                    "#[flatten] is only valid on a tuple struct's last field",
+                )),
+            }
+        }
+        [(_, first), (_, second), ..] => {
+            let mut err =
+                syn::Error::new_spanned(&second.name, "duplicate `#[flatten]` attribute");
+            err.combine(syn::Error::new_spanned(
+                &first.name,
+                "previously specified here",
+            ));
+            Err(err)
+        }
     }
 }
 
@@ -799,36 +877,63 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
         }
 
         // One type becomes a newtype struct; two or more, a tuple
-        // struct.
-        StructBody::Tuple(types) if types.len() == 1 => {
-            let inner_id = lower_type(&types[0], lowering)?;
-            lowering.inserts.push(quote! {
-                builder.insert(
-                    #name.to_string(),
-                    ::typespace::build::NewtypeStruct::new(#inner_id.to_string())
-                        .name(#name)
-                        #default_tokens
-                        .build()
-                        .unwrap(),
-                ).unwrap();
-            });
-        }
-        StructBody::Tuple(types) => {
-            let ids = types
-                .iter()
-                .map(|ty| lower_type(ty, lowering))
-                .collect::<syn::Result<Vec<_>>>()?;
-            lowering.inserts.push(quote! {
-                builder.insert(
-                    #name.to_string(),
-                    ::typespace::build::TupleStruct::<String>::new()
-                        .name(#name)
-                        #default_tokens
-                        .fields([ #(#ids.to_string()),* ])
-                        .build()
-                        .unwrap(),
-                ).unwrap();
-            });
+        // struct. `#[flatten]` on the last field of a tuple struct
+        // pulls it into `.rest(...)` instead of `.fields(...)`; a
+        // newtype's sole field has no `rest` to pull it into.
+        StructBody::Tuple(fields) => {
+            let flatten = claimed_tuple_flatten(fields)?;
+            match (fields.len(), flatten) {
+                (1, Some(entry)) => {
+                    return Err(syn::Error::new_spanned(
+                        &entry.name,
+                        "#[flatten] requires a positional field before it: a \
+                         single-field tuple struct is a newtype, which has \
+                         no `rest`",
+                    ));
+                }
+                (1, None) => {
+                    let inner_id = lower_type(&fields[0].ty, lowering)?;
+                    lowering.inserts.push(quote! {
+                        builder.insert(
+                            #name.to_string(),
+                            ::typespace::build::NewtypeStruct::new(#inner_id.to_string())
+                                .name(#name)
+                                #default_tokens
+                                .build()
+                                .unwrap(),
+                        ).unwrap();
+                    });
+                }
+                (_, flatten) => {
+                    let rest_len = match flatten {
+                        Some(_) => fields.len() - 1,
+                        None => fields.len(),
+                    };
+                    let ids = fields[..rest_len]
+                        .iter()
+                        .map(|field| lower_type(&field.ty, lowering))
+                        .collect::<syn::Result<Vec<_>>>()?;
+                    let rest_tokens = match flatten {
+                        None => TokenStream::new(),
+                        Some(_) => {
+                            let rest_id = lower_type(&fields[rest_len].ty, lowering)?;
+                            quote! { .rest(#rest_id.to_string()) }
+                        }
+                    };
+                    lowering.inserts.push(quote! {
+                        builder.insert(
+                            #name.to_string(),
+                            ::typespace::build::TupleStruct::<String>::new()
+                                .name(#name)
+                                #default_tokens
+                                .fields([ #(#ids.to_string()),* ])
+                                #rest_tokens
+                                .build()
+                                .unwrap(),
+                        ).unwrap();
+                    });
+                }
+            }
         }
         StructBody::Unit => {
             let json = claims.get("json").copied().ok_or_else(|| {
@@ -1927,6 +2032,19 @@ mod tests {
             "tests/output/test_native_variant_field_serde_names.rs",
             &out,
         );
+    }
+
+    /// `#[flatten]` on a tuple struct's last field: the positional
+    /// fields stay in `.fields(...)`, and the last becomes
+    /// `.rest(...)`.
+    #[test]
+    fn test_tuple_struct_flatten() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Widget(u32, #[flatten] String);
+            }
+        });
+        expectorate::assert_contents("tests/output/test_tuple_struct_flatten.rs", &out);
     }
 
     // Targeted behavioral checks (fast, string-match versions of a few

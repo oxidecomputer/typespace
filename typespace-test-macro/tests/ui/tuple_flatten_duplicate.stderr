@@ -1,0 +1,11 @@
+error: duplicate `#[flatten]` attribute
+ --> tests/ui/tuple_flatten_duplicate.rs:5:41
+  |
+5 |         struct Widget(#[flatten] u32, #[flatten] String);
+  |                                         ^^^^^^^
+
+error: previously specified here
+ --> tests/ui/tuple_flatten_duplicate.rs:5:25
+  |
+5 |         struct Widget(#[flatten] u32, #[flatten] String);
+  |                         ^^^^^^^

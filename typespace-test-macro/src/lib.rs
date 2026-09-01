@@ -83,15 +83,16 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Item forms
 ///
-/// | Syntax                               | Builds                    |
-/// |--------------------------------------|---------------------------|
-/// | `struct N { f: Ty, .. }`             | `Struct`                  |
-/// | `struct N(Ty);`                      | `NewtypeStruct`           |
-/// | `struct N(Ty, Ty, ..);`              | `TupleStruct`             |
-/// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`      |
-/// | `enum N { .. }`                      | `Enum`                    |
-/// | `type N = Ty;`                       | `TypeAlias`               |
-/// | `native P;` / `native P: Tr + Tr;`   | `Native`                  |
+/// | Syntax                               | Builds                     |
+/// |--------------------------------------|----------------------------|
+/// | `struct N { f: Ty, .. }`             | `Struct`                   |
+/// | `struct N(Ty);`                      | `NewtypeStruct`            |
+/// | `struct N(Ty, Ty, ..);`              | `TupleStruct`              |
+/// | `struct N(Ty, .., #[flatten] Ty);`   | `TupleStruct` with `rest`) |
+/// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`       |
+/// | `enum N { .. }`                      | `Enum`                     |
+/// | `type N = Ty;`                       | `TypeAlias`                |
+/// | `native P;` / `native P: Tr + Tr;`   | `Native`                   |
 ///
 /// Enum variants: `V` unit; `V(Ty)` single payload (`VariantDetails::Item`);
 /// `V(Ty, Ty, ..)` tuple payload; `V { f: Ty, .. }` struct payload. A
@@ -177,6 +178,8 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Enum tagging: `EnumTagType::External` (default), `#[untagged]`,
 ///   `#[tag = "t"]` (internal), `#[tag = "t", content = "c"]`
 ///   (adjacent).
+/// - Tuple struct field `#[flatten]`: `.rest()`, splicing the sequence into
+///   the containing tuple type.
 ///
 /// `#[rename]` and `#[flatten]` are field-level only, valid wherever
 /// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds

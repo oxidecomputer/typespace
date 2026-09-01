@@ -1,0 +1,5 @@
+error: #[flatten] is only valid on a tuple struct's last field
+ --> tests/ui/tuple_flatten_misplaced.rs:5:25
+  |
+5 |         struct Widget(#[flatten] u32, String);
+  |                         ^^^^^^^
