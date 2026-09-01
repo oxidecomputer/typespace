@@ -631,18 +631,12 @@ where
                 // String implements every trait we track.
                 Type::String => (),
 
-                // JsonValue implements everything except for Eq, Ord,
-                // PartialOrd, and Hash.
+                // JsonValue implements everything except for Ord and
+                // PartialOrd: serde_json::Value derives Clone, Eq,
+                // PartialEq, and Hash, and has no ordering impls.
                 Type::JsonValue => {
-                    let (bad, _) = split(
-                        &traits,
-                        &[
-                            TypespaceTrait::Eq,
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::PartialOrd,
-                            TypespaceTrait::Hash,
-                        ],
-                    );
+                    let (bad, _) =
+                        split(&traits, &[TypespaceTrait::Ord, TypespaceTrait::PartialOrd]);
                     conflict(
                         bad,
                         OffenderReason::Primitive {
@@ -782,15 +776,11 @@ where
                 TypespaceTrait::Ord | TypespaceTrait::Eq | TypespaceTrait::Hash
             ),
 
-            // JsonValue implements everything except for Eq, Ord,
-            // PartialOrd, and Hash.
-            Type::JsonValue => !matches!(
-                trait_name,
-                TypespaceTrait::Eq
-                    | TypespaceTrait::Ord
-                    | TypespaceTrait::PartialOrd
-                    | TypespaceTrait::Hash
-            ),
+            // JsonValue implements everything except for Ord and
+            // PartialOrd.
+            Type::JsonValue => {
+                !matches!(trait_name, TypespaceTrait::Ord | TypespaceTrait::PartialOrd)
+            }
         }
     }
 }
@@ -974,7 +964,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
-        build::{Native, Type},
+        build::{Native, TupleStruct, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::Settings,
@@ -1639,22 +1629,13 @@ mod tests {
         );
     }
 
-    // REVIEW: "costs"? use some different term
-    /// A `JsonValue` field costs the same traits an `f64` field does,
-    /// plus `PartialOrd`: the ground truth for `Type::JsonValue` in
-    /// `required_resolution` is that `serde_json::Value` implements
-    /// everything except `Eq`, `Ord`, `PartialOrd`, and `Hash`. Losing
-    /// `PartialOrd` strips `Ord` a second way, so `Clone`, `Debug`, and
-    /// `PartialEq` are all that survive.
+    /// A `JsonValue` field takes the ordering traits from the type
+    /// holding it and leaves the rest.
     ///
-    /// ATTN REVIEWER: that ground truth is stale. `serde_json::Value`
-    /// derives `Eq` (since well before the 1.0.148 this workspace
-    /// depends on) and derives `Hash` as of the 1.0.151 in Cargo.lock;
-    /// it implements neither `PartialOrd` nor `Ord`. Correcting the
-    /// `Type::JsonValue` arm changes this test's expectation to keep
-    /// `Eq` and `Hash`.
-    ///
-    ///
+    /// `serde_json::Value` derives `Clone`, `Eq`, `PartialEq`, and
+    /// `Hash`, and implements neither `Ord` nor `PartialOrd`. Losing
+    /// `PartialOrd` strips `Ord` a second way; `Eq` and `Hash` survive
+    /// because the value really does implement them.
     #[test]
     fn json_value_field_strips_ordering_family() {
         let builder = typespace_builder!(
@@ -1683,6 +1664,8 @@ mod tests {
                 TypespaceTrait::Clone,
                 TypespaceTrait::Debug,
                 TypespaceTrait::PartialEq,
+                TypespaceTrait::Eq,
+                TypespaceTrait::Hash,
             ])
         );
     }
@@ -3170,9 +3153,9 @@ mod tests {
         use crate::build::NewtypeStruct;
         use crate::TypespaceBuilder;
 
-        // Deeper than a macro literal wants to be, and the worst case
-        // for the sweeps: the blocked leaf is 32 hops down, so the
-        // removal travels one level per sweep.
+        // Deeper than a macro literal wants to be: the blocked leaf is
+        // 32 hops down, so the removal is queued and requeued all the
+        // way up the chain before the work list drains.
         const DEPTH: usize = 32;
 
         let mut builder = TypespaceBuilder::<String>::new(minimal_with_desired([
@@ -3248,6 +3231,268 @@ mod tests {
         assert_eq!(
             built_traits(&typespace, &format!("Level{}", DEPTH - 1)),
             only_clone
+        );
+    }
+
+    /// all_traits desires Display; a simple enum is granted it; the
+    /// enum renderer does not strip it or emit a manual impl, so
+    /// render_derives panics.
+    #[test]
+    #[ignore]
+    fn probe_all_traits_simple_enum_renders() {
+        let builder = typespace_builder!(Settings::all_traits(), {
+            enum Color {
+                Red,
+                Green,
+            }
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert!(built_traits(&ts, "Color").contains(&TypespaceTrait::Display));
+        let out = ts.to_codespace();
+        println!("{}", out.into_stream());
+    }
+
+    /// diamond graph plus duplicate fields.
+    #[test]
+    fn probe_diamond_and_duplicate_edges() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct Bottom {
+                    w: f64,
+                }
+
+                struct Left {
+                    b: Bottom,
+                    b2: Bottom,
+                }
+
+                struct Right {
+                    b: Bottom,
+                }
+
+                struct Top {
+                    l: Left,
+                    r: Right,
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        for id in ["Bottom", "Left", "Right", "Top"] {
+            assert_eq!(built_traits(&ts, id), only_clone, "{id}");
+        }
+    }
+
+    /// attached-value Default at a named type is a firebreak.
+    #[test]
+    fn probe_named_firebreak_stops_loss() {
+        let builder = typespace_builder!(minimal_with_desired([TypespaceTrait::Default]), {
+            enum NoDef {
+                A,
+                B,
+            }
+
+            #[default = { x: "A" }]
+            struct Middle {
+                x: NoDef,
+            }
+
+            struct Top {
+                m: Middle,
+            }
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(built_traits(&ts, "NoDef"), TypespaceTraitSet::empty());
+        assert_eq!(
+            built_traits(&ts, "Middle"),
+            trait_set([TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&ts, "Top"),
+            trait_set([TypespaceTrait::Default]),
+            "Top should keep Default: Middle absorbs the loss"
+        );
+    }
+
+    /// chained manual obligations, blocked at the bottom.
+    #[test]
+    fn probe_chained_manual_obligations() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                struct Inner {
+                    s: String,
+                }
+
+                struct Wrapper(Inner);
+
+                #[untagged]
+                enum U {
+                    W(Wrapper),
+                    T(String),
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        let only_clone = trait_set([TypespaceTrait::Clone]);
+        for id in ["Inner", "Wrapper", "U"] {
+            assert_eq!(built_traits(&ts, id), only_clone, "{id}");
+        }
+    }
+
+    /// same chain but capable.
+    #[test]
+    fn probe_chained_manual_obligations_capable() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                struct Wrapper(String);
+
+                #[untagged]
+                enum U {
+                    W(Wrapper),
+                    T(u32),
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        let with_display = trait_set([TypespaceTrait::Clone, TypespaceTrait::Display]);
+        for id in ["Wrapper", "U"] {
+            assert_eq!(built_traits(&ts, id), with_display, "{id}");
+        }
+    }
+
+    /// newtype cycle through a box keeps Eq.
+    #[test]
+    fn probe_cycle_through_newtype() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct A(Box<B>);
+
+                struct B(A);
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        let with_eq = trait_set([
+            TypespaceTrait::Clone,
+            TypespaceTrait::Eq,
+            TypespaceTrait::PartialEq,
+        ]);
+        for id in ["A", "B"] {
+            assert_eq!(built_traits(&ts, id), with_eq, "{id}");
+        }
+    }
+
+    /// self-referential untagged enum through Box loses Display,
+    /// terminates.
+    #[test]
+    fn probe_untagged_self_cycle_display() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Display]),
+            {
+                #[untagged]
+                enum U {
+                    Nested(Box<U>),
+                    Leaf(String),
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(built_traits(&ts, "U"), trait_set([TypespaceTrait::Clone]));
+    }
+
+    /// a phase-1 grant on a map key supports desired Eq at another
+    /// holder of the key, while the map holder drops it.
+    #[test]
+    fn probe_grant_supports_desired_elsewhere() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Eq]),
+            {
+                struct Key {
+                    name: String,
+                }
+
+                struct HoldsMap {
+                    lookup: Map<Key, f64>,
+                }
+
+                struct HoldsKey {
+                    k: Key,
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&ts, "HoldsKey"),
+            trait_set([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+            ])
+        );
+        assert_eq!(
+            built_traits(&ts, "HoldsMap"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// tuple struct rest field participates in poisoning.
+    #[test]
+    fn probe_tuple_struct_rest_blocks() {
+        let mut builder = crate::TypespaceBuilder::new(minimal_with_desired([
+            TypespaceTrait::Clone,
+            TypespaceTrait::Eq,
+        ]));
+        builder
+            .insert(
+                "floats".to_string(),
+                crate::build::Type::Vec("f64".to_string()),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "f64".to_string(),
+                crate::build::Type::Float("f64".to_string()),
+            )
+            .unwrap();
+        builder
+            .insert("String".to_string(), crate::build::Type::String)
+            .unwrap();
+        builder
+            .insert(
+                "T".to_string(),
+                TupleStruct::new()
+                    .name("T")
+                    .fields(["String".to_string()])
+                    .rest("floats".to_string())
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(built_traits(&ts, "T"), trait_set([TypespaceTrait::Clone]));
+    }
+
+    /// an alias to a container keeps unconditional Default.
+    #[test]
+    fn probe_alias_to_container_default() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                enum NoDef {
+                    A,
+                    B,
+                }
+
+                type L = Vec<NoDef>;
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&ts, "L"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
         );
     }
 }
