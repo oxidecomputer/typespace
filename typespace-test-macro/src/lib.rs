@@ -24,6 +24,16 @@ mod snapshot;
 /// 3. Runs the original function body.
 ///
 /// The annotated function must have no parameters.
+///
+/// Setting `TYPESPACE_SNAPSHOT_NO_INCLUDE` to any non-empty value skips
+/// step 2 and 3: the expression is evaluated and written to the snapshot
+/// file as usual, but nothing is embedded and the function body is
+/// dropped, then the macro panics telling you to re-run. This is the
+/// escape hatch for when a previous run wrote a snapshot that does not
+/// compile: with the variable set, the macro never embeds that file, so
+/// the crate compiles and a fresh snapshot gets written without hand
+/// editing or deleting anything. A `build.rs` in this crate registers
+/// the variable with cargo so toggling it triggers re-expansion.
 #[proc_macro_attribute]
 pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
     snapshot::expand(attr, item)
