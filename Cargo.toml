@@ -16,6 +16,7 @@ newline-converter = "0.3.0"
 prettyplease = "0.3.0"
 proc-macro2 = "1.0.104"
 quote = "1.0.42"
+schemars = "0.8.22"
 serde = "1.0.228"
 serde_json = "1.0.148"
 syn = { version = "3.0.3", features = ["full"] }

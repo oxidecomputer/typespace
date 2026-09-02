@@ -2085,7 +2085,7 @@ mod tests {
     /// `Ord`, and `Hash` (blocked by the float) are dropped.
     #[test]
     fn all_traits_preset_over_float_struct() {
-        let builder = typespace_builder!(Settings::all_traits(), {
+        let builder = typespace_builder!(Settings::maximal(), {
             struct S {
                 weight: f64,
                 name: String,
@@ -3240,7 +3240,7 @@ mod tests {
     #[test]
     #[ignore]
     fn probe_all_traits_simple_enum_renders() {
-        let builder = typespace_builder!(Settings::all_traits(), {
+        let builder = typespace_builder!(Settings::maximal(), {
             enum Color {
                 Red,
                 Green,

@@ -147,8 +147,10 @@ impl TypespaceTrait {
     pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
         if settings.std == Std::FullyQualified {
             match self {
-                TypespaceTrait::Clone => quote! { ::std::clone::Clone },
-                TypespaceTrait::Debug => quote! { ::std::fmt::Debug },
+                // TypespaceTrait::Clone => quote! { ::std::clone::Clone },
+                // TypespaceTrait::Debug => quote! { ::std::fmt::Debug },
+                TypespaceTrait::Clone => quote! { Clone },
+                TypespaceTrait::Debug => quote! { Debug },
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
                 TypespaceTrait::JsonSchema => quote! { ::schemars::JsonSchema },
@@ -775,6 +777,45 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         cs
     }
 
+    pub(crate) fn add_error_mod(&self, cs: &mut codespace::Codespace) {
+        let mut error_mod = codespace::Mod::default();
+        error_mod.add_item(
+            "",
+            quote! {
+                /// Error from a `TryFrom` or `FromStr` implementation.
+                pub struct ConversionError(::std::borrow::Cow<'static, str>);
+
+                impl ::std::error::Error for ConversionError {}
+                impl ::std::fmt::Display for ConversionError {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                        -> Result<(), ::std::fmt::Error>
+                    {
+                        ::std::fmt::Display::fmt(&self.0, f)
+                    }
+                }
+
+                impl ::std::fmt::Debug for ConversionError {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                        -> Result<(), ::std::fmt::Error>
+                    {
+                        ::std::fmt::Debug::fmt(&self.0, f)
+                    }
+                }
+                impl From<&'static str> for ConversionError {
+                    fn from(value: &'static str) -> Self {
+                        Self(value.into())
+                    }
+                }
+                impl From<String> for ConversionError {
+                    fn from(value: String) -> Self {
+                        Self(value.into())
+                    }
+                }
+            },
+        );
+        let _ = cs.get_root_mod().replace_mod("error", error_mod);
+    }
+
     pub(crate) fn render_ident(&self, id: &Id) -> TokenStream {
         self.render_ident_impl(id, None, false)
     }
@@ -999,7 +1040,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         vis_pub: bool,
         context: &str,
         cs: &mut codespace::Codespace,
-    ) -> TokenStream {
+    ) -> RenderedStructProperty {
         let description = description.as_ref().map(|text| {
             quote! {
                 #[doc = #text]
@@ -1045,26 +1086,28 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         };
 
         let ty_ident = self.render_ident(type_id);
+        let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"));
 
         let std_opt_type = match &self.settings.std {
             Std::FullyQualified => quote! { ::std::option::Option },
             Std::Unqualified => quote! { Option },
         };
-        let std_opt_is_none = format!("{std_opt_type}::is_none");
+        let std_opt_type_str = std_opt_type.clone().token_print();
+        let std_opt_is_none = format!("{std_opt_type_str}::is_none");
 
-        let prop_ty_ident = match (state, type_of_interest) {
+        let (prop_ty_ident, prop_ty_ident_scoped) = match (state, type_of_interest) {
             // A required field needs no serde annotations.
-            (StructPropertyState::Required, TypeOfInterest::Other) => ty_ident,
+            (StructPropertyState::Required, TypeOfInterest::Other) => (ty_ident, ty_ident_scoped),
 
             // A required field that is an Option<T> needs a custom
             // deserializer so that the field is mandatory, but may be null;
             // without this attribute, the default handling is to permit
             // either.
             (StructPropertyState::Required, TypeOfInterest::Option(_)) => {
-                let opt_deserialize = format!("{std_opt_type}::deserialize");
+                let opt_deserialize = format!("{std_opt_type_str}::deserialize");
                 // TODO schemars schema_with?
                 serde_options.push(quote! { deserialize_with = #opt_deserialize });
-                ty_ident
+                (ty_ident, ty_ident_scoped)
             }
 
             // An optional field that is not an Option<T> may not be null; we
@@ -1077,9 +1120,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
                 // TODO schemars schema_with
 
-                quote! {
-                    #std_opt_type<#ty_ident>
-                }
+                (
+                    quote! { #std_opt_type<#ty_ident> },
+                    quote! {#std_opt_type<#ty_ident_scoped>},
+                )
             }
 
             // An optional field that is also an Option<T> may be the type
@@ -1088,13 +1132,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             (StructPropertyState::Optional, TypeOfInterest::Option(inner_id)) => {
                 match &self.settings.optional_nullable {
                     OptionalNullable::ConflateAsAbsent => {
-                        serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
-                        ty_ident
+                        serde_options.push(quote! {
+                            skip_serializing_if = #std_opt_is_none
+                        });
+                        (ty_ident, ty_ident_scoped)
                     }
                     OptionalNullable::ConflateAsNull => {
                         // We always serialize--including `None` as `null`--so
                         // no serde options are necessary.
-                        ty_ident
+                        (ty_ident, ty_ident_scoped)
                     }
                     OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
@@ -1105,9 +1151,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                             skip_serializing_if = #std_opt_is_none
                         });
 
-                        quote! {
-                            #std_opt_type<#ty_ident>
-                        }
+                        (
+                            quote! { #std_opt_type<#ty_ident> },
+                            quote! { #std_opt_type<#ty_ident_scoped> },
+                        )
                     }
                     OptionalNullable::CustomType(custom_type_name) => {
                         let custom_type_path =
@@ -1117,10 +1164,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                         serde_options.push(quote! { skip_serializing_if = #custom_is_absent });
 
                         let inner_ident = self.render_ident(inner_id);
+                        let inner_ident_scoped =
+                            self.render_ident_with_scope(inner_id, Some("super"));
 
-                        quote! {
-                            #custom_type_path<#inner_ident>
-                        }
+                        (
+                            quote! { #custom_type_path<#inner_ident> },
+                            quote! { #custom_type_path<#inner_ident_scoped> },
+                        )
                     }
                 }
             }
@@ -1133,7 +1183,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     std_opt_is_none,
                 );
 
-                ty_ident
+                (ty_ident, ty_ident_scoped)
             }
             (
                 StructPropertyState::DefaultValue(JsonValue(value)),
@@ -1150,13 +1200,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     &fn_name_str,
                     quote! {
                         pub fn #fn_name_ident() -> #ty_for_fn {
+                            // TODO 9/1/2026
+                            // I don't love this use of serde_json here...
                             ::serde_json::from_value(#value_tokens)
                                 .expect("invalid default value")
                         }
                     },
                 );
 
-                ty_ident
+                (ty_ident, ty_ident_scoped)
             }
 
             (StructPropertyState::Optional, TypeOfInterest::Never) => {
@@ -1170,7 +1222,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     skip_serializing_if = "::json_serde::always"
                 });
 
-                quote! { ::json_serde::Absent }
+                (
+                    quote! { ::json_serde::Absent },
+                    quote! { ::json_serde::Absent },
+                )
             }
             (
                 StructPropertyState::Required
@@ -1180,6 +1235,20 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             ) => unreachable!("finalization rejects a Never property that requires a value"),
         };
 
+        let default = match state {
+            StructPropertyState::Required => DefaultConstructor::None,
+            StructPropertyState::Optional | StructPropertyState::Default => {
+                DefaultConstructor::Default
+            }
+            StructPropertyState::DefaultValue(_) => {
+                // TODO 9/1/2026
+                // we should dedup this code
+                let fn_name_str = format!("{}__{}", context, rust_name);
+                let fn_name_ident = format_ident!("{}", fn_name_str);
+                DefaultConstructor::Generated(quote! { defaults::#fn_name_ident() })
+            }
+        };
+
         let serde = (!serde_options.is_empty()).then(|| {
             quote! {
                 #[serde(
@@ -1187,13 +1256,16 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 )]
             }
         });
-        let vis_pub = vis_pub.then(|| quote! { pub });
         let rust_name_ident = format_ident!("{rust_name}");
 
-        quote! {
-            #description
-            #serde
-            #vis_pub #rust_name_ident: #prop_ty_ident
+        RenderedStructProperty {
+            description,
+            serde,
+            vis_pub,
+            rust_name_ident,
+            prop_ty_ident,
+            prop_ty_ident_scoped,
+            default,
         }
     }
 
@@ -1279,6 +1351,42 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // Optional state renders without a skip of this kind.
             Type::Never => unreachable!("Never properties add no skip attribute"),
         }
+    }
+}
+
+pub(crate) enum DefaultConstructor {
+    None,
+    Default,
+    Generated(TokenStream),
+}
+
+pub(crate) struct RenderedStructProperty {
+    pub description: Option<TokenStream>,
+    pub serde: Option<TokenStream>,
+    pub vis_pub: bool,
+    pub rust_name_ident: syn::Ident,
+    pub prop_ty_ident: TokenStream,
+    pub prop_ty_ident_scoped: TokenStream,
+    pub default: DefaultConstructor,
+}
+
+impl ToTokens for RenderedStructProperty {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self {
+            description,
+            serde,
+            vis_pub,
+            rust_name_ident,
+            prop_ty_ident,
+            prop_ty_ident_scoped: _,
+            default: _,
+        } = self;
+        let vis_pub = vis_pub.then(|| quote! { pub });
+        tokens.extend(quote! {
+            #description
+            #serde
+            #vis_pub #rust_name_ident: #prop_ty_ident
+        });
     }
 }
 
@@ -1405,5 +1513,17 @@ where
                 }
             }
         }
+    }
+}
+
+trait TokenPrint {
+    fn token_print(self) -> String;
+}
+
+impl TokenPrint for proc_macro2::TokenStream {
+    fn token_print(self) -> String {
+        self.into_iter()
+            .map(|tt| tt.to_string())
+            .collect::<String>()
     }
 }

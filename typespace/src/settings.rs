@@ -76,6 +76,10 @@ pub struct Settings {
     /// Opaque attributes included in every type.
     #[serde(default)]
     pub(crate) extra_attrs: Vec<String>,
+
+    /// Generate builder for struct types.
+    #[serde(default)]
+    pub(crate) struct_builder: bool,
 }
 
 /// The traits an ordered-lookup container (`BTreeMap`, or the ordered
@@ -107,6 +111,7 @@ impl Settings {
             desired_traits: TypespaceTraitSet::empty(),
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
+            struct_builder: false,
         }
     }
 
@@ -130,10 +135,11 @@ impl Settings {
             desired_traits: TypespaceTraitSet::empty(),
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
+            struct_builder: true,
         }
     }
 
-    pub fn all_traits() -> Self {
+    pub fn maximal() -> Self {
         Self {
             std: Std::FullyQualified,
             optional_nullable: OptionalNullable::default(),
@@ -165,6 +171,7 @@ impl Settings {
             .collect(),
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
+            struct_builder: true,
         }
     }
 
@@ -297,8 +304,15 @@ impl Settings {
         self
     }
 
+    /// Specify an attribute that will proceed every generated type.
     pub fn with_attr(mut self, attr: impl Into<String>) -> Self {
         self.extra_attrs.push(attr.into());
+        self
+    }
+
+    /// Specify whether struct types should include an associated builder.
+    pub fn with_struct_builder(mut self, struct_builder: bool) -> Self {
+        self.struct_builder = struct_builder;
         self
     }
 }

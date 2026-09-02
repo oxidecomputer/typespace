@@ -118,7 +118,7 @@ pub struct Widget {
 pub struct Wrapper(pub String);
 impl ::std::ops::Deref for Wrapper {
     type Target = String;
-    fn deref(&self) -> &Self::Target {
+    fn deref(&self) -> &String {
         &self.0
     }
 }

@@ -2433,3 +2433,60 @@ fn test_never_newtype_struct_rejected_unreferenced() {
     assert_eq!(wrapper, "newtype struct");
     assert_eq!(type_id, "NeverNewtype");
 }
+
+#[test]
+fn test_struct_builder() {
+    let builder = typespace_builder!(Settings::maximal(), {
+        struct MyStruct {
+            a: String,
+            b: Optional<u32>,
+            c: Nullable<String>,
+            #[default = 42]
+            d: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    #[check_and_include("tests/output/test_struct_builder.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let builder = import::builder::MyStruct::default();
+        assert!(import::MyStruct::try_from(builder).is_err());
+        let builder = import::builder::MyStruct::default().a("howdy");
+        assert!(import::MyStruct::try_from(builder).is_err());
+        let builder = import::builder::MyStruct::default().c(Some("hello".into()));
+        assert!(import::MyStruct::try_from(builder).is_err());
+
+        let instance: import::MyStruct = import::builder::MyStruct::default()
+            .a("howdy")
+            .c(None)
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            instance,
+            import::MyStruct {
+                a: "howdy".into(),
+                b: None,
+                c: None,
+                d: 42
+            }
+        );
+
+        let instance: import::MyStruct = import::builder::MyStruct::default()
+            .a("howdy")
+            .b(Some(100))
+            .c(Some("there".into()))
+            .d(200)
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            instance,
+            import::MyStruct {
+                a: "howdy".into(),
+                b: Some(100),
+                c: Some("there".into()),
+                d: 200
+            }
+        );
+        let builder = import::builder::MyStruct::from(instance.clone());
+        assert_eq!(instance, builder.try_into().unwrap());
+    }
+}

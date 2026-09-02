@@ -6,7 +6,7 @@ use quote::{format_ident, quote};
 
 use crate::build::{validate_ident, JsonValue, Type, TypeCommon, TypeCommonBuilt};
 use crate::error::{Error, NameAxis};
-use crate::{TypespaceRenderer, TypespaceTrait};
+use crate::{RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
 
 /// A struct with named fields.
 ///
@@ -187,10 +187,139 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let name_ident = format_ident!("{name}");
         let snake_name = heck::AsSnakeCase(name).to_string();
 
-        let mut rendered_properties = Vec::new();
-        for prop in properties {
-            rendered_properties.push(typespace.render_struct_property(prop, true, &snake_name, cs));
+        let rendered_properties = properties
+            .iter()
+            .map(|prop| typespace.render_struct_property(prop, true, &snake_name, cs))
+            .collect::<Vec<_>>();
+
+        if typespace.settings.struct_builder {
+            // TODO 9/1/2026
+            // for compat: some of these are unqualified and some are fully
+            // qualified; resolve.
+
+            let prop_ident = rendered_properties
+                .iter()
+                .map(
+                    |RenderedStructProperty {
+                         rust_name_ident, ..
+                     }| rust_name_ident,
+                )
+                .collect::<Vec<_>>();
+            let prop_error = rendered_properties.iter().map(
+                |RenderedStructProperty {
+                     rust_name_ident, ..
+                 }| {
+                    format!(
+                        "error converting supplied value for {}: {{e}}",
+                        rust_name_ident
+                    )
+                },
+            );
+            let prop_ty_ident_scoped = rendered_properties
+                .iter()
+                .map(
+                    |RenderedStructProperty {
+                         prop_ty_ident_scoped,
+                         ..
+                     }| prop_ty_ident_scoped,
+                )
+                .collect::<Vec<_>>();
+            let prop_default_value = rendered_properties.iter().map(
+                |RenderedStructProperty {
+                     rust_name_ident,
+                     default,
+                     ..
+                 }| match default {
+                    crate::DefaultConstructor::None => {
+                        let msg = format!("no value supplied for {}", rust_name_ident);
+                        quote! {
+                            Err(#msg.to_string())
+                        }
+                    }
+                    crate::DefaultConstructor::Default => quote! { Ok(Default::default()) },
+                    crate::DefaultConstructor::Generated(default_expr) => {
+                        quote! { Ok(super::#default_expr) }
+                    }
+                },
+            );
+
+            let builder = quote! {
+                #[derive(Clone, Debug)]
+                pub struct #name_ident {
+                    #(
+                        #prop_ident: ::std::result::Result<
+                            #prop_ty_ident_scoped,
+                            ::std::string::String,
+                        >,
+                    )*
+                }
+
+                impl ::std::default::Default for #name_ident {
+                    fn default() -> Self {
+                        Self {
+                            #(
+                                #prop_ident: #prop_default_value,
+                            )*
+                        }
+                    }
+                }
+
+                impl #name_ident {
+                    #(
+                        pub fn #prop_ident<T>(mut self, value: T) -> Self
+                        where
+                            T: ::std::convert::TryInto<#prop_ty_ident_scoped>,
+                            T::Error: ::std::fmt::Display,
+                        {
+                            self.#prop_ident = value.try_into()
+                                .map_err(|e| format!(#prop_error));
+                            self
+                        }
+                    )*
+                }
+
+                impl ::std::convert::TryFrom<#name_ident>
+                    for super::#name_ident
+                {
+                    type Error = super::error::ConversionError;
+
+                    fn try_from(value: #name_ident)
+                        -> ::std::result::Result<Self, super::error::ConversionError>
+                    {
+                        Ok(Self {
+                            #(
+                                #prop_ident: value.#prop_ident?,
+                            )*
+                        })
+                    }
+                }
+
+                impl ::std::convert::From<super::#name_ident> for #name_ident {
+                    fn from(value: super::#name_ident) -> Self {
+                        Self {
+                            #(
+                                #prop_ident: Ok(value.#prop_ident),
+                            )*
+                        }
+                    }
+                }
+            };
+
+            cs.get_root_mod().get_mod("builder").add_item(name, builder);
+            typespace.add_error_mod(cs);
         }
+
+        let builder_impl = typespace.settings.struct_builder.then(|| {
+            quote! {
+                impl #name_ident {
+                    pub fn builder() -> builder::#name_ident {
+                        // TODO 9/1/2026
+                        // Add std scope
+                        Default::default()
+                    }
+                }
+            }
+        });
 
         let derive_attr = typespace.render_derives(traits);
 
@@ -200,6 +329,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             pub struct #name_ident {
                 #( #rendered_properties, )*
             }
+
+            #builder_impl
         }
     }
 
@@ -912,7 +1043,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
             impl ::std::ops::Deref for #name_ident {
                 type Target = #inner_ident;
-                fn deref(&self) -> &Self::Target {
+                // TODO: typespace compat
+                // fn deref(&self) -> &Self::Target {
+                fn deref(&self) -> & #inner_ident {
                     &self.0
                 }
             }
