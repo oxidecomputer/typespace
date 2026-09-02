@@ -1213,6 +1213,84 @@ fn test_cycles() {
     }
 }
 
+// A cycle made up entirely of anonymous nodes has no name anywhere to
+// terminate its code generation: `Outer = Vec<Inner>` and `Inner = Vec<Outer>`
+// would each expand into the other forever. Neither node is infinitely sized
+// (`Vec` is heap indirection), so `break_cycles` leaves them alone; this is a
+// distinct problem from containment.
+#[test]
+fn test_anonymous_cycle_rejected() {
+    let mut builder = typespace_builder!(Settings::minimal(), {
+        struct S {
+            outer: Outer,
+        }
+    });
+
+    // The two container nodes refer to each other, which the macro
+    // has no way to write: `Outer = Vec<Inner>` and
+    // `Inner = Vec<Outer>` are anonymous nodes, not items.
+    builder
+        .insert("Outer".to_string(), Type::Vec("Inner".to_string()))
+        .unwrap();
+    builder
+        .insert("Inner".to_string(), Type::Vec("Outer".to_string()))
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to fail");
+    };
+    let Error::AnonymousCycle { type_id, child_id } = err else {
+        panic!("expected AnonymousCycle, got: {err}");
+    };
+    let edge = [type_id, child_id]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        edge,
+        ["Inner".to_string(), "Outer".to_string()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+}
+
+// A cycle through a named type is neither a containment cycle (Vec is
+// heap-allocated) nor a code-generation cycle (A is a named type).
+#[test]
+fn test_named_cycle_finalizes() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        struct A {
+            b: Vec<A>,
+        }
+    });
+
+    builder.finalize(no_cycles).expect("finalize succeeds");
+}
+
+/// We check for containment cycles before checking for representation cycles,
+/// but insertion of a Box only changes the cardinality of an existing cycle.
+#[test]
+fn test_anonymous_cycle_after_boxing_rejected() {
+    let mut builder = TypespaceBuilder::default();
+
+    builder
+        .insert("Outer".to_string(), Type::Tuple(vec!["Inner".to_string()]))
+        .unwrap();
+    builder
+        .insert("Inner".to_string(), Type::Tuple(vec!["Outer".to_string()]))
+        .unwrap();
+
+    let mut box_count = 0;
+    let mut make_box_id = |_: &String| {
+        box_count += 1;
+        format!("Box{box_count}")
+    };
+
+    let Err(err) = builder.finalize(&mut make_box_id) else {
+        panic!("expected finalize to fail");
+    };
+    assert!(matches!(err, Error::AnonymousCycle { .. }));
+}
+
 // Container overrides replace the rendered map/set/vec types; a
 // string-to-JSON-value map is always ::serde_json::Map regardless of the
 // map override.

@@ -172,6 +172,29 @@ where
         type_id: Id,
     },
 
+    /// A cycle in the type graph passes through no named type.
+    ///
+    /// [`TypespaceBuilder::finalize`](crate::TypespaceBuilder::finalize)
+    /// breaks containment cycles by inserting `Box` types. This ensures
+    /// that types can be compiled. It doesn't address cycles in code
+    /// generation itself. Anonymous types may form cycles such that generating
+    /// the code to represent them would be infinitely recursive.
+    ///
+    /// `type_id` and `child_id` are one edge of
+    /// the offending cycle: `type_id` refers to `child_id`, and
+    /// `child_id` is reachable from itself through anonymous types
+    /// only.
+    #[error(
+        "the anonymous type with id `{type_id}` refers to `{child_id}`, \
+         closing a cycle that passes through no named type"
+    )]
+    AnonymousCycle {
+        /// The type whose reference closes the cycle.
+        type_id: Id,
+        /// The ancestor the cycle closes back to.
+        child_id: Id,
+    },
+
     /// Trait requirements that types in the graph cannot satisfy.
     ///
     /// Every conflict found during propagation is collected; the list

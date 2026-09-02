@@ -59,6 +59,7 @@
 //! that changes when constraint validation rendering lands.
 
 pub mod build;
+pub(crate) mod cycles;
 pub mod error;
 pub mod settings;
 pub(crate) mod trait_resolution;
@@ -618,10 +619,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Verifies that every ID referenced by a type names an inserted
     /// type (a dangling reference is a
     /// [`error::Error::UnknownTypeId`]), breaks containment cycles by
-    /// inserting `Box` types, and propagates trait requirements through
-    /// the graph--a type used as a map key must be `Ord`, and so must
-    /// everything it contains. Trait requirements that types cannot
-    /// satisfy are collected--all of them, not just the first--into
+    /// inserting `Box` types, verifies that no representation cycles remain
+    /// ([`error::Error::AnonymousCycle`]), and propagates trait requirements
+    /// through the graph--a type used as a map key must be `Ord`, and so must
+    /// everything it contains. Trait requirements that types cannot satisfy
+    /// are collected--all of them, not just the first--into
     /// [`error::Error::TraitConflicts`].
     ///
     /// `make_box_id` is called to generate a fresh ID for each `Box<T>`
@@ -665,7 +667,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         } = self;
 
         build_commons(&mut types);
-        break_cycles(&mut types, make_box_id);
+        cycles::break_cycles(&mut types, make_box_id);
+        cycles::check_anonymous_cycles(&types)?;
         trait_resolution::resolve_traits(&mut types, &settings)?;
 
         Ok(Typespace { types, settings })
@@ -1402,121 +1405,6 @@ fn build_commons<Id: Clone>(types: &mut BTreeMap<Id, Type<Id>>) {
             common.built = Some(TypeCommonBuilt {
                 traits: TypespaceTraitSet::empty(),
             });
-        }
-    }
-}
-
-fn break_cycles<Id, F>(types: &mut BTreeMap<Id, Type<Id>>, mut make_box_id: F)
-where
-    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
-    F: FnMut(&Id) -> Id,
-{
-    enum Node<Id> {
-        Start { type_id: Id },
-        Processing { type_id: Id, children_ids: Vec<Id> },
-    }
-
-    let mut visited = BTreeSet::<Id>::new();
-
-    for type_id in types.keys().cloned().collect::<Vec<_>>() {
-        if visited.contains(&type_id) {
-            continue;
-        }
-
-        let mut active = BTreeSet::<Id>::new();
-        let mut stack = Vec::<Node<Id>>::new();
-
-        active.insert(type_id.clone());
-        stack.push(Node::Start { type_id });
-
-        while let Some(top) = stack.last_mut() {
-            match top {
-                // Skip right to the end since we've already seen this type.
-                Node::Start { type_id } if visited.contains(type_id) => {
-                    assert!(active.contains(type_id));
-
-                    let type_id = type_id.clone();
-                    *top = Node::Processing {
-                        type_id,
-                        children_ids: Vec::new(),
-                    };
-                }
-
-                // Break any immediate cycles and queue up this type for
-                // descent into its child types.
-                Node::Start { type_id } => {
-                    assert!(active.contains(type_id));
-
-                    visited.insert(type_id.clone());
-
-                    // Determine which child types form cycles--and
-                    // therefore need to be snipped--and the rest--into
-                    // which we should descend. We make this its own block
-                    // to clarify the lifetime of the exclusive reference
-                    // to the type. We don't really *need* to have an
-                    // exclusive reference here, but there's no point in
-                    // writing `get_child_ids` again for shared references.
-                    let (snip, descend) = {
-                        let typ = types.get_mut(type_id).unwrap();
-
-                        let child_ids = typ
-                            .contained_children_mut()
-                            .into_iter()
-                            .map(|child_id| child_id.clone());
-
-                        // If the child type is in active then we've found
-                        // a cycle (otherwise we'll descend).
-                        child_ids.partition::<Vec<_>, _>(|child_id| active.contains(child_id))
-                    };
-
-                    // Note that while `snip` might contain duplicates,
-                    // `id_to_box` is idempotent insofar as the same input
-                    // TypeId will result in the same output TypeId. Ergo
-                    // the resulting pairs from which we construct the
-                    // mapping would contain exact duplicates; it would not
-                    // contain two values associated with the same key.
-                    let replace = snip
-                        .into_iter()
-                        .map(|type_id| {
-                            let box_id = make_box_id(&type_id);
-                            let box_typ = Type::Box(type_id.clone());
-                            types.insert(box_id.clone(), box_typ);
-
-                            (type_id, box_id)
-                        })
-                        .collect::<BTreeMap<Id, Id>>();
-
-                    // Break any cycles by reassigning the child type to a box.
-                    let typ = types.get_mut(type_id).unwrap();
-
-                    let child_ids = typ.contained_children_mut();
-                    for child_id in child_ids {
-                        if let Some(replace_id) = replace.get(child_id) {
-                            *child_id = replace_id.clone();
-                        }
-                    }
-
-                    // Descend into child types.
-                    let node = Node::Processing {
-                        type_id: type_id.clone(),
-                        children_ids: descend,
-                    };
-                    *top = node;
-                }
-                Node::Processing {
-                    type_id,
-                    children_ids: children,
-                } => {
-                    if let Some(child) = children.pop() {
-                        active.insert(child.clone());
-                        stack.push(Node::Start { type_id: child });
-                    } else {
-                        let type_id = type_id.clone();
-                        active.remove(&type_id);
-                        stack.pop();
-                    }
-                }
-            }
         }
     }
 }
