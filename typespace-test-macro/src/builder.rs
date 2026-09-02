@@ -158,13 +158,42 @@ struct AliasItem {
 
 /// A `native P;` or `native P: Trait1 + Trait;` declaration: an externally
 /// defined type, named by the Rust path `P` generated code emits
-/// for it, declaring the traits it implements.
+/// for it, declaring what it implements.
 struct NativeItem {
     attrs: Vec<AttrEntry>,
     /// The declared path, kept as a `Type` so the one path grammar in
     /// [`name_or_native`] judges a declaration and a use alike.
     ty: Type,
-    bounds: Vec<syn::Path>,
+    bounds: Vec<NativeBound>,
+}
+
+/// One entry in a `native` item's bound list.
+enum NativeBound {
+    /// `Tr`: the type implements the trait.
+    Yes(syn::Path),
+    /// `!Tr`: the type does not implement the trait.
+    No(syn::Path),
+    /// `?Tr`: the declaration cannot answer for the trait.
+    Unknown(syn::Path),
+    /// `..`: every trait the list does not name is unknown.
+    Rest,
+}
+
+impl Parse for NativeBound {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(Token![..]) {
+            input.parse::<Token![..]>()?;
+            Ok(NativeBound::Rest)
+        } else if input.peek(Token![!]) {
+            input.parse::<Token![!]>()?;
+            Ok(NativeBound::No(input.parse()?))
+        } else if input.peek(Token![?]) {
+            input.parse::<Token![?]>()?;
+            Ok(NativeBound::Unknown(input.parse()?))
+        } else {
+            Ok(NativeBound::Yes(input.parse()?))
+        }
+    }
 }
 
 /// Parse a brace-delimited, comma-terminated list of `name: Type`
@@ -289,7 +318,7 @@ impl Parse for Item {
             let ty: Type = input.parse()?;
             let bounds = if input.peek(Token![:]) {
                 input.parse::<Token![:]>()?;
-                Punctuated::<syn::Path, Token![+]>::parse_separated_nonempty(input)?
+                Punctuated::<NativeBound, Token![+]>::parse_separated_nonempty(input)?
                     .into_iter()
                     .collect::<Vec<_>>()
             } else {
@@ -539,8 +568,7 @@ fn claimed_tuple_flatten(fields: &[TupleField]) -> syn::Result<Option<&AttrEntry
             }
         }
         [(_, first), (_, second), ..] => {
-            let mut err =
-                syn::Error::new_spanned(&second.name, "duplicate `#[flatten]` attribute");
+            let mut err = syn::Error::new_spanned(&second.name, "duplicate `#[flatten]` attribute");
             err.combine(syn::Error::new_spanned(
                 &first.name,
                 "previously specified here",
@@ -1054,11 +1082,18 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
     let path = native_path(&item.ty)?;
     let id = lowering.claim_native(path)?;
     let name = path_text(path);
-    let impls = item
-        .bounds
-        .iter()
-        .map(native_trait_tokens)
-        .collect::<syn::Result<Vec<_>>>()?;
+    let impls = native_trait_group(&item.bounds, |bound| match bound {
+        NativeBound::Yes(path) => Some(path),
+        _ => None,
+    })?;
+    let unknown = native_trait_group(&item.bounds, |bound| match bound {
+        NativeBound::Unknown(path) => Some(path),
+        _ => None,
+    })?;
+    let known_not = native_trait_group(&item.bounds, |bound| match bound {
+        NativeBound::No(path) => Some(path),
+        _ => None,
+    })?;
     // An empty array literal would leave the element type unresolved,
     // so the trait-less case names the empty set directly.
     let impls_tokens = if impls.is_empty() {
@@ -1066,6 +1101,28 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
     } else {
         quote! { [ #(#impls),* ].into_iter().collect::<::typespace::TypespaceTraitSet>() }
     };
+    // `..` is the background statement, so it is applied first and the
+    // bounds that name a trait outright override it.
+    let rest_tokens = item
+        .bounds
+        .iter()
+        .any(|bound| matches!(bound, NativeBound::Rest))
+        .then(|| quote! { .with_rest_unknown() });
+    let unknown_tokens = (!unknown.is_empty()).then(|| {
+        quote! {
+            .with_unknown(
+                [ #(#unknown),* ].into_iter().collect::<::typespace::TypespaceTraitSet>()
+            )
+        }
+    });
+    let known_not_tokens = known_not
+        .iter()
+        .map(|trait_tokens| {
+            quote! {
+                .with_disposition(#trait_tokens, ::typespace::TraitDisposition::No)
+            }
+        })
+        .collect::<Vec<_>>();
     let parameter_ids = native_args(path)?
         .into_iter()
         .map(|arg| lower_type(arg, lowering))
@@ -1079,10 +1136,25 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
                     #impls_tokens,
                     [ #(#parameter_ids.to_string()),* ].into_iter().collect(),
                 )
+                #rest_tokens
+                #unknown_tokens
+                #(#known_not_tokens)*
             ),
         ).unwrap();
     });
     Ok(())
+}
+
+/// The `TypespaceTrait` tokens for the bounds `select` picks out.
+fn native_trait_group<'a>(
+    bounds: &'a [NativeBound],
+    select: impl Fn(&'a NativeBound) -> Option<&'a syn::Path>,
+) -> syn::Result<Vec<TokenStream>> {
+    bounds
+        .iter()
+        .filter_map(select)
+        .map(native_trait_tokens)
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -1934,6 +2006,22 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/test_native_declared_traits.rs", &out);
+    }
+
+    #[test]
+    fn test_native_unknown_traits() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                native ::chrono::naive::NaiveDate: Clone + Debug + ?Ord + ?Hash;
+                native ::foo::Opaque: Clone + .. + !Default;
+
+                struct Event {
+                    when: ::chrono::naive::NaiveDate,
+                    what: ::foo::Opaque,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_unknown_traits.rs", &out);
     }
 
     #[test]

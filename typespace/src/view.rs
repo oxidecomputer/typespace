@@ -156,6 +156,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     }
 
     /// Returns whether this type has the given trait implementation.
+    ///
+    /// A native type answers from what it is known to implement, so a
+    /// trait its declaration cannot answer for is `false`.
     pub fn has_impl(&self, impl_name: TypeSpaceImpl) -> bool {
         let trait_ = match impl_name {
             TypeSpaceImpl::Display => TypespaceTrait::Display,

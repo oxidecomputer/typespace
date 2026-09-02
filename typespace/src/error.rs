@@ -399,10 +399,11 @@ pub enum OffenderReason {
         /// The rendered name of the built-in type (`f64`, say).
         type_name: String,
     },
-    /// A native type that does not list the trait among its declared
-    /// impls. Unlike [`OffenderReason::Primitive`], this is fixable:
-    /// declare the impl on the [`Native`](crate::build::Native) if the
-    /// underlying Rust type provides it.
+    /// A native type that is known not to implement the trait. Unlike
+    /// [`OffenderReason::Primitive`], this is fixable: declare the impl
+    /// on the [`Native`](crate::build::Native) if the underlying Rust
+    /// type provides it, or mark the trait unknown if the declaration
+    /// cannot answer for it.
     NativeMissingImpl {
         /// The Rust type path of the native type.
         type_name: String,

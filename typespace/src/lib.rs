@@ -123,7 +123,7 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// `PartialOrd`, and so must every type it contains. Generated types
 /// absorb propagated requirements and emit the corresponding derives;
 /// a [`build::Native`] type must already declare the required traits
-/// among its `impls`. A requirement that a type cannot satisfy--`Ord`
+/// among its `impls`, or leave them unknown. A requirement that a type cannot satisfy--`Ord`
 /// on a float, say--is a [`error::Error`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -259,6 +259,43 @@ impl TypespaceTraitSet {
     ) -> impl Iterator<Item = &'a TypespaceTrait> + 'a {
         self.0.difference(&other.0)
     }
+}
+
+// REVIEW: this seems like it's likely going to fall out of date when we add a new variants.
+/// Every trait typespace tracks, in declaration order.
+pub(crate) const ALL_TRAITS: [TypespaceTrait; 13] = [
+    TypespaceTrait::Clone,
+    TypespaceTrait::Debug,
+    TypespaceTrait::Serialize,
+    TypespaceTrait::Deserialize,
+    TypespaceTrait::JsonSchema,
+    TypespaceTrait::Display,
+    TypespaceTrait::FromStr,
+    TypespaceTrait::Eq,
+    TypespaceTrait::PartialEq,
+    TypespaceTrait::Ord,
+    TypespaceTrait::PartialOrd,
+    TypespaceTrait::Hash,
+    TypespaceTrait::Default,
+];
+
+/// What a [`build::Native`] says about one trait.
+///
+/// A declarer that knows the answer states it; one that does not
+/// leaves the trait [`Unknown`](TraitDisposition::Unknown). The two
+/// resolution phases read an unknown trait in opposite directions: a
+/// requirement for it passes, because refusing to generate for a valid
+/// schema is worse than a compile error naming the real missing impl,
+/// and a desired trait is never granted from it, because granting one
+/// on a guess emits a derive nobody asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraitDisposition {
+    /// The type implements the trait.
+    Yes,
+    /// The type does not implement the trait.
+    No,
+    /// The declaration cannot answer either way.
+    Unknown,
 }
 
 /// Identifies a trait implementation that typespace is aware of.

@@ -22,7 +22,7 @@ use log::debug;
 use crate::build::{Native, NewtypeConstraints, NewtypeStruct, Struct, TupleStruct, Type};
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::Settings;
-use crate::{TypespaceTrait, TypespaceTraitSet};
+use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet};
 
 /// Resolve the trait set for every named type in the graph.
 ///
@@ -438,10 +438,22 @@ where
                 | Type::NewtypeStruct(_)
                 | Type::TypeAlias(_) => unreachable!(),
 
-                Type::Native(Native { name, impls, .. }) => {
-                    let missing_traits = traits.difference(impls).copied().collect::<Vec<_>>();
+                // Only a trait the native is known not to implement
+                // conflicts. A trait its declaration cannot answer for
+                // passes: refusing to generate for a valid schema is
+                // worse than a compile error naming the real missing
+                // impl, and a source like typify's `x-rust-type` has no
+                // way to declare more.
+                Type::Native(native) => {
+                    let missing_traits = traits
+                        .iter()
+                        .filter(|trait_name| {
+                            matches!(native.disposition(**trait_name), TraitDisposition::No)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>();
                     let reason = OffenderReason::NativeMissingImpl {
-                        type_name: name.clone(),
+                        type_name: native.name.clone(),
                     };
                     conflict(missing_traits, reason);
                 }
@@ -737,6 +749,9 @@ where
             | Type::NewtypeStruct(_)
             | Type::TypeAlias(_) => unreachable!(),
 
+            // Only a trait the native is known to implement is
+            // provided: granting a desired trait a declaration cannot
+            // answer for would emit a derive nobody asked for.
             Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
 
             // Pass the buck, minus Display and FromStr, which neither
@@ -2005,6 +2020,152 @@ mod tests {
             built_traits(&typespace, "S"),
             trait_set([TypespaceTrait::Clone, TypespaceTrait::Debug])
         );
+    }
+
+    /// A required trait a native's declaration cannot answer for
+    /// passes. The native is asked for the `Ord` family and leaves all
+    /// four unknown, so nothing conflicts and the struct holding it
+    /// derives the family.
+    #[test]
+    fn required_trait_passes_native_unknown() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Ord),
+            {
+                native ::opaque::Opaque: Clone + Debug + ?Ord + ?PartialOrd + ?Eq + ?PartialEq;
+
+                struct S {
+                    key: ::opaque::Opaque,
+                }
+            }
+        );
+
+        let typespace = builder
+            .finalize(no_cycles)
+            .expect("a native's unknown trait satisfies a requirement for it");
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([
+                TypespaceTrait::Ord,
+                TypespaceTrait::PartialOrd,
+                TypespaceTrait::Eq,
+                TypespaceTrait::PartialEq,
+            ])
+        );
+    }
+
+    /// The `x-rust-type` case: a source that knows only the serde
+    /// traits declares those and leaves the rest unknown with `..`.
+    /// The type is then usable as a map key, whose `Eq`, `PartialEq`,
+    /// `Ord`, and `PartialOrd` requirements it cannot answer for.
+    #[test]
+    fn required_map_key_passes_native_rest_unknown() {
+        let builder = typespace_builder!(Settings::typical(), {
+            native ::chrono::naive::NaiveDate:
+                Clone + Debug + Serialize + Deserialize + ..;
+
+            type DateMap = Map<::chrono::naive::NaiveDate, String>;
+        });
+
+        builder
+            .finalize(no_cycles)
+            .expect("an unknown map key trait is not a conflict");
+    }
+
+    /// A desired trait is never granted from what a native cannot
+    /// answer for. The same `..` declaration keeps the two traits it
+    /// names, so the struct takes `Clone` and `Debug` and goes without
+    /// the desired `Ord`.
+    #[test]
+    fn desired_trait_not_granted_by_native_unknown() {
+        let builder = typespace_builder!(
+            minimal_with_desired([
+                TypespaceTrait::Clone,
+                TypespaceTrait::Debug,
+                TypespaceTrait::Ord,
+            ]),
+            {
+                native ::opaque::Opaque: Clone + Debug + ..;
+
+                struct S {
+                    odd: ::opaque::Opaque,
+                }
+            }
+        );
+
+        let typespace = builder
+            .finalize(no_cycles)
+            .expect("a desired trait never becomes a requirement on a native");
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Debug])
+        );
+    }
+
+    /// A native that declares no unknowns answers for every trait, so
+    /// a required trait it does not declare still conflicts.
+    #[test]
+    fn required_trait_conflicts_on_native_known_missing() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Hash),
+            {
+                native ::opaque::Opaque: Clone + Debug;
+
+                struct S {
+                    key: ::opaque::Opaque,
+                }
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Hash);
+        assert_eq!(conflicts[0].offender, "::opaque::Opaque");
+        assert!(matches!(
+            &conflicts[0].reason,
+            OffenderReason::NativeMissingImpl { type_name }
+                if type_name == "::opaque::Opaque"
+        ));
+    }
+
+    /// `!Tr` carves an exception out of `..`: the trait it names is
+    /// known missing and conflicts when required, while the rest of the
+    /// requirement's supertrait closure stays unknown and passes.
+    #[test]
+    fn required_trait_conflicts_on_native_excepted_from_rest_unknown() {
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Ord),
+            {
+                native ::opaque::Opaque: Clone + Debug + .. + !Ord;
+
+                struct S {
+                    key: ::opaque::Opaque,
+                }
+            }
+        );
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Ord);
+        assert_eq!(conflicts[0].offender, "::opaque::Opaque");
+        assert!(matches!(
+            &conflicts[0].reason,
+            OffenderReason::NativeMissingImpl { type_name }
+                if type_name == "::opaque::Opaque"
+        ));
     }
 
     /// A set element that cannot realize a desired trait costs the
