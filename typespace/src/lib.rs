@@ -778,42 +778,47 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     }
 
     pub(crate) fn add_error_mod(&self, cs: &mut codespace::Codespace) {
-        let mut error_mod = codespace::Mod::default();
-        error_mod.add_item(
-            "",
-            quote! {
-                /// Error from a `TryFrom` or `FromStr` implementation.
-                pub struct ConversionError(::std::borrow::Cow<'static, str>);
+        // We only need the error mod once and we carefully control its
+        // contents.
+        if !cs.get_root_mod().has_mod("error") {
+            let mut error_mod = codespace::Mod::default();
+            error_mod.add_docs(" Error types.");
+            error_mod.add_item(
+                "",
+                quote! {
+                    /// Error from a `TryFrom` or `FromStr` implementation.
+                    pub struct ConversionError(::std::borrow::Cow<'static, str>);
 
-                impl ::std::error::Error for ConversionError {}
-                impl ::std::fmt::Display for ConversionError {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
-                        -> Result<(), ::std::fmt::Error>
-                    {
-                        ::std::fmt::Display::fmt(&self.0, f)
+                    impl ::std::error::Error for ConversionError {}
+                    impl ::std::fmt::Display for ConversionError {
+                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                            -> Result<(), ::std::fmt::Error>
+                        {
+                            ::std::fmt::Display::fmt(&self.0, f)
+                        }
                     }
-                }
 
-                impl ::std::fmt::Debug for ConversionError {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
-                        -> Result<(), ::std::fmt::Error>
-                    {
-                        ::std::fmt::Debug::fmt(&self.0, f)
+                    impl ::std::fmt::Debug for ConversionError {
+                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                            -> Result<(), ::std::fmt::Error>
+                        {
+                            ::std::fmt::Debug::fmt(&self.0, f)
+                        }
                     }
-                }
-                impl From<&'static str> for ConversionError {
-                    fn from(value: &'static str) -> Self {
-                        Self(value.into())
+                    impl From<&'static str> for ConversionError {
+                        fn from(value: &'static str) -> Self {
+                            Self(value.into())
+                        }
                     }
-                }
-                impl From<String> for ConversionError {
-                    fn from(value: String) -> Self {
-                        Self(value.into())
+                    impl From<String> for ConversionError {
+                        fn from(value: String) -> Self {
+                            Self(value.into())
+                        }
                     }
-                }
-            },
-        );
-        let _ = cs.get_root_mod().replace_mod("error", error_mod);
+                },
+            );
+            let _ = cs.get_root_mod().replace_mod("error", error_mod);
+        }
     }
 
     pub(crate) fn render_ident(&self, id: &Id) -> TokenStream {

@@ -48,6 +48,7 @@ pub mod builder {
         }
     }
 }
+/// Error types.
 pub mod error {
     /// Error from a `TryFrom` or `FromStr` implementation.
     pub struct ConversionError(::std::borrow::Cow<'static, str>);
