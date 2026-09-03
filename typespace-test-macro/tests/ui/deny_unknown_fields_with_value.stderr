@@ -1,0 +1,5 @@
+error: #[deny_unknown_fields] takes no value
+ --> tests/ui/deny_unknown_fields_with_value.rs:5:11
+  |
+5 |         #[deny_unknown_fields = true]
+  |           ^^^^^^^^^^^^^^^^^^^

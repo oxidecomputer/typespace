@@ -350,6 +350,7 @@ struct AttrEntry {
 /// that exists but is used in the wrong place.
 const KNOWN_ATTRS: &[(&str, &str)] = &[
     ("default", "a struct, an enum, or a field"),
+    ("deny_unknown_fields", "a struct or an enum"),
     ("json", "a unit struct or an enum variant"),
     ("rename", "a field"),
     ("flatten", "a field"),
@@ -476,6 +477,19 @@ fn claimed_default(claims: &Claims) -> syn::Result<TokenStream> {
     }
 }
 
+/// A claimed `#[deny_unknown_fields]`, rendered as the type builder's
+/// `.deny_unknown_fields()` call (or nothing, if unclaimed). The
+/// attribute is a bare marker.
+fn claimed_deny_unknown_fields(claims: &Claims) -> syn::Result<TokenStream> {
+    match claims.get("deny_unknown_fields").copied() {
+        None => Ok(TokenStream::new()),
+        Some(entry) => {
+            require_bare(entry)?;
+            Ok(quote! { .deny_unknown_fields() })
+        }
+    }
+}
+
 /// A field's `#[default]` / `#[default = <json-ish>]`, overriding
 /// `base` (the state implied by the field's wire-vocabulary type, e.g.
 /// `Optional<T>`) when claimed.
@@ -496,16 +510,19 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
     }
 }
 
-/// A claimed `#[flatten]`'s value, if any, is an error: the attribute
-/// is a bare marker. Shared by a named property's `#[flatten]` (in
-/// [`field_json_name`]) and a tuple struct's `#[flatten]` on its last
-/// field (in [`claimed_tuple_flatten`]).
-fn require_bare_flatten(entry: &AttrEntry) -> syn::Result<()> {
+/// A claimed bare-marker attribute's value, if any, is an error: an
+/// attribute like `#[flatten]` or `#[deny_unknown_fields]` carries no
+/// value at all. Shared by every bare-marker attribute's claim site:
+/// a named property's `#[flatten]` (in [`field_json_name`]), a tuple
+/// struct's `#[flatten]` on its last field (in
+/// [`claimed_tuple_flatten`]), and `#[deny_unknown_fields]` (in
+/// [`claimed_deny_unknown_fields`]).
+fn require_bare(entry: &AttrEntry) -> syn::Result<()> {
     match &entry.value {
         None => Ok(()),
         Some(_) => Err(syn::Error::new_spanned(
             &entry.name,
-            "#[flatten] takes no value",
+            format!("#[{}] takes no value", entry.name),
         )),
     }
 }
@@ -532,7 +549,7 @@ fn field_json_name(claims: &Claims) -> syn::Result<Option<TokenStream>> {
             }))
         }
         (None, Some(entry)) => {
-            require_bare_flatten(entry)?;
+            require_bare(entry)?;
             Ok(Some(quote! {
                 .with_json_name(::typespace::build::StructPropertySerde::Flatten)
             }))
@@ -558,7 +575,7 @@ fn claimed_tuple_flatten(fields: &[TupleField]) -> syn::Result<Option<&AttrEntry
     match flattens.as_slice() {
         [] => Ok(None),
         [(index, entry)] => {
-            require_bare_flatten(entry)?;
+            require_bare(entry)?;
             match *index == fields.len() - 1 {
                 true => Ok(Some(*entry)),
                 false => Err(syn::Error::new_spanned(
@@ -884,19 +901,25 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
     let allowed: &'static [&'static str] = match &item.body {
         StructBody::Unit => &["default", "json"],
-        StructBody::Fields(_) | StructBody::Tuple(_) => &["default"],
+        // `deny_unknown_fields` is only valid on the fields form:
+        // `typespace::build::TupleStruct`/`NewtypeStruct`/`UnitStruct`
+        // have no such builder method.
+        StructBody::Fields(_) => &["default", "deny_unknown_fields"],
+        StructBody::Tuple(_) => &["default"],
     };
     let claims = claim_attrs(&item.attrs, allowed)?;
     let default_tokens = claimed_default(&claims)?;
     match &item.body {
         StructBody::Fields(fields) => {
             let props = lower_struct_properties(fields, lowering)?;
+            let deny_unknown_fields_tokens = claimed_deny_unknown_fields(&claims)?;
             lowering.inserts.push(quote! {
                 builder.insert(
                     #name.to_string(),
                     ::typespace::build::Struct::<String>::new()
                         .name(#name)
                         #default_tokens
+                        #deny_unknown_fields_tokens
                         .properties([ #(#props),* ])
                         .build()
                         .unwrap(),
@@ -992,9 +1015,19 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
 
 fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
-    let claims = claim_attrs(&item.attrs, &["default", "untagged", "tag", "content"])?;
+    let claims = claim_attrs(
+        &item.attrs,
+        &[
+            "default",
+            "untagged",
+            "tag",
+            "content",
+            "deny_unknown_fields",
+        ],
+    )?;
     let default_tokens = claimed_default(&claims)?;
     let tag_type_tokens = enum_tag_type(&claims)?;
+    let deny_unknown_fields_tokens = claimed_deny_unknown_fields(&claims)?;
     let variant_tokens = item
         .variants
         .iter()
@@ -1007,6 +1040,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
                 .name(#name)
                 .tag_type(#tag_type_tokens)
                 #default_tokens
+                #deny_unknown_fields_tokens
                 .variants([ #(#variant_tokens),* ])
                 .build()
                 .unwrap(),
@@ -2133,6 +2167,29 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/test_tuple_struct_flatten.rs", &out);
+    }
+
+    /// `#[deny_unknown_fields]` on a struct and an enum: lowers to a
+    /// `.deny_unknown_fields()` call in the builder chain. Rendering
+    /// does not read the flag yet, so this only proves the lowering
+    /// compiles and the type builds, not any effect on output.
+    #[test]
+    fn test_deny_unknown_fields() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                #[deny_unknown_fields]
+                struct Widget {
+                    name: String,
+                }
+
+                #[deny_unknown_fields]
+                #[untagged]
+                enum Shape {
+                    Text(String),
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/test_deny_unknown_fields.rs", &out);
     }
 
     // Targeted behavioral checks (fast, string-match versions of a few

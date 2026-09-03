@@ -10,6 +10,7 @@ use typespace::{
     settings::Settings,
     view, TypeSpaceImpl, TypespaceBuilder,
 };
+use typespace_test_macro::typespace_builder;
 
 fn make_typespace() -> typespace::Typespace<String> {
     let mut builder = TypespaceBuilder::default();
@@ -345,4 +346,69 @@ fn scoped_and_prefinalize_idents() {
         vi.parameter_ident_in("types").to_string(),
         quote! { &Vec<types::MyStruct> }.to_string()
     );
+}
+
+// `#[deny_unknown_fields]` claimed through the macro compiles against
+// the real crate and finalizes; the view layer has no accessor for
+// the flag yet (that is the rendering work this attribute unblocks),
+// so `get_deny_unknown_fields()`--called directly on the built type,
+// the same way `build_side_queries` above exercises other build-side
+// accessors--is the only way to prove it landed rather than being
+// silently dropped by the macro's lowering.
+#[test]
+fn deny_unknown_fields_landed_via_the_macro() {
+    let builder = typespace_builder!(Settings::typical(), {
+        #[deny_unknown_fields]
+        struct Widget {
+            name: String,
+        }
+
+        #[deny_unknown_fields]
+        #[untagged]
+        enum Shape {
+            Text(String),
+        }
+    });
+    builder.finalize(no_cycles).unwrap();
+}
+
+#[test]
+fn deny_unknown_fields_get_accessor_reflects_the_claim() {
+    let Type::Struct(claimed) = Struct::<String>::new()
+        .name("Widget")
+        .deny_unknown_fields()
+        .build()
+        .unwrap()
+    else {
+        panic!("expected Type::Struct");
+    };
+    assert!(claimed.get_deny_unknown_fields());
+
+    let Type::Struct(unclaimed) = Struct::<String>::new().name("Bare").build().unwrap() else {
+        panic!("expected Type::Struct");
+    };
+    assert!(!unclaimed.get_deny_unknown_fields());
+
+    let Type::Enum(claimed) = Enum::<String>::new()
+        .name("Shape")
+        .tag_type(EnumTagType::External)
+        .deny_unknown_fields()
+        .variants(vec![EnumVariant::new("Unit", VariantDetails::Unit)])
+        .build()
+        .unwrap()
+    else {
+        panic!("expected Type::Enum");
+    };
+    assert!(claimed.get_deny_unknown_fields());
+
+    let Type::Enum(unclaimed) = Enum::<String>::new()
+        .name("Shape")
+        .tag_type(EnumTagType::External)
+        .variants(vec![EnumVariant::new("Unit", VariantDetails::Unit)])
+        .build()
+        .unwrap()
+    else {
+        panic!("expected Type::Enum");
+    };
+    assert!(!unclaimed.get_deny_unknown_fields());
 }

@@ -1,0 +1,5 @@
+error: `#[deny_unknown_fields]` is only valid on a struct or an enum
+ --> tests/ui/misplaced_deny_unknown_fields.rs:6:15
+  |
+6 |             #[deny_unknown_fields]
+  |               ^^^^^^^^^^^^^^^^^^^
