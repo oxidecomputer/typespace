@@ -10,7 +10,7 @@ use typespace::{
     },
     error::{Error, NameAxis, OffenderReason, RequirementOrigin},
     no_cycles,
-    settings::{OptionalNullable, Settings, Std},
+    settings::{ContainerType, OptionalNullable, Settings, Std},
     TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
@@ -1330,16 +1330,7 @@ fn test_insert_unbuilt_shape() {
 // the configured traits.
 #[test]
 fn test_map_key_traits_override() {
-    let settings = Settings::minimal().with_map_type(
-        "::std::collections::HashMap",
-        [
-            TypespaceTrait::Hash,
-            TypespaceTrait::Eq,
-            TypespaceTrait::PartialEq,
-        ]
-        .into_iter()
-        .collect(),
-    );
+    let settings = Settings::minimal().with_map_type(ContainerType::hash_map());
     let mut builder = TypespaceBuilder::new(settings);
 
     let float_id = "float".to_string();
@@ -1552,28 +1543,12 @@ fn test_container_overrides() {
     let settings = Settings::minimal()
         .with_required_trait(TypespaceTrait::Serialize)
         .with_required_trait(TypespaceTrait::Deserialize)
-        .with_map_type(
-            "::std::collections::HashMap",
-            [
-                TypespaceTrait::Hash,
-                TypespaceTrait::Eq,
-                TypespaceTrait::PartialEq,
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .with_set_type(
-            "::std::collections::BTreeSet",
-            [
-                TypespaceTrait::Eq,
-                TypespaceTrait::PartialEq,
-                TypespaceTrait::Ord,
-                TypespaceTrait::PartialOrd,
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .with_vec_type("::std::collections::VecDeque");
+        .with_map_type(ContainerType::hash_map())
+        .with_set_type(ContainerType::btree_set())
+        .with_vec_type(ContainerType::new(
+            "::std::collections::VecDeque",
+            [TypespaceTraitSet::empty()],
+        ));
     let mut builder = TypespaceBuilder::new(settings);
 
     let string_id = "string".to_string();

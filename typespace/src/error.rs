@@ -110,6 +110,27 @@ where
         message: String,
     },
 
+    /// A container states obligations for the wrong number of type
+    /// parameters.
+    ///
+    /// A map renders two; a set or a vec renders one.
+    #[error(
+        "the {position} container `{path}` states obligations for \
+         {declared} type parameter(s), but the {position} position \
+         renders {parameters}"
+    )]
+    ContainerParameterCount {
+        /// The setting the container is configured for: `"map"`,
+        /// `"set"`, or `"vec"`.
+        position: &'static str,
+        /// The container's path as configured.
+        path: String,
+        /// The number of parameter obligations the container states.
+        declared: usize,
+        /// The number of type parameters the position renders.
+        parameters: usize,
+    },
+
     /// A type refers to a child type ID for which no type was inserted.
     #[error(
         "the type with id `{type_id}` references the id `{child_id}` \

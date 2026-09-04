@@ -48,7 +48,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// Named types render as `scope::Name`; container and built-in
     /// types thread the scope through to any named types they mention.
     /// Rendering honors the typespace's settings (container overrides,
-    /// `std` spelling).
+    /// `std` syntax).
     pub fn ident_in(&self, scope: &str) -> TokenStream {
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
             .render_ident_with_scope(self.id, Some(scope))

@@ -396,7 +396,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// finalization.
     ///
     /// Rendering honors the builder's settings (container overrides,
-    /// `std` spelling). Finalization-only effects are necessarily
+    /// `std` syntax). Finalization-only effects are necessarily
     /// absent: no cycle-breaking boxes exist yet.
     ///
     /// # Panics
@@ -465,6 +465,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
             }
         }
         Ok(())
+    }
+
+    /// Verify that each configured container declares what it demands
+    /// of every type parameter the position it renders supplies.
+    fn check_containers(&self) -> Result<(), Error<Id>> {
+        [
+            ("map", &self.settings.map_type, 2),
+            ("set", &self.settings.set_type, 1),
+            ("vec", &self.settings.vec_type, 1),
+        ]
+        .into_iter()
+        .try_for_each(|(position, container, parameters)| {
+            match container.obligations().len() {
+                declared if declared == parameters => Ok(()),
+                declared => Err(Error::ContainerParameterCount {
+                    position,
+                    path: container.path().to_token_stream().to_string(),
+                    declared,
+                    parameters,
+                }),
+            }
+        })
     }
 
     /// Verify that every type ID referenced by a type is actually
@@ -691,6 +713,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // than saving the raw settings.
         self.check_derives()?;
 
+        // Validate that each container declares an obligation for every
+        // type parameter it is rendered with.
+        self.check_containers()?;
+
         // Ensure that every referenced type ID has been initialized.
         self.check_references()?;
 
@@ -778,18 +804,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
 pub(crate) struct TypespaceRenderer<'a, Id> {
     pub(crate) types: &'a BTreeMap<Id, Type<Id>>,
     pub(crate) settings: &'a Settings,
-}
-
-/// The path a set or a vec renders as: the override if there is one,
-/// otherwise the std `Vec` under the configured [`Std`] syntax.
-fn container_path(container: &Option<settings::ContainerType>, std: &Std) -> TokenStream {
-    match container {
-        Some(settings::ContainerType(path)) => quote! { #path },
-        None => match std {
-            Std::FullyQualified => quote! { ::std::vec::Vec },
-            Std::Unqualified => quote! { Vec },
-        },
-    }
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
@@ -1051,9 +1065,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // Without an override, a set renders as a Vec:
                 // deduplication is not enforced, but no trait demands
                 // are made of the element type either.
-                let set_type = container_path(&self.settings.set_type, &self.settings.std);
+                let set_type = self.settings.set_type.rendered_path(&self.settings.std);
                 if base_type {
-                    set_type
+                    quote! { #set_type }
                 } else {
                     let inner_ident = self.render_ident_with_scope(inner_id, scope);
                     quote! {
@@ -1062,9 +1076,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Vec(inner_id) => {
-                let vec_type = container_path(&self.settings.vec_type, &self.settings.std);
+                let vec_type = self.settings.vec_type.rendered_path(&self.settings.std);
                 if base_type {
-                    vec_type
+                    quote! { #vec_type }
                 } else {
                     let inner_ident = self.render_ident_with_scope(inner_id, scope);
                     quote! {
@@ -1082,10 +1096,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     if matches!(key_ty, Type::String) && matches!(value_ty, Type::JsonValue) {
                         quote! { ::serde_json::Map }
                     } else {
-                        match &self.settings.map_type {
-                            Some(settings::ContainerType(path)) => quote! { #path },
-                            None => quote! { ::std::collections::BTreeMap },
-                        }
+                        let path = self.settings.map_type.rendered_path(&self.settings.std);
+                        quote! { #path }
                     };
                 if base_type {
                     map_type

@@ -254,19 +254,20 @@ where
     // configured map and set types state what they require of their key
     // and element types (the built-in defaults require the Ord family).
     // Look through all types for maps and sets and seed the work queue
-    // with those requirements.
+    // with those requirements. Finalization has checked each container's
+    // arity, so the key and element obligations are present.
     let mut work = types
         .iter()
         .filter_map(|(type_id, ty)| match ty {
             Type::Map(key_schema_ref, _) => Some(WorkItem {
                 target: key_schema_ref.clone(),
-                traits: close_supertraits(settings.map_key_traits.clone()),
+                traits: close_supertraits(settings.map_type.obligation(0).clone()),
                 origin: RequirementOrigin::MapKey(type_id.clone()),
                 path: Vec::new(),
             }),
             Type::Set(element_schema_ref) => Some(WorkItem {
                 target: element_schema_ref.clone(),
-                traits: close_supertraits(settings.set_element_traits.clone()),
+                traits: close_supertraits(settings.set_type.obligation(0).clone()),
                 origin: RequirementOrigin::SetElement(type_id.clone()),
                 path: Vec::new(),
             }),
@@ -982,7 +983,7 @@ mod tests {
         build::{Native, TupleStruct, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
-        settings::Settings,
+        settings::{ContainerType, Settings},
         Typespace, TypespaceTrait, TypespaceTraitSet,
     };
     use typespace_test_macro::typespace_builder;
@@ -1233,8 +1234,8 @@ mod tests {
     #[test]
     fn option_default_satisfied_without_reaching_element() {
         let settings = Settings::minimal().with_set_type(
-            "::std::collections::HashSet",
-            [TypespaceTrait::Default].into_iter().collect(),
+            ContainerType::hash_set()
+                .with_obligations([[TypespaceTrait::Default].into_iter().collect()]),
         );
         let builder = typespace_builder!(settings, {
             enum Color {
