@@ -1,0 +1,5 @@
+error: `#[derive]` requires a nonempty list of strings: #[derive = ["..."]]
+ --> tests/ui/derive_non_list_value.rs:6:11
+  |
+6 |         #[derive = "::std::hash::Hash"]
+  |           ^^^^^^

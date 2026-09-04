@@ -1,0 +1,5 @@
+error: `#[attr]` requires a nonempty list of strings: #[attr = ["..."]]
+ --> tests/ui/attr_non_string_element.rs:5:11
+  |
+5 |         #[attr = ["allow(dead_code)", 3]]
+  |           ^^^^

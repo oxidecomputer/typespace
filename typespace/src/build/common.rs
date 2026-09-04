@@ -41,6 +41,8 @@ pub struct TypeCommon {
     pub(crate) name: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) default: Option<JsonValue>,
+    pub(crate) extra_derives: Vec<String>,
+    pub(crate) extra_attrs: Vec<String>,
     pub(crate) built: Option<TypeCommonBuilt>,
 }
 
@@ -58,6 +60,25 @@ impl TypeCommon {
     /// The default value, if any.
     pub fn default(&self) -> Option<&serde_json::Value> {
         self.default.as_ref().map(|JsonValue(value)| value)
+    }
+
+    /// Opaque derive paths for this type alone.
+    ///
+    /// These are additional to
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive),
+    /// whose paths apply to every type; a type's derive attribute names
+    /// both sets.
+    pub fn extra_derives(&self) -> &[String] {
+        &self.extra_derives
+    }
+
+    /// Opaque attributes for this type alone.
+    ///
+    /// These are additional to
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr),
+    /// whose attributes apply to every type.
+    pub fn extra_attrs(&self) -> &[String] {
+        &self.extra_attrs
     }
 
     /// The name of a validated shape.

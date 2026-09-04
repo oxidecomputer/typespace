@@ -1,0 +1,5 @@
+error: `#[derive]` requires a nonempty list of strings: #[derive = ["..."]]
+ --> tests/ui/derive_empty_list.rs:5:11
+  |
+5 |         #[derive = []]
+  |           ^^^^^^

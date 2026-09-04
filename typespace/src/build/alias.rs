@@ -41,6 +41,17 @@ impl<Id> TypeAlias<Id> {
         self
     }
 
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Validate the type alias and produce it as a [`Type`] value.
     ///
     /// Fails if the name is missing or not a valid identifier.
@@ -71,6 +82,13 @@ impl<Id> TypeAlias<Id> {
         self.common.description()
     }
 
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
+    }
+
     /// The ID of the aliased type.
     pub fn get_target(&self) -> &Id {
         &self.target
@@ -90,6 +108,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
                     description,
                     built: _,
                     default: _,
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             target: type_id,
         } = self;

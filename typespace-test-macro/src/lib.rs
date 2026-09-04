@@ -212,6 +212,11 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Struct (with named fields) or enum `#[deny_unknown_fields]`:
 ///   `.deny_unknown_fields()`, rejecting an unrecognized field at
 ///   deserialization.
+/// - Type-level `#[derive = ["P", ..]]`: `.extra_derives([..])`, the
+///   opaque derive paths this type alone carries. Not valid on a type
+///   alias, which renders as `type N = T;` and can carry no derive.
+/// - Type-level `#[attr = ["A", ..]]`: `.extra_attrs([..])`, the opaque
+///   attributes this type alone carries.
 /// - Unit struct `#[json = V]`: its wire repr (required; any JSON).
 /// - Unit variant `#[json = "name"]`: its serde rename (string only).
 /// - Enum tagging: `EnumTagType::External` (default), `#[untagged]`,
@@ -224,9 +229,14 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   since every other arity is already a tuple.
 ///
 /// `#[rename]` and `#[flatten]` are field-level only, valid wherever
-/// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds
-/// one treatment of a property's name, so a field carrying both is a
-/// compile error.
+/// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds one
+/// treatment of a property's name, so a field carrying both is a compile
+/// error.
+///
+/// `#[derive]` and `#[attr]` are valid on every named type: any `struct` ,
+/// `enum`, or `type` alias. Each takes a nonempty list of string. These are in
+/// addition to the builder-wide `Settings::with_derive` and
+/// `Settings::with_attr`. Nothing validates them.
 ///
 /// An attribute used somewhere other than the list above--an unknown
 /// name, or a real one in the wrong place (`#[untagged]` on a struct) --

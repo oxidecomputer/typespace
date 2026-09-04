@@ -3,8 +3,8 @@
 use quote::quote;
 use typespace::{
     build::{
-        Enum, EnumTagType, EnumVariant, Struct, StructProperty, StructPropertyState, Type,
-        VariantDetails,
+        Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, StructPropertyState,
+        TupleStruct, Type, TypeAlias, UnitStruct, VariantDetails,
     },
     no_cycles,
     settings::Settings,
@@ -411,4 +411,138 @@ fn deny_unknown_fields_get_accessor_reflects_the_claim() {
         panic!("expected Type::Enum");
     };
     assert!(!unclaimed.get_deny_unknown_fields());
+}
+
+// The per-type `#[derive = [..]]` and `#[attr = [..]]` claimed through
+// the macro compile against the real crate and finalize. Nothing
+// renders either list yet, so the assertion this test can make is that
+// the macro's lowering builds; that the lists survive the builder chain
+// is `extra_derives_and_attrs_get_accessors_reflect_the_claim` below.
+#[test]
+fn extra_derives_and_attrs_landed_via_the_macro() {
+    let builder = typespace_builder!(Settings::typical(), {
+        #[derive = ["::std::hash::Hash", "PartialOrd"]]
+        #[attr = ["serde(deny_unknown_fields)"]]
+        struct Widget {
+            name: String,
+        }
+
+        #[derive = ["::std::hash::Hash"]]
+        struct Meters(u32);
+
+        #[attr = ["allow(dead_code)"]]
+        struct Pair(u32, String);
+
+        #[json = null]
+        #[derive = ["::std::hash::Hash"]]
+        struct Nothing;
+
+        #[derive = ["::std::hash::Hash"]]
+        #[attr = ["allow(dead_code)", "non_exhaustive"]]
+        enum Shape {
+            Text(String),
+        }
+
+        #[attr = ["allow(dead_code)"]]
+        type Label = String;
+    });
+    builder.finalize(no_cycles).unwrap();
+}
+
+// Every named shape stores what its `extra_derives`/`extra_attrs`
+// builder methods were given, and hands it back through both the
+// shape's `get_*` accessors and `Type`'s. Rendering reads neither list
+// yet, so these accessors are the only proof the data landed rather
+// than being dropped on the way through `build()`.
+#[test]
+fn extra_derives_and_attrs_get_accessors_reflect_the_claim() {
+    let derives = ["::std::hash::Hash", "PartialOrd"];
+    let attrs = ["allow(dead_code)"];
+
+    let built = Struct::<String>::new()
+        .name("Widget")
+        .extra_derives(derives)
+        .extra_attrs(attrs)
+        .build()
+        .unwrap();
+    let Type::Struct(claimed) = &built else {
+        panic!("expected Type::Struct");
+    };
+    assert_eq!(claimed.get_extra_derives(), derives);
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+    assert_eq!(built.extra_derives(), derives);
+    assert_eq!(built.extra_attrs(), attrs);
+
+    let built = Enum::<String>::new()
+        .name("Shape")
+        .tag_type(EnumTagType::External)
+        .extra_derives(derives)
+        .extra_attrs(attrs)
+        .variants(vec![EnumVariant::new("Unit", VariantDetails::Unit)])
+        .build()
+        .unwrap();
+    let Type::Enum(claimed) = &built else {
+        panic!("expected Type::Enum");
+    };
+    assert_eq!(claimed.get_extra_derives(), derives);
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+
+    let built = UnitStruct::new(serde_json::Value::Null)
+        .name("Nothing")
+        .extra_derives(derives)
+        .extra_attrs(attrs)
+        .build::<String>()
+        .unwrap();
+    let Type::UnitStruct(claimed) = &built else {
+        panic!("expected Type::UnitStruct");
+    };
+    assert_eq!(claimed.get_extra_derives(), derives);
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+
+    let built = TupleStruct::new()
+        .name("Pair")
+        .extra_derives(derives)
+        .extra_attrs(attrs)
+        .fields(["str".to_string(), "str".to_string()])
+        .build()
+        .unwrap();
+    let Type::TupleStruct(claimed) = &built else {
+        panic!("expected Type::TupleStruct");
+    };
+    assert_eq!(claimed.get_extra_derives(), derives);
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+
+    let built = NewtypeStruct::new("str".to_string())
+        .name("Meters")
+        .extra_derives(derives)
+        .extra_attrs(attrs)
+        .build()
+        .unwrap();
+    let Type::NewtypeStruct(claimed) = &built else {
+        panic!("expected Type::NewtypeStruct");
+    };
+    assert_eq!(claimed.get_extra_derives(), derives);
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+
+    // An alias renders as `type N = T;`, which carries attributes but no
+    // derive (E0774), so it has attrs and nothing else.
+    let built = TypeAlias::new("str".to_string())
+        .name("Label")
+        .extra_attrs(attrs)
+        .build()
+        .unwrap();
+    let Type::TypeAlias(claimed) = &built else {
+        panic!("expected Type::TypeAlias");
+    };
+    assert_eq!(claimed.get_extra_attrs(), attrs);
+    assert!(built.extra_derives().is_empty());
+
+    // A shape that claimed neither reports both as empty, as does a
+    // type with no such slot at all.
+    let bare = Struct::<String>::new().name("Bare").build().unwrap();
+    assert!(bare.extra_derives().is_empty());
+    assert!(bare.extra_attrs().is_empty());
+    let unnamed = Type::<String>::String;
+    assert!(unnamed.extra_derives().is_empty());
+    assert!(unnamed.extra_attrs().is_empty());
 }

@@ -55,6 +55,30 @@ impl<Id> Struct<Id> {
         self
     }
 
+    /// Add opaque derive paths applied to this type alone.
+    ///
+    /// These are additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive);
+    /// a type's derive attribute names both sets. Each path is emitted
+    /// verbatim, with the same caveats `with_derive` documents.
+    pub fn extra_derives(mut self, derives: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Append properties.
     pub fn properties(mut self, properties: impl IntoIterator<Item = StructProperty<Id>>) -> Self {
         self.properties.extend(properties);
@@ -104,6 +128,20 @@ impl<Id> Struct<Id> {
     /// The default value, if any.
     pub fn get_default(&self) -> Option<&serde_json::Value> {
         self.common.default()
+    }
+
+    /// The opaque derive paths applied to this type alone, additional
+    /// to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    pub fn get_extra_derives(&self) -> &[String] {
+        self.common.extra_derives()
+    }
+
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
     }
 
     /// The struct's properties, in declaration order.
@@ -175,6 +213,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             properties,
             deny_unknown_fields: _,
@@ -482,6 +522,30 @@ impl UnitStruct {
         self
     }
 
+    /// Add opaque derive paths applied to this type alone.
+    ///
+    /// These are additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive);
+    /// a type's derive attribute names both sets. Each path is emitted
+    /// verbatim, with the same caveats `with_derive` documents.
+    pub fn extra_derives(mut self, derives: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Validate the unit struct and produce it as a [`Type`] value.
     ///
     /// Fails if the name is missing or not a valid identifier.
@@ -517,6 +581,20 @@ impl UnitStruct {
         self.common.default()
     }
 
+    /// The opaque derive paths applied to this type alone, additional
+    /// to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    pub fn get_extra_derives(&self) -> &[String] {
+        self.common.extra_derives()
+    }
+
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
+    }
+
     /// The fixed JSON value the unit struct serializes to and
     /// deserializes from.
     pub fn get_repr(&self) -> &serde_json::Value {
@@ -534,6 +612,8 @@ impl UnitStruct {
                     description,
                     built: Some(TypeCommonBuilt { traits }),
                     default: _,
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             repr,
         } = self
@@ -652,6 +732,30 @@ impl<Id> TupleStruct<Id> {
         self
     }
 
+    /// Add opaque derive paths applied to this type alone.
+    ///
+    /// These are additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive);
+    /// a type's derive attribute names both sets. Each path is emitted
+    /// verbatim, with the same caveats `with_derive` documents.
+    pub fn extra_derives(mut self, derives: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Append positional fields.
     pub fn fields(mut self, fields: impl IntoIterator<Item = Id>) -> Self {
         self.fields.extend(fields);
@@ -700,6 +804,20 @@ impl<Id> TupleStruct<Id> {
         self.common.default()
     }
 
+    /// The opaque derive paths applied to this type alone, additional
+    /// to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    pub fn get_extra_derives(&self) -> &[String] {
+        self.common.extra_derives()
+    }
+
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
+    }
+
     /// The fields of the tuple, in order.
     pub fn get_fields(&self) -> &[Id] {
         &self.fields
@@ -721,6 +839,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             fields,
             rest,
@@ -911,6 +1031,30 @@ impl<Id> NewtypeStruct<Id> {
         self
     }
 
+    /// Add opaque derive paths applied to this type alone.
+    ///
+    /// These are additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive);
+    /// a type's derive attribute names both sets. Each path is emitted
+    /// verbatim, with the same caveats `with_derive` documents.
+    pub fn extra_derives(mut self, derives: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Set the constraints on the wrapped value; see
     /// [`NewtypeConstraints`].
     pub fn constraints(mut self, constraints: NewtypeConstraints) -> Self {
@@ -951,6 +1095,20 @@ impl<Id> NewtypeStruct<Id> {
     /// The default value, if any.
     pub fn get_default(&self) -> Option<&serde_json::Value> {
         self.common.default()
+    }
+
+    /// The opaque derive paths applied to this type alone, additional
+    /// to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    pub fn get_extra_derives(&self) -> &[String] {
+        self.common.extra_derives()
+    }
+
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
     }
 
     /// The ID of the wrapped type.
@@ -1012,6 +1170,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             inner,
             constraints: _,

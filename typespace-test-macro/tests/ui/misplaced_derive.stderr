@@ -1,0 +1,5 @@
+error: `#[derive]` is only valid on a struct or an enum
+ --> tests/ui/misplaced_derive.rs:6:15
+  |
+6 |             #[derive = ["::std::hash::Hash"]]
+  |               ^^^^^^

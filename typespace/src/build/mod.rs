@@ -103,11 +103,34 @@ impl<Id> Type<Id> {
         }
     }
 
-    /// The metadata common to named types: the name, description, and
-    /// default value. Returns `Some` exactly when [`Type::is_named`]
-    /// returns `true` (structs, enums, unit structs, tuple structs,
-    /// newtype structs, and type aliases); `None` for built-in and
-    /// container types, which have no caller-assigned name.
+    /// The opaque derive paths carried by this type alone.
+    ///
+    /// Additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    /// Always empty for built-in and container types, which carry no
+    /// such slot.
+    pub fn extra_derives(&self) -> &[String] {
+        self.common()
+            .map_or(&[] as &[String], |common| common.extra_derives())
+    }
+
+    /// The opaque attributes carried by this type alone.
+    ///
+    /// Additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    /// Always empty for built-in and container types, which carry no
+    /// such slot.
+    pub fn extra_attrs(&self) -> &[String] {
+        self.common()
+            .map_or(&[] as &[String], |common| common.extra_attrs())
+    }
+
+    /// The metadata common to named types: the name, description,
+    /// default value, and per-type derives and attributes. Returns
+    /// `Some` exactly when [`Type::is_named`] returns `true` (structs,
+    /// enums, unit structs, tuple structs, newtype structs, and type
+    /// aliases); `None` for built-in and container types, which have no
+    /// caller-assigned name.
     pub(crate) fn common(&self) -> Option<&TypeCommon> {
         match self {
             Type::Enum(Enum { common, .. })
@@ -440,7 +463,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// Whether this is a named type--one that renders as its own item
     /// (struct, enum, unit struct, tuple struct, newtype struct, or type
     /// alias)--as opposed to a built-in or container type. Named types
-    /// are exactly those with a name, description, and default slot.
+    /// are exactly those carrying a name, description, default, and
+    /// per-type derives and attributes.
     pub fn is_named(&self) -> bool {
         matches!(
             self,

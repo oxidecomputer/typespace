@@ -62,6 +62,30 @@ impl<Id> Enum<Id> {
         self
     }
 
+    /// Add opaque derive paths applied to this type alone.
+    ///
+    /// These are additional to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive);
+    /// a type's derive attribute names both sets. Each path is emitted
+    /// verbatim, with the same caveats `with_derive` documents.
+    pub fn extra_derives(mut self, derives: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_derives
+            .extend(derives.into_iter().map(Into::into));
+        self
+    }
+
+    /// Add opaque attributes applied to this type alone.
+    ///
+    /// These are additional to the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn extra_attrs(mut self, attrs: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.common
+            .extra_attrs
+            .extend(attrs.into_iter().map(Into::into));
+        self
+    }
+
     /// Set the serde tagging scheme; see [`EnumTagType`].
     ///
     /// There is no presumed default: an enum cannot be built until its
@@ -160,6 +184,20 @@ impl<Id> Enum<Id> {
         self.common.default()
     }
 
+    /// The opaque derive paths applied to this type alone, additional
+    /// to the crate-wide paths from
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive).
+    pub fn get_extra_derives(&self) -> &[String] {
+        self.common.extra_derives()
+    }
+
+    /// The opaque attributes applied to this type alone, additional to
+    /// the crate-wide attributes from
+    /// [`Settings::with_attr`](crate::settings::Settings::with_attr).
+    pub fn get_extra_attrs(&self) -> &[String] {
+        self.common.extra_attrs()
+    }
+
     /// The serde tagging scheme, if one has been set.
     pub fn get_tag_type(&self) -> Option<&EnumTagType> {
         self.tag_type.as_ref()
@@ -232,6 +270,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
+                    extra_derives: _,
+                    extra_attrs: _,
                 },
             tag_type,
             variants,

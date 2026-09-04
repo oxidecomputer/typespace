@@ -39,7 +39,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     braced, bracketed, parenthesized,
     parse::{Parse, ParseStream},
@@ -351,6 +351,8 @@ struct AttrEntry {
 const KNOWN_ATTRS: &[(&str, &str)] = &[
     ("default", "a struct, an enum, or a field"),
     ("deny_unknown_fields", "a struct or an enum"),
+    ("derive", "a struct or an enum"),
+    ("attr", "a struct, an enum, or a type alias"),
     ("json", "a unit struct or an enum variant"),
     ("rename", "a field"),
     ("flatten", "a field"),
@@ -457,6 +459,63 @@ fn expect_string_value(entry: &AttrEntry) -> syn::Result<String> {
                 entry.name, entry.name
             ),
         )),
+    }
+}
+
+/// Require that `entry`'s value is a nonempty JSON array of strings,
+/// for the attributes (`#[derive = [..]]`, `#[attr = [..]]`) that carry
+/// a list of opaque strings. An empty list claims the attribute and
+/// then asks for nothing, so it is rejected rather than lowered to a
+/// call that adds no element.
+fn expect_string_list(entry: &AttrEntry) -> syn::Result<Vec<String>> {
+    let wanted = || {
+        syn::Error::new_spanned(
+            &entry.name,
+            format!(
+                "`#[{}]` requires a nonempty list of strings: \
+                 #[{} = [\"...\"]]",
+                entry.name, entry.name
+            ),
+        )
+    };
+    match &entry.value {
+        Some(serde_json::Value::Array(items)) if !items.is_empty() => items
+            .iter()
+            .map(|item| match item {
+                serde_json::Value::String(text) => Ok(text.clone()),
+                _ => Err(wanted()),
+            })
+            .collect(),
+        _ => Err(wanted()),
+    }
+}
+
+/// The type-level `#[derive = [..]]` and `#[attr = [..]]` claims, rendered as
+/// the type builder's `.extra_derives(..)` and `.extra_attrs(..)` calls.
+///
+/// A type commonly wants several derives and several attributes, and
+/// [`claim_attrs`] errors on a repeated attribute name. Both take a list of
+/// parameters.
+fn claimed_extras(claims: &Claims) -> syn::Result<TokenStream> {
+    let derives = claimed_extra_list(claims, "derive", "extra_derives")?;
+    let attrs = claimed_extra_list(claims, "attr", "extra_attrs")?;
+    Ok(quote! { #derives #attrs })
+}
+
+/// One of [`claimed_extras`]'s two claims: `attr` names the macro
+/// attribute, `method` the type builder method it lowers to.
+fn claimed_extra_list(
+    claims: &Claims,
+    attr: &'static str,
+    method: &'static str,
+) -> syn::Result<TokenStream> {
+    match claims.get(attr).copied() {
+        None => Ok(TokenStream::new()),
+        Some(entry) => {
+            let values = expect_string_list(entry)?;
+            let method = format_ident!("{method}");
+            Ok(quote! { .#method([ #(#values),* ]) })
+        }
     }
 }
 
@@ -924,15 +983,18 @@ fn lower_struct_properties(
 fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
     let allowed: &'static [&'static str] = match &item.body {
-        StructBody::Unit => &["default", "json"],
+        StructBody::Unit => &["default", "derive", "attr", "json"],
         // `deny_unknown_fields` is only valid on the fields form:
         // `typespace::build::TupleStruct`/`NewtypeStruct`/`UnitStruct`
         // have no such builder method.
-        StructBody::Fields(_) => &["default", "deny_unknown_fields"],
-        StructBody::Tuple(_) => &["default", "tuple"],
+        StructBody::Fields(_) => &["default", "derive", "attr", "deny_unknown_fields"],
+        StructBody::Tuple(_) => &["default", "derive", "attr", "tuple"],
     };
     let claims = claim_attrs(&item.attrs, allowed)?;
     let default_tokens = claimed_default(&claims)?;
+    // Every struct form is a named type, so every one carries the
+    // per-type derives and attributes.
+    let extras_tokens = claimed_extras(&claims)?;
     match &item.body {
         StructBody::Fields(fields) => {
             let props = lower_struct_properties(fields, lowering)?;
@@ -943,6 +1005,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                     ::typespace::build::Struct::<String>::new()
                         .name(#name)
                         #default_tokens
+                        #extras_tokens
                         #deny_unknown_fields_tokens
                         .properties([ #(#props),* ])
                         .build()
@@ -990,6 +1053,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             ::typespace::build::NewtypeStruct::new(#inner_id.to_string())
                                 .name(#name)
                                 #default_tokens
+                                #extras_tokens
                                 .build()
                                 .unwrap(),
                         ).unwrap();
@@ -1017,6 +1081,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             ::typespace::build::TupleStruct::<String>::new()
                                 .name(#name)
                                 #default_tokens
+                                #extras_tokens
                                 .fields([ #(#ids.to_string()),* ])
                                 #rest_tokens
                                 .build()
@@ -1044,6 +1109,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                     ::typespace::build::UnitStruct::new(#repr_tokens)
                         .name(#name)
                         #default_tokens
+                        #extras_tokens
                         .build::<String>()
                         .unwrap(),
                 ).unwrap();
@@ -1059,6 +1125,8 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
         &item.attrs,
         &[
             "default",
+            "derive",
+            "attr",
             "untagged",
             "tag",
             "content",
@@ -1066,6 +1134,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
         ],
     )?;
     let default_tokens = claimed_default(&claims)?;
+    let extras_tokens = claimed_extras(&claims)?;
     let tag_type_tokens = enum_tag_type(&claims)?;
     let deny_unknown_fields_tokens = claimed_deny_unknown_fields(&claims)?;
     let variant_tokens = item
@@ -1080,6 +1149,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
                 .name(#name)
                 .tag_type(#tag_type_tokens)
                 #default_tokens
+                #extras_tokens
                 #deny_unknown_fields_tokens
                 .variants([ #(#variant_tokens),* ])
                 .build()
@@ -1146,13 +1216,17 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
 
 fn lower_alias(item: &AliasItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
-    claim_attrs(&item.attrs, &[])?;
+    // A type alias renders as `type N = T;`, which Rust does not
+    // allow a derive on (E0774); attributes are legal there.
+    let claims = claim_attrs(&item.attrs, &["attr"])?;
+    let extras_tokens = claimed_extras(&claims)?;
     let target_id = lower_type(&item.target, lowering)?;
     lowering.inserts.push(quote! {
         builder.insert(
             #name.to_string(),
             ::typespace::build::TypeAlias::<String>::new(#target_id.to_string())
                 .name(#name)
+                #extras_tokens
                 .build()
                 .unwrap(),
         ).unwrap();
@@ -2240,6 +2314,44 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/test_deny_unknown_fields.rs", &out);
+    }
+
+    /// `#[derive = [..]]` and `#[attr = [..]]` on each shape of named
+    /// type: they lower to `.extra_derives(..)` / `.extra_attrs(..)`
+    /// calls in the builder chain. Rendering does not read either list
+    /// yet, so this only proves the lowering compiles and the types
+    /// build, not any effect on output.
+    #[test]
+    fn test_extra_derives_and_attrs() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                #[derive = ["::std::hash::Hash", "PartialOrd"]]
+                #[attr = ["serde(deny_unknown_fields)"]]
+                struct Widget {
+                    name: String,
+                }
+
+                #[derive = ["::std::hash::Hash"]]
+                struct Meters(u32);
+
+                #[attr = ["allow(dead_code)"]]
+                struct Pair(u32, String);
+
+                #[json = null]
+                #[derive = ["::std::hash::Hash"]]
+                struct Nothing;
+
+                #[derive = ["::std::hash::Hash"]]
+                #[attr = ["allow(dead_code)", "non_exhaustive"]]
+                enum Shape {
+                    Text(String),
+                }
+
+                #[attr = ["allow(dead_code)"]]
+                type Label = String;
+            }
+        });
+        expectorate::assert_contents("tests/output/test_extra_derives_and_attrs.rs", &out);
     }
 
     // Targeted behavioral checks (fast, string-match versions of a few
