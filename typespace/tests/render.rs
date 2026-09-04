@@ -3036,3 +3036,240 @@ fn test_tuple_marker_extras() {
         assert!(import::Listed(1) < import::Listed(2));
     }
 }
+// The tests below cover how `Default` reaches rendered code: as a derive,
+// as a hand-written impl, or not at all.
+
+// The settings these tests share: `Default` desired so it lands on every
+// type that can implement it, plus the traits the assertions need.
+// `Display` and `FromStr` stay out because a newtype that has either in
+// its trait set panics in render.
+fn default_settings() -> Settings {
+    Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_desired_trait(TypespaceTrait::Default)
+}
+
+/// Every property optional or in the `Default` state: `Default` is derived.
+///
+/// A hand-written impl would be exactly what the derive produces, so the
+/// trait stays in the derive list and no impl is emitted.
+#[test]
+fn test_default_derived_all_defaulted() {
+    let builder = typespace_builder!(default_settings(), {
+        struct AllDefaulted {
+            maybe: Optional<String>,
+            #[default]
+            count: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_derived_all_defaulted.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::AllDefaulted::default(),
+            import::AllDefaulted {
+                maybe: None,
+                count: 0,
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<import::AllDefaulted>("{}").unwrap(),
+            import::AllDefaulted::default()
+        );
+    }
+}
+
+/// A property with its own default value: `Default` is hand written.
+///
+/// The derive would ignore the attached value, so the trait comes out of
+/// the derive list and the impl takes that property from the generated
+/// `defaults::` function and every other property from
+/// `Default::default()`.
+#[test]
+fn test_default_impl_from_property_value() {
+    let builder = typespace_builder!(default_settings(), {
+        struct WithDefaultValue {
+            #[default = 42]
+            answer: u32,
+            #[default]
+            name: String,
+            maybe: Optional<bool>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_impl_from_property_value.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::WithDefaultValue::default(),
+            import::WithDefaultValue {
+                answer: 42,
+                name: String::new(),
+                maybe: None,
+            }
+        );
+    }
+}
+
+/// A required property: no `Default` derive and no `Default` impl.
+///
+/// The schema says the property must be supplied, so there is no honest
+/// value for the trait to hand back.
+#[test]
+fn test_default_impossible_required_property() {
+    let builder = typespace_builder!(default_settings(), {
+        struct HasRequired {
+            required: String,
+            #[default]
+            count: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_impossible_required_property.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        // The property that blocks `Default` is the same one that has no
+        // serde default: an empty object does not deserialize.
+        assert!(serde_json::from_str::<import::HasRequired>("{}").is_err());
+        assert_eq!(
+            serde_json::from_str::<import::HasRequired>(r#"{"required":"x"}"#).unwrap(),
+            import::HasRequired {
+                required: "x".to_string(),
+                count: 0,
+            }
+        );
+    }
+}
+
+/// `Default` on the struct shapes that carry no property states.
+///
+/// A tuple struct and a unit struct answer `Derivable` and pick the trait
+/// up as a derive. A newtype struct answers `Impossible`, so it gets
+/// neither a derive nor an impl.
+///
+// ATTN REVIEWER: typify1 never derives `Default` for any of these three
+// shapes; its only `derive_set.insert("Default")` is in the struct path.
+// A settings flag to match typify1 is planned, so the tuple struct and
+// unit struct halves of this snapshot are expected to change.
+#[test]
+fn test_default_other_struct_shapes() {
+    let builder = typespace_builder!(default_settings(), {
+        struct NewtypeShape(String);
+
+        #[json = "unit"]
+        struct UnitShape;
+
+        struct TupleShape(String, u32);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_other_struct_shapes.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::TupleShape::default(),
+            import::TupleShape(String::new(), 0)
+        );
+        assert_eq!(import::UnitShape::default(), import::UnitShape);
+        assert_eq!(
+            import::NewtypeShape::from("x".to_string()),
+            import::NewtypeShape("x".to_string())
+        );
+    }
+}
+
+/// An enum carrying a whole-type default value renders no `Default`.
+///
+/// `feasibility` answers `ManuallyRealizable` for such an enum, so
+/// `Default` is in its trait set, but nothing writes the impl.
+///
+// ATTN REVIEWER: this is the gap the `TODO 9/4/2026` in `enums.rs`
+// marks. The trait set says `Color` implements `Default` and the
+// rendered code does not, so a type whose own `Default` leans on
+// `Color`'s would render an impl that fails to compile.
+#[test]
+fn test_default_enum_with_default_value() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = "Red"]
+        enum Color {
+            Red,
+            Green,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_enum_with_default_value.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::Color>(r#""Red""#).unwrap(),
+            import::Color::Red
+        );
+    }
+}
+
+/// A whole-type default value alongside a required property.
+///
+/// The default value supplies the required property, so the type can
+/// implement `Default` and `feasibility` grants it. The impl it should
+/// get is the one typify writes whenever a type carries its own default
+/// value: the body is that value walked as a literal, with no reference
+/// to any property's own default.
+///
+/// ```ignore
+/// impl ::std::default::Default for WholeDefault {
+///     fn default() -> Self {
+///         Self {
+///             a: "x".to_string(),
+///             b: Some(7),
+///         }
+///     }
+/// }
+/// ```
+///
+/// `Struct::render` writes typify's other impl instead, the one built
+/// from each property's `DefaultConstructor`. A required property's
+/// constructor is `DefaultConstructor::None`, which that code maps to
+/// `unreachable!()`, so rendering this graph panics. The value walk the
+/// correct body needs belongs in `default.rs`.
+#[test]
+#[ignore]
+fn test_default_whole_type_value_with_required_property() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = { "a": "x", "b": 7 }]
+        struct WholeDefault {
+            a: String,
+            b: Optional<u32>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+
+    assert!(
+        rendered.contains("impl ::std::default::Default for WholeDefault"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("a: Default::default()"),
+        "the default value supplies `a`; the impl must not fall back to \
+         Default::default(): {rendered}"
+    );
+}

@@ -355,14 +355,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             quote! { #[serde( #( #serde_attrs, )* )] }
         });
 
-        if derived_traits.remove(TypespaceTrait::Default)
-            && let Some(default) = default
-        {
-            // Right now we only support manual implementations of Default
+        // `Default` comes out of the derive list unconditionally: a derived
+        // `Default` on an enum needs a `#[default]` variant, and typespace
+        // does not invent one. What is owed instead, whenever the trait set
+        // contains `Default`, is a hand-written impl built from `default`.
+        //
+        // Right now we only support manual implementations of Default
 
-            // TODO 9/4/2026
-            // and we don't even do that yet..
-        }
+        // TODO 9/4/2026
+        // and we don't even do that yet..
+        let _default_impl_owed = derived_traits
+            .remove(TypespaceTrait::Default)
+            .then_some(default);
 
         let derives_attr = typespace.render_derives(&derived_traits, extra_derives);
         let attrs = typespace.render_attrs(extra_attrs);
