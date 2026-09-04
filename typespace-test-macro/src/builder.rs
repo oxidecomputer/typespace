@@ -1039,6 +1039,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             ::typespace::build::TupleStruct::<String>::new()
                                 .name(#name)
                                 #default_tokens
+                                #extras_tokens
                                 .fields([ #field_id.to_string() ])
                                 .build()
                                 .unwrap(),

@@ -2763,6 +2763,226 @@ fn test_never_newtype_struct_rejected_unreferenced() {
     assert_eq!(type_id, "NeverNewtype");
 }
 
+// `#[deny_unknown_fields]` on a plain struct renders as a standalone
+// `#[serde(deny_unknown_fields)]` and actually rejects an unrecognized
+// field at deserialization.
+#[test]
+fn test_deny_unknown_fields_struct() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        #[deny_unknown_fields]
+        struct Strict {
+            name: String,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_deny_unknown_fields_struct.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let v: import::Strict = serde_json::from_str(r#"{"name": "ok"}"#).unwrap();
+        assert_eq!(v.name, "ok");
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#"{"name":"ok"}"#);
+
+        match serde_json::from_str::<import::Strict>(r#"{"name": "ok", "extra": 1}"#) {
+            Ok(_) => panic!("expected rejection of an unknown field"),
+            Err(err) => assert!(err.to_string().contains("unknown field")),
+        }
+    }
+}
+
+// `#[deny_unknown_fields]` on an enum composes with each tag type's own
+// `#[serde(..)]` options into a single attribute, rather than emitting
+// two. Each tag type takes its own path through `Enum::render`, so all
+// four are covered: external (the attribute would otherwise be empty),
+// internal and adjacent (which already carry `tag`/`content`), and
+// untagged.
+#[test]
+fn test_deny_unknown_fields_enum_tags() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        #[deny_unknown_fields]
+        enum DenyExternal {
+            Only { x: u32 },
+        }
+
+        #[deny_unknown_fields]
+        #[tag = "type"]
+        enum DenyInternal {
+            Only { x: u32 },
+        }
+
+        #[deny_unknown_fields]
+        #[tag = "t", content = "c"]
+        enum DenyAdjacent {
+            Only { x: u32 },
+        }
+
+        #[deny_unknown_fields]
+        #[untagged]
+        enum DenyUntagged {
+            Only { x: u32 },
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_deny_unknown_fields_enum_tags.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        // External: the tag type contributes no options of its own, so
+        // the composed attribute is `#[serde(deny_unknown_fields)]`.
+        let v: import::DenyExternal = serde_json::from_str(r#"{"Only": {"x": 1}}"#).unwrap();
+        assert!(matches!(v, import::DenyExternal::Only { x: 1 }));
+        assert!(
+            serde_json::from_str::<import::DenyExternal>(r#"{"Only": {"x": 1, "y": 2}}"#).is_err()
+        );
+
+        // Internal: composes with `tag = "type"`.
+        let v: import::DenyInternal = serde_json::from_str(r#"{"type": "Only", "x": 1}"#).unwrap();
+        assert!(matches!(v, import::DenyInternal::Only { x: 1 }));
+        assert!(serde_json::from_str::<import::DenyInternal>(
+            r#"{"type": "Only", "x": 1, "y": 2}"#
+        )
+        .is_err());
+
+        // Adjacent: composes with `tag = "t", content = "c"`.
+        let v: import::DenyAdjacent =
+            serde_json::from_str(r#"{"t": "Only", "c": {"x": 1}}"#).unwrap();
+        assert!(matches!(v, import::DenyAdjacent::Only { x: 1 }));
+        assert!(serde_json::from_str::<import::DenyAdjacent>(
+            r#"{"t": "Only", "c": {"x": 1, "y": 2}}"#
+        )
+        .is_err());
+
+        // Untagged: composes with `untagged`.
+        let v: import::DenyUntagged = serde_json::from_str(r#"{"x": 1}"#).unwrap();
+        assert!(matches!(v, import::DenyUntagged::Only { x: 1 }));
+        assert!(serde_json::from_str::<import::DenyUntagged>(r#"{"x": 1, "y": 2}"#).is_err());
+    }
+}
+
+// `deny_unknown_fields` is gated on the type actually deriving
+// `Deserialize`: a type that only requires `Serialize` renders no
+// `#[serde(..)]` attribute at all, even with the flag set.
+#[test]
+fn test_deny_unknown_fields_gate() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize);
+
+    let builder = typespace_builder!(settings, {
+        #[deny_unknown_fields]
+        struct Loose {
+            name: String,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_deny_unknown_fields_gate.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        // No Deserialize in the trait set, so there is nothing to
+        // round-trip; this just proves the Serialize-only type still
+        // compiles and serializes normally with the flag set.
+        let v = import::Loose {
+            name: "ok".to_string(),
+        };
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#"{"name":"ok"}"#);
+    }
+}
+
+// Per-type `#[derive = [..]]` renders alongside the computed traits and
+// the crate-wide `with_derive` list: computed traits first, then the
+// crate-wide derives, then the per-type ones last.
+#[test]
+fn test_extra_derives_ordering() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::Clone)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Eq)
+        .with_derive("::std::hash::Hash");
+
+    let builder = typespace_builder!(settings, {
+        #[derive = ["PartialOrd"]]
+        struct Widget {
+            x: u32,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_extra_derives_ordering.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        // Hash comes from the crate-wide with_derive; PartialOrd is the
+        // per-type extra, additional to it.
+        let a = import::Widget { x: 1 };
+        let b = import::Widget { x: 2 };
+        assert!(a < b);
+        let mut set = std::collections::HashSet::new();
+        set.insert(a.clone());
+        assert!(set.contains(&a));
+    }
+}
+
+// Per-type `#[derive = [..]]` on each named-type shape: a struct, an
+// enum, a newtype, a multi-field tuple struct, and a unit struct, each
+// with its own render path. The crate-wide `with_derive` list still
+// precedes the per-type one on every shape.
+#[test]
+fn test_extra_derives_multi_shape() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::Clone)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_derive("::std::hash::Hash");
+
+    let builder = typespace_builder!(settings, {
+        #[derive = ["PartialOrd"]]
+        struct ShapeStruct {
+            x: u32,
+        }
+
+        #[derive = ["PartialOrd"]]
+        enum ShapeEnum {
+            Only(u32),
+        }
+
+        #[derive = ["PartialOrd"]]
+        struct ShapeNewtype(u32);
+
+        #[derive = ["PartialOrd"]]
+        struct ShapeTuple(u32, u32);
+
+        #[json = "unit-shape"]
+        #[derive = ["PartialOrd"]]
+        struct ShapeUnit;
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_extra_derives_multi_shape.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        assert!(import::ShapeStruct { x: 1 } < import::ShapeStruct { x: 2 });
+        assert!(import::ShapeEnum::Only(1) < import::ShapeEnum::Only(2));
+        assert!(import::ShapeNewtype(1) < import::ShapeNewtype(2));
+        assert!(import::ShapeTuple(1, 0) < import::ShapeTuple(1, 1));
+        assert!(import::ShapeUnit <= import::ShapeUnit);
+    }
+}
+
 #[test]
 fn test_struct_builder() {
     let builder = typespace_builder!(Settings::maximal(), {
@@ -2817,5 +3037,27 @@ fn test_struct_builder() {
         );
         let builder = import::builder::MyStruct::from(instance.clone());
         assert_eq!(instance, builder.try_into().unwrap());
+    }
+}
+
+// A `#[tuple]`-forced single-field tuple struct carries its own derives
+// and attributes like every other shape; its lowering is the one branch
+// that reaches TupleStruct with a single field.
+#[test]
+fn test_tuple_marker_extras() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
+            .with_required_trait(TypespaceTrait::PartialEq),
+        {
+            #[tuple]
+            #[derive = ["PartialOrd"]]
+            struct Listed(u32);
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    #[check_and_include("tests/output/test_tuple_marker_extras.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        assert!(import::Listed(1) < import::Listed(2));
     }
 }
