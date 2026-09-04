@@ -11,6 +11,11 @@ pub enum Gadget {
     Off,
     On(u32),
 }
+impl ::std::convert::From<u32> for Gadget {
+    fn from(value: u32) -> Self {
+        Self::On(value)
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
 pub struct Marker;
 impl ::serde::Serialize for Marker {
@@ -125,5 +130,10 @@ impl ::std::ops::Deref for Wrapper {
 impl ::std::convert::From<Wrapper> for String {
     fn from(value: Wrapper) -> Self {
         value.0
+    }
+}
+impl ::std::convert::From<String> for Wrapper {
+    fn from(value: String) -> Self {
+        Self(value)
     }
 }

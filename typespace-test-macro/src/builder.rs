@@ -354,6 +354,7 @@ const KNOWN_ATTRS: &[(&str, &str)] = &[
     ("json", "a unit struct or an enum variant"),
     ("rename", "a field"),
     ("flatten", "a field"),
+    ("tuple", "an enum variant or a tuple struct"),
     ("untagged", "an enum"),
     ("tag", "an enum"),
     ("content", "an enum"),
@@ -511,12 +512,13 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
 }
 
 /// A claimed bare-marker attribute's value, if any, is an error: an
-/// attribute like `#[flatten]` or `#[deny_unknown_fields]` carries no
-/// value at all. Shared by every bare-marker attribute's claim site:
-/// a named property's `#[flatten]` (in [`field_json_name`]), a tuple
-/// struct's `#[flatten]` on its last field (in
-/// [`claimed_tuple_flatten`]), and `#[deny_unknown_fields]` (in
-/// [`claimed_deny_unknown_fields`]).
+/// attribute like `#[flatten]`, `#[deny_unknown_fields]`, or
+/// `#[tuple]` carries no value at all. Shared by every bare-marker
+/// attribute's claim site: a named property's `#[flatten]` (in
+/// [`field_json_name`]), a tuple struct's `#[flatten]` on its last
+/// field (in [`claimed_tuple_flatten`]), `#[deny_unknown_fields]` (in
+/// [`claimed_deny_unknown_fields`]), and `#[tuple]` (in
+/// [`claimed_tuple_marker`]).
 fn require_bare(entry: &AttrEntry) -> syn::Result<()> {
     match &entry.value {
         None => Ok(()),
@@ -524,6 +526,28 @@ fn require_bare(entry: &AttrEntry) -> syn::Result<()> {
             &entry.name,
             format!("#[{}] takes no value", entry.name),
         )),
+    }
+}
+
+/// A claimed `#[tuple]`, validated against the payload arity it
+/// applies to. The attribute exists to keep a single-type payload from
+/// collapsing into the `Item` form, so it is meaningful only there:
+/// `arity` of anything but 1 means there is no collapse to prevent.
+fn claimed_tuple_marker(claims: &Claims, arity: usize) -> syn::Result<bool> {
+    match claims.get("tuple").copied() {
+        None => Ok(false),
+        Some(entry) => {
+            require_bare(entry)?;
+            match arity {
+                1 => Ok(true),
+                _ => Err(syn::Error::new_spanned(
+                    &entry.name,
+                    "#[tuple] is only valid on a single-type payload, \
+                     `(Ty)`, which it keeps from collapsing into the \
+                     newtype form; every other arity is already a tuple",
+                )),
+            }
+        }
     }
 }
 
@@ -905,7 +929,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
         // `typespace::build::TupleStruct`/`NewtypeStruct`/`UnitStruct`
         // have no such builder method.
         StructBody::Fields(_) => &["default", "deny_unknown_fields"],
-        StructBody::Tuple(_) => &["default"],
+        StructBody::Tuple(_) => &["default", "tuple"],
     };
     let claims = claim_attrs(&item.attrs, allowed)?;
     let default_tokens = claimed_default(&claims)?;
@@ -927,12 +951,14 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
             });
         }
 
-        // One type becomes a newtype struct; two or more, a tuple
-        // struct. `#[flatten]` on the last field of a tuple struct
-        // pulls it into `.rest(...)` instead of `.fields(...)`; a
-        // newtype's sole field has no `rest` to pull it into.
+        // One type becomes a newtype struct unless `#[tuple]` asks for
+        // a one-field tuple struct; two or more, a tuple struct.
+        // `#[flatten]` on the last field of a tuple struct pulls it
+        // into `.rest(...)` instead of `.fields(...)`; a newtype's sole
+        // field has no `rest` to pull it into.
         StructBody::Tuple(fields) => {
             let flatten = claimed_tuple_flatten(fields)?;
+            let force_tuple = claimed_tuple_marker(&claims, fields.len())?;
             match (fields.len(), flatten) {
                 (1, Some(entry)) => {
                     return Err(syn::Error::new_spanned(
@@ -941,6 +967,20 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                          single-field tuple struct is a newtype, which has \
                          no `rest`",
                     ));
+                }
+                (1, None) if force_tuple => {
+                    let field_id = lower_type(&fields[0].ty, lowering)?;
+                    lowering.inserts.push(quote! {
+                        builder.insert(
+                            #name.to_string(),
+                            ::typespace::build::TupleStruct::<String>::new()
+                                .name(#name)
+                                #default_tokens
+                                .fields([ #field_id.to_string() ])
+                                .build()
+                                .unwrap(),
+                        ).unwrap();
+                    });
                 }
                 (1, None) => {
                     let inner_id = lower_type(&fields[0].ty, lowering)?;
@@ -1050,9 +1090,20 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
 }
 
 fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<TokenStream> {
+    let claims = claim_attrs(&variant.attrs, &["json", "tuple"])?;
+
+    // `#[tuple]` applies to the payload, so its arity check needs the
+    // payload; a variant that has none cannot carry the attribute at
+    // all, which arity 0 reports.
+    let payload_arity = match &variant.payload {
+        VariantPayload::Tuple(types) => types.len(),
+        VariantPayload::Unit | VariantPayload::Struct(_) => 0,
+    };
+    let force_tuple = claimed_tuple_marker(&claims, payload_arity)?;
+
     let details_tokens = match &variant.payload {
         VariantPayload::Unit => quote! { ::typespace::build::VariantDetails::<String>::Unit },
-        VariantPayload::Tuple(types) if types.len() == 1 => {
+        VariantPayload::Tuple(types) if types.len() == 1 && !force_tuple => {
             let id = lower_type(&types[0], lowering)?;
             quote! { ::typespace::build::VariantDetails::<String>::Item(#id.to_string()) }
         }
@@ -1077,7 +1128,6 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
         }
     };
     let variant_name = variant.name.to_string();
-    let claims = claim_attrs(&variant.attrs, &["json"])?;
     let with_rename = match claims.get("json").copied() {
         Some(entry) => {
             let rename = expect_string_value(entry)?;

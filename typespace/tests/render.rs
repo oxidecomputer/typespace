@@ -423,6 +423,249 @@ fn test_enums() {
     }
 }
 
+// An all-unit-variant enum carries Display and FromStr as bespoke
+// impls over the variants' serialized names, and FromStr brings
+// TryFrom<&str> and TryFrom<String> with it.
+#[test]
+fn test_simple_enum_str_impls() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_required_trait(TypespaceTrait::Display)
+        .with_required_trait(TypespaceTrait::FromStr);
+
+    let builder = typespace_builder!(settings, {
+        enum Color {
+            #[json = "red"]
+            Red,
+            #[json = "sea green"]
+            SeaGreen,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_simple_enum_str_impls.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        assert_eq!(import::Color::Red.to_string(), "red");
+        assert_eq!(import::Color::SeaGreen.to_string(), "sea green");
+
+        assert_eq!("red".parse::<import::Color>().unwrap(), import::Color::Red);
+        assert_eq!(
+            import::Color::try_from("sea green").unwrap(),
+            import::Color::SeaGreen
+        );
+        assert_eq!(
+            import::Color::try_from("red".to_string()).unwrap(),
+            import::Color::Red
+        );
+        assert!("chartreuse".parse::<import::Color>().is_err());
+        assert_eq!(
+            "chartreuse"
+                .parse::<import::Color>()
+                .unwrap_err()
+                .to_string(),
+            "invalid value"
+        );
+
+        // Every variant survives the round trip through its
+        // serialized name.
+        for color in [import::Color::Red, import::Color::SeaGreen] {
+            assert_eq!(color.to_string().parse::<import::Color>().unwrap(), color);
+        }
+    }
+}
+
+// Item and Tuple variants get a From impl converting a payload value
+// into the variant. A payload signature carried by more than one
+// variant gets none, nor does a bare String payload, and a Tuple
+// variant converts from a tuple type.
+#[test]
+fn test_enum_variant_from() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        // Two u32 variants suppress each other; the bool variant is
+        // unaffected.
+        enum Collide {
+            First(u32),
+            Second(u32),
+            Only(bool),
+        }
+
+        // A bare String payload gets no impl; its sibling does.
+        enum Label {
+            Text(String),
+            Count(u32),
+        }
+
+        // A two-element tuple, and a one-element tuple written with
+        // #[tuple] so that it stays a Tuple rather than an Item.
+        enum Point {
+            Pair(u32, bool),
+            #[tuple]
+            One(u32),
+        }
+
+        // An Item variant and a one-element Tuple variant over the
+        // same type key alike, so neither gets an impl even though
+        // `From<u32>` and `From<(u32,)>` would both compile.
+        enum Overlap {
+            Single(u32),
+            #[tuple]
+            Wrapped(u32),
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_enum_variant_from.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        assert_eq!(import::Collide::from(true), import::Collide::Only(true));
+        assert_eq!(import::Label::from(7u32), import::Label::Count(7));
+        assert_eq!(
+            import::Point::from((1u32, true)),
+            import::Point::Pair(1, true)
+        );
+        assert_eq!(import::Point::from((2u32,)), import::Point::One(2));
+    }
+}
+
+// A single-type tuple body is a newtype struct unless #[tuple] asks
+// otherwise, in which case it is a one-field tuple struct. The two
+// differ on the wire: a newtype is transparent, a tuple struct is a
+// sequence.
+#[test]
+fn test_tuple_marker_struct() {
+    let settings = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        struct Wrapped(u32);
+
+        #[tuple]
+        struct Listed(u32);
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_tuple_marker_struct.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        assert_eq!(serde_json::to_string(&import::Wrapped(7)).unwrap(), "7");
+        assert_eq!(serde_json::to_string(&import::Listed(7)).unwrap(), "[7]");
+
+        let v: import::Wrapped = serde_json::from_str("7").unwrap();
+        assert_eq!(v.0, 7);
+        let v: import::Listed = serde_json::from_str("[7]").unwrap();
+        assert_eq!(v.0, 7);
+    }
+}
+
+// Variants whose payloads are different nodes but the same Rust type
+// collide, in the two ways that can happen.
+//
+// Twin: typespace gives each anonymous type its own node, so its two
+// Vec<String> nodes are distinct ids; keying the From impls on ids
+// would emit two `impl From<Vec<String>> for Twin`, which does not
+// compile. Mixed: with no set_type override a set renders as the vec
+// type, so its Vec<String> and Set<String> nodes are one Rust type.
+//
+// Built through the builder API rather than typespace_builder!, and it
+// has to stay that way: the macro creates one anonymous node per
+// distinct type it reads and reuses it, so it cannot produce two nodes
+// that render alike.
+#[test]
+fn test_enum_variant_from_distinct_ids() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+    let mut builder = TypespaceBuilder::new(settings);
+
+    let string_id = "string".to_string();
+    builder.insert(string_id.clone(), Type::String).unwrap();
+
+    let first_vec_id = "first_vec".to_string();
+    builder
+        .insert(first_vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    let second_vec_id = "second_vec".to_string();
+    builder
+        .insert(second_vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    let third_vec_id = "third_vec".to_string();
+    builder
+        .insert(third_vec_id.clone(), Type::Vec(string_id.clone()))
+        .unwrap();
+
+    let set_id = "set".to_string();
+    builder
+        .insert(set_id.clone(), Type::Set(string_id.clone()))
+        .unwrap();
+
+    let int_id = "integer".to_string();
+    builder
+        .insert(int_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
+
+    builder
+        .insert(
+            "Twin".to_string(),
+            Enum::new()
+                .name("Twin")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new("Left", VariantDetails::Item(first_vec_id)),
+                    EnumVariant::new("Right", VariantDetails::Item(second_vec_id)),
+                    EnumVariant::new("Count", VariantDetails::Item(int_id.clone())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    // The set/vec collapse needs its own enum: were it a fourth
+    // variant of Twin, the two Vec variants would suppress each other
+    // and leave the set variant as the only From impl, which compiles
+    // whether or not the two are treated as one type.
+    builder
+        .insert(
+            "Mixed".to_string(),
+            Enum::new()
+                .name("Mixed")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new("Listed", VariantDetails::Item(third_vec_id)),
+                    EnumVariant::new("Bagged", VariantDetails::Item(set_id)),
+                    EnumVariant::new("Count", VariantDetails::Item(int_id)),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_enum_variant_from_distinct_ids.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        // In each enum only the u32 variant gets a From impl; the
+        // payloads that render as Vec<String> suppress one another.
+        assert_eq!(import::Mixed::from(4u32), import::Mixed::Count(4));
+        assert_eq!(import::Twin::from(3u32), import::Twin::Count(3));
+    }
+}
+
 #[test]
 fn test_newtype_struct() {
     let mut builder = TypespaceBuilder::new(
@@ -475,6 +718,14 @@ fn test_newtype_struct() {
 
         let v: import::MyInt = serde_json::from_str("7").unwrap();
         assert_eq!(v.0, 7);
+
+        // The wrap direction, mirroring From<MyString> for String.
+        let v: import::MyString = "wrapped".to_string().into();
+        assert_eq!(v.0, "wrapped");
+        assert_eq!(String::from(v), "wrapped");
+
+        let v = import::MyInt::from(9u32);
+        assert_eq!(v.0, 9);
     }
 }
 

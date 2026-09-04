@@ -450,10 +450,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     }
 
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {
-        TypespaceRenderer {
-            types: &self.types,
-            settings: &self.settings,
-        }
+        TypespaceRenderer::new(&self.types, &self.settings)
     }
 
     /// Reject unparseable extra derives so that rendering--which is
@@ -774,11 +771,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     /// unformatted; turning the codespace into a token stream or files
     /// is the caller's job from here.
     pub fn to_codespace(&self) -> codespace::Codespace {
-        TypespaceRenderer {
-            types: &self.types,
-            settings: &self.settings,
-        }
-        .render()
+        TypespaceRenderer::new(&self.types, &self.settings).render()
     }
 }
 
@@ -787,7 +780,23 @@ pub(crate) struct TypespaceRenderer<'a, Id> {
     pub(crate) settings: &'a Settings,
 }
 
+/// The path a set or a vec renders as: the override if there is one,
+/// otherwise the std `Vec` under the configured [`Std`] syntax.
+fn container_path(container: &Option<settings::ContainerType>, std: &Std) -> TokenStream {
+    match container {
+        Some(settings::ContainerType(path)) => quote! { #path },
+        None => match std {
+            Std::FullyQualified => quote! { ::std::vec::Vec },
+            Std::Unqualified => quote! { Vec },
+        },
+    }
+}
+
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
+    pub(crate) fn new(types: &'a BTreeMap<Id, Type<Id>>, settings: &'a Settings) -> Self {
+        Self { types, settings }
+    }
+
     fn render(&self) -> codespace::Codespace {
         let mut cs = codespace::Codespace::default();
 
@@ -880,6 +889,17 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     pub(crate) fn render_raw_type(&self, id: &Id) -> TokenStream {
         self.render_ident_impl(id, None, true)
+    }
+
+    /// Render `String` per the configured [`Std`] syntax.
+    ///
+    /// Bespoke impls that need the `String` don't have an ID they can use to
+    /// render it.
+    pub(crate) fn render_std_string(&self) -> TokenStream {
+        match &self.settings.std {
+            Std::FullyQualified => quote! { ::std::string::String },
+            Std::Unqualified => quote! { String },
+        }
     }
 
     /// Render the derive attribute given the computed traits for a type and
@@ -1007,16 +1027,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Set(inner_id) => {
-                let set_type = match &self.settings.set_type {
-                    Some(settings::ContainerType(path)) => quote! { #path },
-                    // Without an override, a set renders as a Vec:
-                    // deduplication is not enforced, but no trait demands
-                    // are made of the element type either.
-                    None => match &self.settings.std {
-                        Std::FullyQualified => quote! { ::std::vec::Vec },
-                        Std::Unqualified => quote! { Vec },
-                    },
-                };
+                // Without an override, a set renders as a Vec:
+                // deduplication is not enforced, but no trait demands
+                // are made of the element type either.
+                let set_type = container_path(&self.settings.set_type, &self.settings.std);
                 if base_type {
                     set_type
                 } else {
@@ -1027,13 +1041,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Vec(inner_id) => {
-                let vec_type = match &self.settings.vec_type {
-                    Some(settings::ContainerType(path)) => quote! { #path },
-                    None => match &self.settings.std {
-                        Std::FullyQualified => quote! { ::std::vec::Vec },
-                        Std::Unqualified => quote! { Vec },
-                    },
-                };
+                let vec_type = container_path(&self.settings.vec_type, &self.settings.std);
                 if base_type {
                     vec_type
                 } else {

@@ -1,0 +1,5 @@
+error: #[tuple] is only valid on a single-type payload, `(Ty)`, which it keeps from collapsing into the newtype form; every other arity is already a tuple
+ --> tests/ui/tuple_wrong_arity.rs:7:15
+  |
+7 |             #[tuple]
+  |               ^^^^^

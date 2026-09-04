@@ -1,0 +1,5 @@
+error: #[tuple] takes no value
+ --> tests/ui/tuple_with_value.rs:6:15
+  |
+6 |             #[tuple = "yes"]
+  |               ^^^^^

@@ -97,6 +97,7 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// |--------------------------------------|----------------------------|
 /// | `struct N { f: Ty, .. }`             | `Struct`                   |
 /// | `struct N(Ty);`                      | `NewtypeStruct`            |
+/// | `#[tuple] struct N(Ty);`             | one-field `TupleStruct`    |
 /// | `struct N(Ty, Ty, ..);`              | `TupleStruct`              |
 /// | `struct N(Ty, .., #[flatten] Ty);`   | `TupleStruct` with `rest`) |
 /// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`       |
@@ -104,9 +105,19 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// | `type N = Ty;`                       | `TypeAlias`                |
 /// | `native P;` / `native P: Tr + ?Tr;`  | `Native`                   |
 ///
-/// Enum variants: `V` unit; `V(Ty)` single payload (`VariantDetails::Item`);
-/// `V(Ty, Ty, ..)` tuple payload; `V { f: Ty, .. }` struct payload. A
-/// struct-shaped variant's fields follow the same rules as a struct's.
+/// Enum variants: `V` unit; `V(Ty)` single payload
+/// (`VariantDetails::Item`); `#[tuple] V(Ty)` one-element
+/// `VariantDetails::Tuple`; `V(Ty, Ty, ..)` tuple payload;
+/// `V { f: Ty, .. }` struct payload. A struct-shaped variant's fields
+/// follow the same rules as a struct's.
+///
+/// A single-type payload is a newtype by default, so `#[tuple]` is how
+/// the one-element tuple form gets written. The two differ in the
+/// output: `V(Ty)` converts from `Ty`, while `#[tuple] V(Ty)` renders
+/// as `V(Ty,)` and converts from `(Ty,)`. The marker carries the
+/// distinction because the syntax cannot: a trailing comma is
+/// insignificant to Rust, and rustfmt removes it from a parenthesised
+/// macro invocation whose body parses.
 ///
 /// # Types
 ///
@@ -208,6 +219,9 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   (adjacent).
 /// - Tuple struct field `#[flatten]`: `.rest()`, splicing the sequence into
 ///   the containing tuple type.
+/// - Variant or tuple struct `#[tuple]`: keeps a single-type payload
+///   from collapsing into the newtype form. Valid only at that arity,
+///   since every other arity is already a tuple.
 ///
 /// `#[rename]` and `#[flatten]` are field-level only, valid wherever
 /// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds

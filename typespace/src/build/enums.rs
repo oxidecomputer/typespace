@@ -1,15 +1,15 @@
 // Copyright 2026 Oxide Computer Company
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::build::{
     check_properties, validate_ident, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt,
 };
 use crate::error::{Error, NameAxis};
-use crate::TypespaceRenderer;
+use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
 
 /// An enum.
 ///
@@ -181,7 +181,7 @@ impl<Id> Enum<Id> {
     /// Such enums are value-like: they can derive `Copy`, `Eq`, `Ord`,
     /// and `Hash`, and admit bespoke `Display` and `FromStr` impls that
     /// map variants to and from their serialized names.
-    pub fn all_simple_variants(&self) -> bool {
+    pub fn all_unit_variants(&self) -> bool {
         self.tag_type
             .as_ref()
             .is_some_and(|tag_type| *tag_type != EnumTagType::Untagged)
@@ -252,7 +252,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             EnumTagType::Untagged => quote! { #[serde(untagged)] },
         };
 
-        let variants = variants.iter().map(|variant| {
+        let name_ident = format_ident!("{name}");
+
+        // Display and FromStr have no derive. An enum that implements
+        // them does so through the impls below; each is removed from
+        // the trait set as it is rendered so that render_derives, which
+        // rejects both, sees only derivable traits.
+        let mut derived_traits = traits.clone();
+        let unit_variant_impls = self.all_unit_variants().then(|| {
+            self.render_unit_variant_impls(typespace, cs, &name_ident, &mut derived_traits)
+        });
+
+        let variant_from = self.render_variant_from(typespace, &name_ident);
+
+        let rendered_variants = variants.iter().map(|variant| {
             let EnumVariant {
                 rust_name,
                 rename,
@@ -293,9 +306,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             }
         });
 
-        let name_ident = format_ident!("{name}");
-
-        let derives_attr = typespace.render_derives(&traits);
+        let derives_attr = typespace.render_derives(&derived_traits);
 
         quote! {
             // TODO I want to have the original unique id available
@@ -303,9 +314,219 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             #derives_attr
             #serde
             pub enum #name_ident {
-                #( #variants, )*
+                #( #rendered_variants, )*
             }
+
+            #unit_variant_impls
+            #( #variant_from )*
         }
+    }
+
+    /// Render an all-unit-variant enum's `Display` and `FromStr`.
+    ///
+    /// These traits **must** be manually implemented.
+    fn render_unit_variant_impls(
+        &self,
+        typespace: &TypespaceRenderer<'_, Id>,
+        cs: &mut codespace::Codespace,
+        name_ident: &Ident,
+        derived_traits: &mut TypespaceTraitSet,
+    ) -> TokenStream {
+        // Both impls map the whole enum to and from a bare string, so
+        // every variant has to be payload-free for them to be writable
+        // at all.
+        assert!(
+            self.all_unit_variants(),
+            "{} is not an all-unit-variant enum",
+            self.common.built_name(),
+        );
+
+        let (variant_idents, variant_names): (Vec<_>, Vec<_>) = self
+            .variants
+            .iter()
+            .map(|variant| (format_ident!("{}", variant.rust_name), variant.json_name()))
+            .unzip();
+
+        let display = derived_traits.remove(TypespaceTrait::Display).then(|| {
+            // Display each variant as its serialized name.
+            quote! {
+                impl ::std::fmt::Display for #name_ident {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                        -> ::std::fmt::Result
+                    {
+                        match *self {
+                            #( Self::#variant_idents => f.write_str(#variant_names), )*
+                        }
+                    }
+                }
+            }
+        });
+
+        let from_str = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
+            // Parse each variant from its serialized name.
+            typespace.add_error_mod(cs);
+            let string_type = typespace.render_std_string();
+            quote! {
+                impl ::std::str::FromStr for #name_ident {
+                    type Err = self::error::ConversionError;
+
+                    fn from_str(value: &str)
+                        -> ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        match value {
+                            #( #variant_names => Ok(Self::#variant_idents), )*
+                            _ => Err("invalid value".into()),
+                        }
+                    }
+                }
+                impl ::std::convert::TryFrom<&str> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: &str)
+                        -> ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        value.parse()
+                    }
+                }
+                impl ::std::convert::TryFrom<#string_type> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: #string_type)
+                        -> ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        value.parse()
+                    }
+                }
+            }
+        });
+
+        quote! {
+            #display
+            #from_str
+        }
+    }
+
+    /// Render a `From<Payload>` impl per `Item` and `Tuple` variant.
+    ///
+    /// Each converts a payload value into that variant, and the impls
+    /// come out in variant declaration order. A `Unit` variant carries
+    /// no payload and a `Struct` variant's payload has no type of its
+    /// own, so neither gets a From impl.
+    fn render_variant_from(
+        &self,
+        typespace: &TypespaceRenderer<'_, Id>,
+        name_ident: &Ident,
+    ) -> Vec<TokenStream> {
+        // Key each Item and Tuple variant by the rendered text of the types it
+        // carries. A key carried by more than one variant yields no impl for
+        // any of them, since two `From<Foo> for E` impls would not compile.
+        //
+        // The key is rendered text rather than ids because typespace gives
+        // each anonymous type its own node, so two variants can carry
+        // different ids that render as the same Rust type. It is rendered text
+        // rather than a structural summary because the question is exactly
+        // whether two payloads render alike, and any structure faithful enough
+        // to answer that is the rendering written a second way, which then has
+        // to be kept in agreement with the first. Rendering settles it
+        // directly: a set and a vec that share a path, a unit and an empty
+        // tuple, a one-element tuple and its element, and a native declared as
+        // a container's path all compare equal without a rule for each.
+        //
+        // TODO the key is the list of payload types, but what decides
+        // whether two impls collide is the type each one converts FROM: an
+        // Item variant gives `From<X>` and a Tuple gives `From<(X, Y)>`.
+        // Those come apart at one element. `Item(X)` and `Tuple([X])` give
+        // `From<X>` and `From<(X,)>`, which are different impls wanting
+        // different bodies (`Self::V(value)` against `Self::V(value.0)`),
+        // yet they key alike here and suppress each other. Keying on the
+        // converted-from type would let both render, and the match below
+        // already writes the right body for each kind.
+        //
+        // The reverse collision cannot happen yet: an Item carrying a
+        // one-element tuple type also converts from `(Y,)`, so it would
+        // clash with a Tuple over that element, but `render_ident_impl`
+        // joins tuple elements with a separator and never emits a trailing
+        // comma, so typespace cannot render `(Y,)` at all.
+        let unique_variants =
+            self.variants
+                .iter()
+                .enumerate()
+                .fold(BTreeMap::new(), |mut map, (index, variant)| {
+                    let key = match &variant.details {
+                        VariantDetails::Item(id) => {
+                            vec![typespace.render_ident(id).to_string()]
+                        }
+                        VariantDetails::Tuple(ids) => ids
+                            .iter()
+                            .map(|id| typespace.render_ident(id).to_string())
+                            .collect::<Vec<_>>(),
+                        VariantDetails::Unit | VariantDetails::Struct(_) => return map,
+                    };
+                    map.entry(key)
+                        .and_modify(|seen| *seen = None)
+                        .or_insert(Some((index, variant)));
+                    map
+                });
+
+        // Drop the collisions, then re-key by the variant's index so
+        // that the impls follow declaration order.
+        unique_variants
+            .into_values()
+            .flatten()
+            .collect::<BTreeMap<_, _>>()
+            .into_values()
+            .filter_map(|variant| {
+                let variant_ident = format_ident!("{}", variant.rust_name);
+                match &variant.details {
+                    // A bare String payload gets no impl. Core's
+                    // blanket `impl<T, U: Into<T>> TryFrom<U> for T`
+                    // turns `From<String> for E` into `TryFrom<String>
+                    // for E`, which collides with a hand-written
+                    // `TryFrom<String>` on the same enum. Excluding
+                    // every String payload stands in for asking whether
+                    // this enum writes that impl, which is exactly
+                    // whether FromStr is in its trait set; checking
+                    // that instead would leave the From impl in place
+                    // for an enum with a String payload and no FromStr.
+                    VariantDetails::Item(id)
+                        if matches!(typespace.types.get(id), Some(Type::String)) =>
+                    {
+                        None
+                    }
+                    VariantDetails::Item(id) => {
+                        let payload = typespace.render_ident(id);
+                        Some(quote! {
+                            impl ::std::convert::From<#payload> for #name_ident {
+                                fn from(value: #payload) -> Self {
+                                    Self::#variant_ident(value)
+                                }
+                            }
+                        })
+                    }
+                    VariantDetails::Tuple(ids) => {
+                        let payloads = ids
+                            .iter()
+                            .map(|id| typespace.render_ident(id))
+                            .collect::<Vec<_>>();
+                        // A one-element tuple type needs its trailing comma to
+                        // be a tuple at all.
+                        let payload = match ids.len() {
+                            1 => quote! { ( #( #payloads, )* ) },
+                            _ => quote! { ( #( #payloads ),* ) },
+                        };
+                        let field = (0..ids.len()).map(syn::Index::from);
+                        Some(quote! {
+                            impl ::std::convert::From<#payload> for #name_ident {
+                                fn from(value: #payload) -> Self {
+                                    Self::#variant_ident( #( value.#field, )* )
+                                }
+                            }
+                        })
+                    }
+                    VariantDetails::Unit | VariantDetails::Struct(_) => None,
+                }
+            })
+            .collect::<Vec<_>>()
     }
 }
 

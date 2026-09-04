@@ -12,6 +12,11 @@ impl ::std::convert::From<MyInt> for u32 {
         value.0
     }
 }
+impl ::std::convert::From<u32> for MyInt {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
 ///A newtype wrapping String.
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 #[serde(transparent)]
@@ -25,5 +30,10 @@ impl ::std::ops::Deref for MyString {
 impl ::std::convert::From<MyString> for String {
     fn from(value: MyString) -> Self {
         value.0
+    }
+}
+impl ::std::convert::From<String> for MyString {
+    fn from(value: String) -> Self {
+        Self(value)
     }
 }

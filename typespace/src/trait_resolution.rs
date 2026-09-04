@@ -203,7 +203,7 @@ where
 
         Type::Enum(e) => match trait_name {
             TypespaceTrait::Display | TypespaceTrait::FromStr => {
-                if e.all_simple_variants() {
+                if e.all_unit_variants() {
                     // A hand-written impl maps variants to and from
                     // their serialized names; no variant has payload
                     // types to forward to.
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     /// A required trait that a type realizes with a manual impl is
-    /// satisfied: an all-simple enum provides Display and FromStr, so
+    /// satisfied: an all-unit enum provides Display and FromStr, so
     /// requiring them succeeds and they land in the built trait set.
     #[test]
     fn required_display_on_simple_enum_accepted() {
@@ -3395,11 +3395,10 @@ mod tests {
         );
     }
 
-    /// all_traits desires Display; a simple enum is granted it; the
-    /// enum renderer does not strip it or emit a manual impl, so
-    /// render_derives panics.
+    /// all_traits desires Display; an all-unit enum is granted it; the
+    /// enum renderer strips it from the derive set and emits the
+    /// manual impl.
     #[test]
-    #[ignore]
     fn probe_all_traits_simple_enum_renders() {
         let builder = typespace_builder!(Settings::maximal(), {
             enum Color {

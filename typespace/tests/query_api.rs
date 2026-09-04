@@ -250,7 +250,7 @@ fn build_side_queries() {
     let renamed = EnumVariant::<String>::new("Alpha", VariantDetails::Unit).with_rename("alpha");
     assert_eq!(renamed.json_name(), "alpha");
 
-    // all_simple_variants: nonempty, tagged, all-unit enums only.
+    // all_unit_variants: nonempty, tagged, all-unit enums only.
     let simple = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::External)
@@ -258,18 +258,18 @@ fn build_side_queries() {
             EnumVariant::new("A", VariantDetails::Unit),
             EnumVariant::new("B", VariantDetails::Unit),
         ]);
-    assert!(simple.all_simple_variants());
+    assert!(simple.all_unit_variants());
 
     let untagged = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::Untagged)
         .variants(vec![EnumVariant::new("A", VariantDetails::Unit)]);
-    assert!(!untagged.all_simple_variants());
+    assert!(!untagged.all_unit_variants());
 
     let empty = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::External);
-    assert!(!empty.all_simple_variants());
+    assert!(!empty.all_unit_variants());
 
     let data = Enum::new()
         .name("E")
@@ -278,7 +278,7 @@ fn build_side_queries() {
             "A",
             VariantDetails::Item("a".to_string()),
         )]);
-    assert!(!data.all_simple_variants());
+    assert!(!data.all_unit_variants());
 }
 
 // Scoped identifier rendering on the view side, and the pre-finalize

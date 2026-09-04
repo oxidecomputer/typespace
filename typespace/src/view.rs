@@ -38,11 +38,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
     /// The Rust identifier for this type as a [`TokenStream`].
     pub fn ident(&self) -> TokenStream {
-        TypespaceRenderer {
-            types: &self.typespace.types,
-            settings: &self.typespace.settings,
-        }
-        .render_ident(self.id)
+        TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
+            .render_ident(self.id)
     }
 
     /// The Rust identifier for this type qualified by the module
@@ -53,11 +50,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// Rendering honors the typespace's settings (container overrides,
     /// `std` spelling).
     pub fn ident_in(&self, scope: &str) -> TokenStream {
-        TypespaceRenderer {
-            types: &self.typespace.types,
-            settings: &self.typespace.settings,
-        }
-        .render_ident_with_scope(self.id, Some(scope))
+        TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
+            .render_ident_with_scope(self.id, Some(scope))
     }
 
     /// The Rust identifier suitable for use as a function parameter type.

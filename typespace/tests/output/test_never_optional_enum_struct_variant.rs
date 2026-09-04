@@ -6,3 +6,8 @@ pub enum OptionalStructEnum {
     },
     Kept(u32),
 }
+impl ::std::convert::From<u32> for OptionalStructEnum {
+    fn from(value: u32) -> Self {
+        Self::Kept(value)
+    }
+}

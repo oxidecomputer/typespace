@@ -1056,6 +1056,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
 
+            impl ::std::convert::From<#inner_ident> for #name_ident {
+                fn from(value: #inner_ident) -> Self {
+                    Self(value)
+                }
+            }
         }
     }
 }

@@ -1,0 +1,5 @@
+error: `#[tuple]` is only valid on an enum variant or a tuple struct
+ --> tests/ui/misplaced_tuple.rs:6:11
+  |
+6 |         #[tuple]
+  |           ^^^^^
