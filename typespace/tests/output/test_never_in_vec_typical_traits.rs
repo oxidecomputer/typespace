@@ -1,4 +1,4 @@
-#[derive(Clone, Debug, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct TypicalVecHolder {
     pub values: ::std::vec::Vec<::json_serde::Absent>,
 }

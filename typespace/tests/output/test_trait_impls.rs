@@ -1,8 +1,8 @@
 #[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
     Clone,
     Debug,
-    ::serde::Serialize,
-    ::serde::Deserialize,
     Eq,
     PartialEq,
     ::std::hash::Hash
@@ -93,10 +93,10 @@ impl<'de> ::serde::Deserialize<'de> for Pair {
     }
 }
 #[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
     Clone,
     Debug,
-    ::serde::Serialize,
-    ::serde::Deserialize,
     Eq,
     PartialEq,
     ::std::hash::Hash
@@ -106,10 +106,10 @@ pub struct Widget {
     pub tags: Vec<String>,
 }
 #[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
     Clone,
     Debug,
-    ::serde::Serialize,
-    ::serde::Deserialize,
     Eq,
     PartialEq,
     ::std::hash::Hash

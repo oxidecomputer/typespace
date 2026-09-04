@@ -125,22 +125,26 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// a [`build::Native`] type must already declare the required traits
 /// among its `impls`, or leave them unknown. A requirement that a type cannot satisfy--`Ord`
 /// on a float, say--is a [`error::Error`].
+
+// TODO 9/3/2026
+// The order of these turns out to be the output order; that's probably wrong
+// or we want to sort these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum TypespaceTrait {
+    Deserialize,
+    Serialize,
     Clone,
     Debug,
-    Serialize,
-    Deserialize,
     JsonSchema,
     Display,
     FromStr,
     Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
     Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
     Default,
 }
 
@@ -155,11 +159,16 @@ impl TypespaceTrait {
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
                 TypespaceTrait::JsonSchema => quote! { ::schemars::JsonSchema },
-                TypespaceTrait::Ord => quote! { ::std::cmp::Ord },
-                TypespaceTrait::PartialOrd => quote! { ::std::cmp::PartialOrd },
-                TypespaceTrait::Eq => quote! { ::std::cmp::Eq },
-                TypespaceTrait::PartialEq => quote! { ::std::cmp::PartialEq },
-                TypespaceTrait::Hash => quote! { ::std::hash::Hash },
+                // TypespaceTrait::Eq => quote! { ::std::cmp::Eq },
+                // TypespaceTrait::PartialEq => quote! { ::std::cmp::PartialEq },
+                // TypespaceTrait::Hash => quote! { ::std::hash::Hash },
+                // TypespaceTrait::Ord => quote! { ::std::cmp::Ord },
+                // TypespaceTrait::PartialOrd => quote! { ::std::cmp::PartialOrd },
+                TypespaceTrait::Ord => quote! { Ord },
+                TypespaceTrait::PartialOrd => quote! { PartialOrd },
+                TypespaceTrait::Eq => quote! { Eq },
+                TypespaceTrait::PartialEq => quote! { PartialEq },
+                TypespaceTrait::Hash => quote! { Hash },
                 TypespaceTrait::Display => quote! { ::std::fmt::Display },
                 TypespaceTrait::FromStr => quote! { ::std::str::FromStr },
                 TypespaceTrait::Default => quote! { ::std::default::Default },
@@ -1234,7 +1243,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 StructPropertyState::DefaultValue(JsonValue(value)),
                 TypeOfInterest::Option(_) | TypeOfInterest::Other,
             ) => {
-                let fn_name_str = format!("{}__{}", context, rust_name);
+                // TODO 9/3/2026
+                // I don't love that the door is open to name collisions here,
+                // but this is what typify 1 does so we'll hold the line for
+                // now.
+                let fn_name_str = format!("{}_{}", context, rust_name);
                 let fn_name_ident = format_ident!("{}", fn_name_str);
                 let serde_path = format!("defaults::{fn_name_str}");
                 serde_options.push(quote! { default = #serde_path });
@@ -1288,7 +1301,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             StructPropertyState::DefaultValue(_) => {
                 // TODO 9/1/2026
                 // we should dedup this code
-                let fn_name_str = format!("{}__{}", context, rust_name);
+                let fn_name_str = format!("{}_{}", context, rust_name);
                 let fn_name_ident = format_ident!("{}", fn_name_str);
                 DefaultConstructor::Generated(quote! { defaults::#fn_name_ident() })
             }
@@ -1358,7 +1371,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
             Type::Vec(_) | Type::Map(_, _) | Type::Set(_) | Type::String => {
                 let ty_raw_ident = self.render_raw_type(ty_id);
-                let is_empty = format!("{ty_raw_ident}::is_empty");
+                let is_empty = format!("{}::is_empty", ty_raw_ident.token_print());
                 serde_options.push(quote! { skip_serializing_if = #is_empty });
             }
 
@@ -1375,7 +1388,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::Boolean => {
                 // Congratulation! You found an external expression of my
                 // insanity. I am genuinely curious if anyone will ever
-                // encounter this via a generated type. Note that this will
+                // encounter this via a generated type. Note that this may
                 // cause invalid code to be generated e.g. if the type is
                 // Box<bool>, and I'm fine with that.
 

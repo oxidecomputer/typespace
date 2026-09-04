@@ -1,8 +1,8 @@
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct Inner {
     pub value: u32,
 }
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct Outer {
     #[serde(rename = "my-field")]
     pub my_field: String,

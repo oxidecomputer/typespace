@@ -1,4 +1,4 @@
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 #[serde(transparent)]
 pub struct MyInt(pub u32);
 impl ::std::ops::Deref for MyInt {
@@ -13,7 +13,7 @@ impl ::std::convert::From<MyInt> for u32 {
     }
 }
 ///A newtype wrapping String.
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 #[serde(transparent)]
 pub struct MyString(pub String);
 impl ::std::ops::Deref for MyString {

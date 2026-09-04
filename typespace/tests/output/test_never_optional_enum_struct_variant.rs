@@ -1,4 +1,4 @@
-#[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize, Debug)]
 pub enum OptionalStructEnum {
     Gone {
         #[serde(default, skip_serializing_if = "::json_serde::always")]

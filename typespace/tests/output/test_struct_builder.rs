@@ -1,14 +1,14 @@
 #[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
     Clone,
     Debug,
-    ::serde::Serialize,
-    ::serde::Deserialize,
     ::schemars::JsonSchema,
-    ::std::cmp::Eq,
-    ::std::cmp::PartialEq,
-    ::std::cmp::Ord,
-    ::std::cmp::PartialOrd,
-    ::std::hash::Hash,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
     ::std::default::Default
 )]
 pub struct MyStruct {
@@ -21,7 +21,7 @@ pub struct MyStruct {
     pub b: ::std::option::Option<u32>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub c: ::std::option::Option<::std::string::String>,
-    #[serde(default = "defaults::my_struct__d")]
+    #[serde(default = "defaults::my_struct_d")]
     pub d: u32,
 }
 impl MyStruct {
@@ -46,7 +46,7 @@ pub mod builder {
                 a: Err("no value supplied for a".to_string()),
                 b: Ok(Default::default()),
                 c: Err("no value supplied for c".to_string()),
-                d: Ok(super::defaults::my_struct__d()),
+                d: Ok(super::defaults::my_struct_d()),
             }
         }
     }
@@ -117,7 +117,7 @@ pub mod builder {
     }
 }
 pub mod defaults {
-    pub fn my_struct__d() -> u32 {
+    pub fn my_struct_d() -> u32 {
         ::serde_json::from_value(
                 ::serde_json::Value::Number(::serde_json::Number::from(42i64)),
             )

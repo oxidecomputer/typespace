@@ -1,4 +1,4 @@
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct A {
     #[serde(
         default,
@@ -7,7 +7,7 @@ pub struct A {
     )]
     pub a: ::std::option::Option<::std::boxed::Box<A>>,
 }
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct B {
     #[serde(
         default,
@@ -16,7 +16,7 @@ pub struct B {
     )]
     pub c: ::std::option::Option<C>,
 }
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct C {
     #[serde(
         default,
