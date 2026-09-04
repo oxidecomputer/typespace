@@ -6,7 +6,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::build::{
-    check_properties, validate_ident, JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt,
+    JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt, check_properties, validate_ident,
 };
 use crate::error::{Error, NameAxis};
 use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
@@ -268,7 +268,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 TypeCommon {
                     name,
                     description,
-                    default: _,
+                    default,
                     built: Some(TypeCommonBuilt { traits }),
                     extra_derives,
                     extra_attrs,
@@ -347,9 +347,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             }
         });
 
-        let derives_attr = typespace.render_derives(&derived_traits, extra_derives);
-        let attrs = typespace.render_attrs(extra_attrs);
-
         if traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields {
             serde_attrs.push(quote! { deny_unknown_fields });
         }
@@ -357,6 +354,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         let serde = (!serde_attrs.is_empty()).then(|| {
             quote! { #[serde( #( #serde_attrs, )* )] }
         });
+
+        if derived_traits.remove(TypespaceTrait::Default)
+            && let Some(default) = default
+        {
+            // Right now we only support manual implementations of Default
+
+            // TODO 9/4/2026
+            // and we don't even do that yet..
+        }
+
+        let derives_attr = typespace.render_derives(&derived_traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {
             // TODO I want to have the original Id available

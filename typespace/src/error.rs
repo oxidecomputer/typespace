@@ -344,6 +344,14 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                      implement `{required}`"
                 )
             }
+            RequirementOrigin::PropertyDefault(id) => {
+                write!(
+                    f,
+                    "\n    required because a property of `{id}` \
+                     deserializes with `#[serde(default)]` and so must \
+                     implement `{required}`"
+                )
+            }
             RequirementOrigin::GlobalSettings => {
                 write!(
                     f,
@@ -364,6 +372,9 @@ pub enum RequirementOrigin<Id> {
     /// The requirement applies to the element type of the set with this
     /// ID.
     SetElement(Id),
+    /// The requirement applies to the type of a property of the type
+    /// with this ID, because that property carries `#[serde(default)]`.
+    PropertyDefault(Id),
     /// The requirement applies to every named type, via
     /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).
     GlobalSettings,

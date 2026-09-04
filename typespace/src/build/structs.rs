@@ -173,11 +173,7 @@ where
     for property in properties {
         let rust_name = property.rust_name.clone();
         validate_ident("property", &rust_name)?;
-        let wire_name = match &property.json_name {
-            StructPropertySerde::None => Some(rust_name.clone()),
-            StructPropertySerde::Rename(rename) => Some(rename.clone()),
-            StructPropertySerde::Flatten => None,
-        };
+        let wire_name = property.wire_name().map(str::to_string);
         if !rust_names.insert(rust_name.clone()) {
             return Err(Error::DuplicateItemName {
                 kind: "property",
@@ -370,6 +366,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             // produces (and would trip clippy's `derivable_impls` lint
             // downstream). In that case we derive `Default` rather than
             // emitting the manual impl below.
+            //
+            // TODO 9/4/2026
+            // Default... or if it's optional? Not sure how typify handles
+            // this.
             if default.is_none()
                 && rendered_properties
                     .iter()
@@ -380,10 +380,29 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
 
             traits.remove(TypespaceTrait::Default);
 
+            let default_props = rendered_properties.iter().map(
+                |RenderedStructProperty {
+                     rust_name_ident,
+                     default,
+                     ..
+                 }| {
+                    let default_value = match default {
+                        DefaultConstructor::None => unreachable!(),
+                        DefaultConstructor::Default => quote! { Default::default() },
+                        DefaultConstructor::Generated(default_fn) => default_fn.clone(),
+                    };
+                    quote! {
+                        #rust_name_ident: #default_value
+                    }
+                },
+            );
+
             quote! {
-                impl Default for #name_ident {
+                impl ::std::default::Default for #name_ident {
                     fn default() -> Self {
-                        todo!()
+                        Self {
+                            #( #default_props, )*
+                        }
                     }
                 }
             }
@@ -403,6 +422,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             pub struct #name_ident {
                 #( #rendered_properties, )*
             }
+
+            #default_impl
 
             #builder_impl
         }
@@ -472,6 +493,19 @@ impl<Id> StructProperty<Id> {
     /// The serde treatment of the property's name.
     pub fn json_name(&self) -> &StructPropertySerde {
         &self.json_name
+    }
+
+    /// The name the property serializes under.
+    ///
+    /// The serde rename when there is one and the Rust name otherwise.
+    /// A flattened property has no wire name of its own: its fields are
+    /// spliced into the containing type's wire form.
+    pub fn wire_name(&self) -> Option<&str> {
+        match &self.json_name {
+            StructPropertySerde::None => Some(self.rust_name.as_str()),
+            StructPropertySerde::Rename(rename) => Some(rename.as_str()),
+            StructPropertySerde::Flatten => None,
+        }
     }
 
     /// The property's volitionality.

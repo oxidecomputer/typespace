@@ -173,7 +173,8 @@ impl TypespaceTrait {
                 TypespaceTrait::Hash => quote! { Hash },
                 TypespaceTrait::Display => quote! { ::std::fmt::Display },
                 TypespaceTrait::FromStr => quote! { ::std::str::FromStr },
-                TypespaceTrait::Default => quote! { ::std::default::Default },
+                // TypespaceTrait::Default => quote! { ::std::default::Default },
+                TypespaceTrait::Default => quote! { Default },
             }
         } else {
             match self {

@@ -20,7 +20,8 @@ use std::collections::{BTreeMap, VecDeque};
 use log::debug;
 
 use crate::build::{
-    Native, NewtypeConstraints, NewtypeStruct, Struct, StructPropertyState, TupleStruct, Type,
+    Native, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState, TupleStruct,
+    Type, VariantDetails,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::Settings;
@@ -151,8 +152,43 @@ where
                 // textual order or separator.
                 TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
                 TypespaceTrait::Default => {
-                    if struct_info.common.default().is_some() {
-                        Feasibility::ManuallyRealizable(Vec::new())
+                    if let Some(default) = struct_info.common.default() {
+                        // The hand-written impl takes each property the
+                        // default value names from that value and fills
+                        // the rest with Default::default(), so the
+                        // properties the value does not name are the
+                        // obligations. A flattened property has no wire
+                        // name to look for, and a default value that is
+                        // not a JSON object names nothing at all;
+                        // either way the property counts as unnamed. An
+                        // optional property is exempt whether the value
+                        // names it or not: it renders as an Option (or
+                        // as the configured optional-nullable type),
+                        // which is Default whatever the property's own
+                        // type is.
+                        let named = default.as_object();
+                        let obligations = struct_info
+                            .properties
+                            .iter()
+                            .filter(|prop| {
+                                !matches!(
+                                    prop.state,
+                                    StructPropertyState::Optional // | StructPropertyState::DefaultValue(_)
+                                ) && match (named, prop.wire_name()) {
+                                    (Some(named), Some(wire_name)) => {
+                                        !named.contains_key(wire_name)
+                                    }
+                                    _ => true,
+                                }
+                            })
+                            .map(|prop| {
+                                (
+                                    Relation::Field(prop.rust_name.clone()),
+                                    prop.type_id.clone(),
+                                )
+                            })
+                            .collect();
+                        Feasibility::ManuallyRealizable(obligations)
                     } else if struct_info
                         .properties
                         .iter()
@@ -162,7 +198,7 @@ where
                         // possible.
                         Feasibility::Impossible
                     } else {
-                        let xxx = struct_info
+                        let obligations = struct_info
                             .properties
                             .iter()
                             .filter_map(|prop| {
@@ -176,20 +212,8 @@ where
                                 )
                             })
                             .collect();
-                        Feasibility::ManuallyRealizable(xxx)
+                        Feasibility::ManuallyRealizable(obligations)
                     }
-                    // } else if struct_info
-                    //     .properties
-                    //     .iter()
-                    //     .any(|prop| matches!(&prop.state, StructPropertyState::DefaultValue(_)))
-                    // {
-                    //     // Additionally, if there's any property with an
-                    //     // explicit default value, we *can* implement Default,
-                    //     // but need to do so by hand.
-                    //     Feasibility::ManuallyRealizable(struct_info.propert
-                    // } else {
-                    //     Feasibility::Derivable
-                    // }
                 }
                 _ => Feasibility::Derivable,
             }
@@ -244,11 +268,15 @@ where
                 }
             }
             TypespaceTrait::Default => {
-                if common.default().is_some() {
-                    Feasibility::ManuallyRealizable(Vec::new())
-                } else {
-                    Feasibility::Derivable
-                }
+                // if common.default().is_some() {
+                //     Feasibility::ManuallyRealizable(Vec::new())
+                // } else {
+                //     Feasibility::Derivable
+                // }
+                // TODO 9/4/2026
+                // For now and for compatibility with typify, we're just going
+                // to say no here.
+                Feasibility::Impossible
             }
             _ => Feasibility::Derivable,
         },
@@ -283,6 +311,31 @@ where
         },
 
         _ => unreachable!("feasibility is only called for named types"),
+    }
+}
+
+/// The properties of `ty` that render with `#[serde(default)]`.
+///
+/// A struct's own properties and those of an enum's struct-shaped
+/// variants, which render through the same path.
+fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
+    let is_default =
+        |prop: &&StructProperty<Id>| matches!(prop.state, StructPropertyState::Default);
+    match ty {
+        Type::Struct(struct_info) => struct_info.properties.iter().filter(is_default).collect(),
+        Type::Enum(enum_info) => enum_info
+            .variants
+            .iter()
+            .flat_map(|variant| match &variant.details {
+                VariantDetails::Struct(properties) => {
+                    properties.iter().filter(is_default).collect()
+                }
+                VariantDetails::Unit | VariantDetails::Item(_) | VariantDetails::Tuple(_) => {
+                    Vec::new()
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -326,6 +379,36 @@ where
             _ => None,
         })
         .collect::<VecDeque<_>>();
+
+    // A property whose state is StructPropertyState::Default renders as
+    // #[serde(default)], and serde's derive expands that into a call to
+    // T::default() on the property's type, so that type must implement
+    // Default. Seed the requirement for every such property: a struct's
+    // own, and those of an enum's struct-shaped variants, which render
+    // through the same path. The other states impose nothing here: an
+    // optional property is an Option<T>, which is Default whatever T
+    // is; a property with its own default value names a function rather
+    // than Default::default(); and a required property emits no serde
+    // default at all.
+    let default_required = close_supertraits(
+        [TypespaceTrait::Default]
+            .into_iter()
+            .collect::<TypespaceTraitSet>(),
+    );
+    work.extend(types.iter().flat_map(|(type_id, ty)| {
+        serde_default_properties(ty)
+            .into_iter()
+            .map(|prop| WorkItem {
+                target: prop.type_id.clone(),
+                traits: default_required.clone(),
+                origin: RequirementOrigin::PropertyDefault(type_id.clone()),
+                path: vec![PathStep {
+                    type_id: type_id.clone(),
+                    relation: Relation::Field(prop.rust_name.clone()),
+                }],
+            })
+            .collect::<Vec<_>>()
+    }));
 
     // Traits required via Settings::with_required_trait seed the trait
     // set of every named type. We route the seeds through the normal
@@ -1031,9 +1114,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::{Feasibility, feasibility};
     use crate::{
         Typespace, TypespaceTrait, TypespaceTraitSet,
-        build::{Native, TupleStruct, Type},
+        build::{
+            Native, Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct,
+            Type,
+        },
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::{ContainerType, Settings},
@@ -1137,6 +1224,147 @@ mod tests {
                 Relation::Field(name) if name == "weight"
             ));
         }
+    }
+
+    /// A property in the `Default` state renders as
+    /// `#[serde(default)]`, and serde's derive expands that into a call
+    /// to `T::default()`, so the property's type is required to
+    /// implement `Default`. A type that cannot is a finalization error
+    /// naming the field it came from.
+    #[test]
+    fn serde_default_property_conflicts_when_type_cannot_default() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Inner {
+                count: u32,
+            }
+
+            struct Outer {
+                #[default]
+                inner: Inner,
+            }
+        });
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::Default);
+        assert!(matches!(
+            &conflict.origin,
+            RequirementOrigin::PropertyDefault(id) if id == "Outer"
+        ));
+        assert_eq!(conflict.offender, "Inner");
+        assert!(matches!(
+            &conflict.reason,
+            OffenderReason::TypeCannotImplement { kind } if *kind == "struct"
+        ));
+        // One hop: the outer struct passes the requirement to its
+        // field.
+        assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
+        assert_eq!(conflict.path[0].type_id, "Outer");
+        assert!(matches!(
+            &conflict.path[0].relation,
+            Relation::Field(name) if name == "inner"
+        ));
+    }
+
+    /// A struct-shaped enum variant renders its fields through the same
+    /// path a struct's go through, `#[serde(default)]` included, so a
+    /// property in the `Default` state there makes the same
+    /// requirement.
+    #[test]
+    fn serde_default_property_in_variant_conflicts() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Inner {
+                count: u32,
+            }
+
+            enum Shape {
+                Rect {
+                    #[default]
+                    inner: Inner,
+                },
+            }
+        });
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("finalization unexpectedly succeeded");
+        };
+        let Error::TraitConflicts { conflicts } = err else {
+            panic!("expected TraitConflicts, got: {err}");
+        };
+
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        let conflict = &conflicts[0];
+        assert_eq!(conflict.required, TypespaceTrait::Default);
+        assert!(matches!(
+            &conflict.origin,
+            RequirementOrigin::PropertyDefault(id) if id == "Shape"
+        ));
+        assert_eq!(conflict.offender, "Inner");
+        assert_eq!(conflict.path.len(), 1, "path: {:#?}", conflict.path);
+        assert_eq!(conflict.path[0].type_id, "Shape");
+        assert!(matches!(
+            &conflict.path[0].relation,
+            Relation::Field(name) if name == "inner"
+        ));
+    }
+
+    /// The type of a property in the `Default` state takes `Default`
+    /// when it can. The requirement lands on that type alone: the
+    /// struct holding the property is not required to implement
+    /// anything.
+    #[test]
+    fn serde_default_property_grants_default_to_its_type() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Inner {
+                #[default]
+                count: u32,
+            }
+
+            struct Outer {
+                #[default]
+                inner: Inner,
+            }
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "Inner"),
+            trait_set([TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&typespace, "Outer"),
+            TypespaceTraitSet::empty()
+        );
+    }
+
+    /// The requirement stops at a container that implements `Default`
+    /// whatever it holds: a `Vec` property in the `Default` state asks
+    /// nothing of the element type.
+    #[test]
+    fn serde_default_property_requirement_stops_at_vec() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Tag {
+                id: u32,
+            }
+
+            struct S {
+                #[default]
+                tags: Vec<Tag>,
+            }
+        });
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(built_traits(&typespace, "Tag"), TypespaceTraitSet::empty());
+        assert_eq!(built_traits(&typespace, "S"), TypespaceTraitSet::empty());
     }
 
     /// A required trait that a type can neither derive nor realize
@@ -1998,8 +2226,9 @@ mod tests {
     }
 
     /// An attached default value realizes `Default` with a hand-written
-    /// impl that asks nothing of the type's fields: `S` takes `Default`
-    /// even though its `Color` field cannot implement `Default` at all.
+    /// impl that asks nothing of the fields the value names: `S` takes
+    /// `Default` even though its `Color` field cannot implement
+    /// `Default` at all.
     #[test]
     fn desired_default_from_attached_value_needs_nothing_of_fields() {
         let builder = typespace_builder!(
@@ -2027,6 +2256,95 @@ mod tests {
         assert_eq!(
             built_traits(&typespace, "Color"),
             trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// An optional property the default value leaves out costs
+    /// nothing: it renders as an `Option`, whose `Default` is `None`
+    /// whatever the property's own type is. `S` keeps `Default` even
+    /// though the omitted property's `Color` cannot implement it.
+    #[test]
+    fn desired_default_from_attached_value_exempts_omitted_optional() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                enum Color {
+                    Red,
+                    Green,
+                }
+
+                #[default = { count: 0 }]
+                struct S {
+                    count: u32,
+                    color: Optional<Color>,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&typespace, "Color"),
+            trait_set([TypespaceTrait::Clone])
+        );
+    }
+
+    /// The hand-written `Default` impl a whole-type default value
+    /// realizes takes each property the value names from the value and
+    /// fills the rest with `Default::default()`, so the properties the
+    /// value leaves out are what it obligates. The value is searched
+    /// for the wire name, not the Rust name (`trap` is obligated: the
+    /// value's `trap` key is not the `trap_wire` the property
+    /// serializes under). An optional property is exempt, and a
+    /// flattened property, having no wire name at all, is obligated.
+    #[test]
+    fn attached_struct_default_obligates_the_properties_it_omits() {
+        let ty = Struct::<String>::new()
+            .name("S")
+            .default(serde_json::json!({
+                "plain": 0,
+                "wire": 0,
+                "trap": 0,
+            }))
+            .properties([
+                StructProperty::new("plain", "u32".to_string()),
+                StructProperty::new("renamed", "u32".to_string())
+                    .with_json_name(StructPropertySerde::Rename("wire".to_string())),
+                StructProperty::new("trap", "u32".to_string())
+                    .with_json_name(StructPropertySerde::Rename("trap_wire".to_string())),
+                StructProperty::new("missing", "Missing".to_string()),
+                StructProperty::new("optional", "Omitted".to_string())
+                    .with_state(StructPropertyState::Optional),
+                StructProperty::new("flattened", "Flattened".to_string())
+                    .with_json_name(StructPropertySerde::Flatten),
+            ])
+            .build()
+            .unwrap();
+
+        let Feasibility::ManuallyRealizable(obligations) =
+            feasibility(&ty, TypespaceTrait::Default)
+        else {
+            panic!("expected a hand-written impl");
+        };
+
+        let obligated = obligations
+            .iter()
+            .map(|(relation, type_id)| match relation {
+                Relation::Field(name) => (name.as_str(), type_id.as_str()),
+                other => panic!("unexpected relation: {other}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            obligated,
+            vec![
+                ("trap", "u32"),
+                ("missing", "Missing"),
+                ("flattened", "Flattened"),
+            ]
         );
     }
 
@@ -2294,9 +2612,10 @@ mod tests {
 
     /// The `Settings::all_traits` preset over a struct with a float: the
     /// required set lands whole, and of the desired set `PartialEq` and
-    /// `PartialOrd` survive while `Default`, `Display` and `FromStr`
-    /// (impossible for a struct) and `Eq`, `Ord`, and `Hash` (blocked by the
-    /// float) are dropped.
+    /// `PartialOrd` survive while `Display` and `FromStr` (impossible
+    /// for any struct), `Default` (impossible for this struct, whose
+    /// properties are required), and `Eq`, `Ord`, and `Hash` (blocked
+    /// by the float) are dropped.
     #[test]
     fn all_traits_preset_over_float_struct() {
         let builder = typespace_builder!(Settings::maximal(), {
@@ -3709,6 +4028,25 @@ mod tests {
         let ts = builder.finalize(no_cycles).unwrap();
         assert_eq!(
             built_traits(&ts, "L"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+    }
+
+    #[test]
+    fn test_xxx() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                struct Foo {
+                    a: Optional<String>,
+                    #[default = 12]
+                    b: u32,
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&ts, "Foo"),
             trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
         );
     }
