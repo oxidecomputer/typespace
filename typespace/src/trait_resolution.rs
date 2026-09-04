@@ -137,7 +137,11 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 /// needs nothing further (an enum with no attached default value has
 /// no derive and no invented `#[default]` variant, so it is
 /// impossible). Every other trait derives normally.
-fn feasibility<Id>(ty: &Type<Id>, trait_name: TypespaceTrait) -> Feasibility<Id>
+fn feasibility<Id>(
+    ty: &Type<Id>,
+    trait_name: TypespaceTrait,
+    settings: &Settings,
+) -> Feasibility<Id>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -225,6 +229,7 @@ where
                 // manual rendering: a struct's fields have no implied
                 // textual order or separator.
                 TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+                TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
                 TypespaceTrait::Default => {
                     if common.default().is_some() {
                         Feasibility::ManuallyRealizable(Vec::new())
@@ -240,6 +245,7 @@ where
             // Same reasoning as Struct: there is no field to render
             // and no textual form to parse.
             TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+            TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
             // No fields means no obligations either way.
             _ => Feasibility::Derivable,
         },
@@ -267,17 +273,16 @@ where
                     Feasibility::ManuallyRealizable(Vec::new())
                 }
             }
-            TypespaceTrait::Default => {
-                // if common.default().is_some() {
-                //     Feasibility::ManuallyRealizable(Vec::new())
-                // } else {
-                //     Feasibility::Derivable
-                // }
-                // TODO 9/4/2026
-                // For now and for compatibility with typify, we're just going
-                // to say no here.
+            // An attached default value needs a hand-written impl that
+            // NewtypeStruct::render does not write. Claiming the trait
+            // would derive one that ignores the value, or fail to
+            // compile where the inner type has no Default.
+            TypespaceTrait::Default
+                if settings.typify_compat || common.default().is_some() =>
+            {
                 Feasibility::Impossible
             }
+            TypespaceTrait::Default => Feasibility::Derivable,
             _ => Feasibility::Derivable,
         },
 
@@ -522,7 +527,7 @@ where
                     continue;
                 }
 
-                match feasibility(ty, trait_name) {
+                match feasibility(ty, trait_name, settings) {
                     Feasibility::Derivable | Feasibility::Forward => {
                         built.add(trait_name);
                         derivable_new.add(trait_name);
@@ -853,6 +858,7 @@ fn provides<Id>(
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     has: &BTreeMap<Id, TypespaceTraitSet>,
+    settings: &Settings,
 ) -> bool
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -863,7 +869,7 @@ where
     };
 
     if ty.is_named() {
-        match feasibility(ty, trait_name) {
+        match feasibility(ty, trait_name, settings) {
             Feasibility::Impossible => false,
             Feasibility::Derivable | Feasibility::Forward => ty
                 .contained_children_related()
@@ -1072,7 +1078,7 @@ where
         .flat_map(|(type_id, ty)| {
             desired
                 .iter()
-                .filter(|trait_name| !provides(ty, **trait_name, &state.has))
+                .filter(|trait_name| !provides(ty, **trait_name, &state.has, settings))
                 .map(|trait_name| (type_id.clone(), *trait_name))
                 .collect::<Vec<_>>()
         })
@@ -1085,7 +1091,9 @@ where
     while let Some(Loss { loser, trait_name }) = state.queue.pop_front() {
         for referrer in referrers.get(&loser).into_iter().flatten() {
             let ty = types.get(referrer).unwrap();
-            if state.has[referrer].contains(&trait_name) && !provides(ty, trait_name, &state.has) {
+            if state.has[referrer].contains(&trait_name)
+                && !provides(ty, trait_name, &state.has, settings)
+            {
                 let granted = granted_traits(types, referrer);
                 state.lose(referrer, trait_name, &loser, granted);
             }
@@ -2326,7 +2334,7 @@ mod tests {
             .unwrap();
 
         let Feasibility::ManuallyRealizable(obligations) =
-            feasibility(&ty, TypespaceTrait::Default)
+            feasibility(&ty, TypespaceTrait::Default, &Settings::minimal())
         else {
             panic!("expected a hand-written impl");
         };

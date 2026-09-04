@@ -77,6 +77,10 @@ pub struct Settings {
     /// Generate builder for struct types.
     #[serde(default)]
     pub(crate) struct_builder: bool,
+
+    #[doc(hidden)]
+    #[serde(default)]
+    pub(crate) typify_compat: bool,
 }
 
 /// The traits an ordered-lookup container (`BTreeMap`, or the ordered
@@ -136,6 +140,7 @@ impl Settings {
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
             struct_builder: false,
+            typify_compat: false,
         }
     }
 
@@ -321,6 +326,12 @@ impl Settings {
     /// Specify whether struct types should include an associated builder.
     pub fn with_struct_builder(mut self, struct_builder: bool) -> Self {
         self.struct_builder = struct_builder;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_typify_compat(mut self, typify_compat: bool) -> Self {
+        self.typify_compat = typify_compat;
         self
     }
 }

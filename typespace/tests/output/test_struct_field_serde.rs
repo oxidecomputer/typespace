@@ -25,13 +25,11 @@ pub mod conflated_as_absent {
         pub peanut_option: Option<String>,
     }
     pub mod defaults {
-        pub fn conflated_as_absent_peanut_option() -> Option<String> {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn conflated_as_absent_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
-        pub fn conflated_as_absent_peanut_string() -> String {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn conflated_as_absent_peanut_string() -> String {
+            "peanuts".to_string()
         }
     }
 }
@@ -57,13 +55,11 @@ pub mod conflated_as_null {
         pub peanut_option: Option<String>,
     }
     pub mod defaults {
-        pub fn conflated_as_null_peanut_option() -> Option<String> {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn conflated_as_null_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
-        pub fn conflated_as_null_peanut_string() -> String {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn conflated_as_null_peanut_string() -> String {
+            "peanuts".to_string()
         }
     }
 }
@@ -90,13 +86,11 @@ pub mod custom_type {
         pub peanut_option: Option<String>,
     }
     pub mod defaults {
-        pub fn custom_type_peanut_option() -> Option<String> {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn custom_type_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
-        pub fn custom_type_peanut_string() -> String {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn custom_type_peanut_string() -> String {
+            "peanuts".to_string()
         }
     }
 }
@@ -127,13 +121,11 @@ pub mod double_option {
         pub peanut_option: Option<String>,
     }
     pub mod defaults {
-        pub fn double_option_peanut_option() -> Option<String> {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn double_option_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
-        pub fn double_option_peanut_string() -> String {
-            ::serde_json::from_value(::serde_json::Value::String("peanuts".to_string()))
-                .expect("invalid default value")
+        pub(super) fn double_option_peanut_string() -> String {
+            "peanuts".to_string()
         }
     }
 }

@@ -1311,15 +1311,17 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 serde_options.push(quote! { default = #serde_path });
 
                 let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
-                let value_tokens = crate::value_tokens::value_tokens(value);
+                let body = crate::default::generate_default(
+                    self.types,
+                    self.settings,
+                    value,
+                    type_id.clone(),
+                );
                 cs.get_root_mod().get_mod("defaults").add_item(
                     &fn_name_str,
                     quote! {
-                        pub fn #fn_name_ident() -> #ty_for_fn {
-                            // TODO 9/1/2026
-                            // I don't love this use of serde_json here...
-                            ::serde_json::from_value(#value_tokens)
-                                .expect("invalid default value")
+                        pub(super) fn #fn_name_ident() -> #ty_for_fn {
+                            #body
                         }
                     },
                 );

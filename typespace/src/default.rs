@@ -12,7 +12,7 @@ use crate::{
     TypespaceRenderer,
     build::{self, StructPropertySerde, StructPropertyState, Type},
     error::Error,
-    settings::{Settings, Std},
+    settings::{OptionalNullable, Settings, Std},
 };
 
 /// Prefix shared by the `::std::num::NonZero*` type paths.
@@ -119,6 +119,16 @@ where
         }
     }
 
+    fn render_option_variant2(&self, variant: &str) -> TokenStream {
+        let variant = format_ident!("{}", variant);
+        match self.settings.std {
+            Std::Unqualified => quote! { #variant },
+            Std::FullyQualified => {
+                quote! { ::std::option::Option::#variant }
+            }
+        }
+    }
+
     fn default_impl(
         &self,
         id: Id,
@@ -160,7 +170,7 @@ where
                 }))
             }
 
-            // Note that this doesn't mean "optiona"; it means that null is
+            // Note that this doesn't mean "optional"; it means that null is
             // also permitted as a value.
             Type::Option(type_id) => {
                 if value.is_null() {
@@ -333,22 +343,68 @@ where
                             id: id.clone(),
                             reason: format!("missing required property {}", key),
                         });
+                    } else if self.mode == Mode::Generate {
+                        // TODO 9/4/2026
+                        // Qualify default
+                        let prop_ident = format_ident!("{}", prop_info.rust_name);
+                        rendered_properties.push(quote! {
+                            #prop_ident: Default::default()
+                        });
                     }
                 }
                 (Some(prop_info), Some(prop_value)) => {
                     let prop_id = &prop_info.type_id;
-                    let xxx = self
-                        .default_impl(prop_id.clone(), prop_value)?
-                        .map(|prop_value| {
-                            let prop_ident = format_ident!("{}", prop_info.rust_name);
-                            quote! {
-                                #prop_ident: #prop_value
+
+                    let prop_ty = self.types.get(prop_id).unwrap();
+                    let is_option = matches!(prop_ty, Type::Option(_));
+
+                    let prop_default_value = match (&prop_info.state, is_option) {
+                        // Optional field with an Option type.
+                        (StructPropertyState::Optional, true) => {
+                            match &self.settings.optional_nullable {
+                                // A simple Option<T> is sufficient.
+                                OptionalNullable::ConflateAsAbsent
+                                | OptionalNullable::ConflateAsNull => {
+                                    self.default_impl(prop_id.clone(), prop_value)?
+                                }
+                                // Nest the option in a `Some`.
+                                OptionalNullable::DoubleOption => self
+                                    .default_impl(prop_id.clone(), prop_value)?
+                                    .map(|prop_value| {
+                                        let some = self.render_option_variant2("Some");
+                                        quote! { #some(#prop_value) }
+                                    }),
+
+                                // Construct the custom type
+                                OptionalNullable::CustomType(type_name) => self
+                                    .default_impl_custom_optional_nullable(
+                                        prop_id, prop_value, type_name,
+                                    )?,
                             }
-                        });
+                        }
+
+                        // Optional field with a non-Option type.
+                        (StructPropertyState::Optional, false) => self
+                            .default_impl(prop_id.clone(), prop_value)?
+                            .map(|prop_value| {
+                                let some = self.render_option_variant2("Some");
+                                quote! { #some(#prop_value) }
+                            }),
+
+                        // Non-optional field, and we don't care about the
+                        // type.
+                        _ => self.default_impl(prop_id.clone(), prop_value)?,
+                    };
+
+                    let prop_default = prop_default_value.map(|value| {
+                        let prop_ident = format_ident!("{}", prop_info.rust_name);
+                        quote! { #prop_ident: #value}
+                    });
 
                     if self.mode == Mode::Generate {
-                        rendered_properties
-                            .push(xxx.expect("a value should be generated with Mode::Generate"));
+                        rendered_properties.push(
+                            prop_default.expect("a value should be generated with Mode::Generate"),
+                        );
                     }
                 }
             }
@@ -475,12 +531,38 @@ where
             })
         }
     }
+
+    fn default_impl_custom_optional_nullable(
+        &self,
+        id: &Id,
+        value: &serde_json::Value,
+        _type_name: &str,
+    ) -> Result<Option<TokenStream>, Error<Id>> {
+        if value.is_null() {
+            Ok(self.mode.then(|| {
+                quote! {
+                    // TODO 9/4/2026
+                    // Create the null value.
+                    todo!()
+                }
+            }))
+        } else {
+            Ok(self.default_impl(id.clone(), value)?.map(|_value_stream| {
+                quote! {
+                    // TODO 9/4/2026
+                    // Create the typed value
+                    todo!()
+                }
+            }))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
     use quote::ToTokens;
+    use typespace_test_macro::typespace_builder;
 
     use super::*;
     use crate::settings::Std;
@@ -802,6 +884,41 @@ mod tests {
             reparse(
                 &quote! {
                     ::serde_json::from_str::<::foo::Wrapper<super::UInt>>("1").unwrap()
+                }
+                .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_struct_default_with_optional_field() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            #[default = { a: 1, b: 2}]
+            struct Test {
+                a: u32,
+                b: Optional<u32>,
+                c: Optional<u32>,
+            }
+        });
+
+        let types = builder.types;
+
+        let settings = Settings::minimal().with_std(Std::Unqualified);
+
+        assert_eq!(
+            reparse(&walk(
+                &types,
+                &settings,
+                "Test",
+                &serde_json::json! { { "a": 1, "b": 2}}
+            )),
+            reparse(
+                &quote! {
+                   Test {
+                       a: 1_u32,
+                       b: Some(2_u32),
+                       c: Default::default(),
+                   }
                 }
                 .to_string()
             )

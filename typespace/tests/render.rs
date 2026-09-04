@@ -3121,6 +3121,74 @@ fn test_default_impl_from_property_value() {
     }
 }
 
+/// A property default value across every kind the walk in `default.rs`
+/// currently handles: native, JSON value, float, newtype, type alias,
+/// `NonZero` integer, and option.
+///
+/// `test_default_impl_from_property_value` above already covers a
+/// plain integer; this rounds out the rest from the property side.
+#[test]
+fn test_default_value_property_kinds() {
+    let mut builder = typespace_builder!(default_settings(), {
+        native ::std::net::IpAddr: Clone + Debug + PartialEq + Serialize + Deserialize;
+
+        type Count = u32;
+
+        struct Wrapped(u32);
+
+        struct PropertyDefaults {
+            #[default = "127.0.0.1"]
+            address: ::std::net::IpAddr,
+            #[default = { "a": [8, 6, 7] }]
+            blob: JsonValue,
+            #[default = 1.5]
+            weight: f64,
+            #[default = 7]
+            wrapped: Wrapped,
+            #[default = 7]
+            count: Count,
+            #[default = 1]
+            nz: NonZeroU64,
+            #[default = 5]
+            maybe: Nullable<u32>,
+        }
+    });
+
+    // The macro's type grammar has no way to name a `NonZero` integer
+    // directly, so its type is added by hand.
+    builder
+        .insert(
+            "NonZeroU64".to_string(),
+            Type::Integer("::std::num::NonZeroU64".to_string()),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    // `::std::net::IpAddr` has no `Default` impl to declare, so
+    // `PropertyDefaults` cannot derive or hand-write `Default` either;
+    // an empty object exercises the same `defaults::` functions
+    // through `Deserialize` instead.
+    #[check_and_include(
+        "tests/output/test_default_value_property_kinds.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::PropertyDefaults>("{}").unwrap(),
+            import::PropertyDefaults {
+                address: "127.0.0.1".parse().unwrap(),
+                blob: serde_json::json!({ "a": [8, 6, 7] }),
+                weight: 1.5,
+                wrapped: import::Wrapped(7),
+                count: 7,
+                nz: ::std::num::NonZeroU64::new(1).unwrap(),
+                maybe: Some(5),
+            }
+        );
+    }
+}
+
 /// A required property: no `Default` derive and no `Default` impl.
 ///
 /// The schema says the property must be supplied, so there is no honest
@@ -3186,6 +3254,44 @@ fn test_default_other_struct_shapes() {
             import::TupleShape(String::new(), 0)
         );
         assert_eq!(import::UnitShape::default(), import::UnitShape);
+        assert_eq!(
+            import::NewtypeShape::from("x".to_string()),
+            import::NewtypeShape("x".to_string())
+        );
+        assert_eq!(
+            import::NewtypeShape::default(),
+            import::NewtypeShape(String::new())
+        );
+    }
+}
+
+/// `Default` on the struct shapes that carry no property states, under
+/// `typify_compat`.
+///
+/// All three shapes answer `Impossible`, matching typify1: no derive and
+/// no impl for any of them.
+#[test]
+fn test_default_other_struct_shapes_typify_compat() {
+    let builder = typespace_builder!(default_settings().with_typify_compat(true), {
+        struct NewtypeShape(String);
+
+        #[json = "unit"]
+        struct UnitShape;
+
+        struct TupleShape(String, u32);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_other_struct_shapes_typify_compat.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::TupleShape("a".to_string(), 7),
+            import::TupleShape("a".to_string(), 7)
+        );
+        assert_eq!(import::UnitShape, import::UnitShape);
         assert_eq!(
             import::NewtypeShape::from("x".to_string()),
             import::NewtypeShape("x".to_string())

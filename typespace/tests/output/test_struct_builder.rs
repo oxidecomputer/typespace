@@ -116,11 +116,8 @@ pub mod builder {
     }
 }
 pub mod defaults {
-    pub fn my_struct_d() -> u32 {
-        ::serde_json::from_value(
-                ::serde_json::Value::Number(::serde_json::Number::from(42i64)),
-            )
-            .expect("invalid default value")
+    pub(super) fn my_struct_d() -> u32 {
+        42_u32
     }
 }
 /// Error types.

@@ -21,10 +21,7 @@ impl ::std::default::Default for WithDefaultValue {
     }
 }
 pub mod defaults {
-    pub fn with_default_value_answer() -> u32 {
-        ::serde_json::from_value(
-                ::serde_json::Value::Number(::serde_json::Number::from(42i64)),
-            )
-            .expect("invalid default value")
+    pub(super) fn with_default_value_answer() -> u32 {
+        42_u32
     }
 }
