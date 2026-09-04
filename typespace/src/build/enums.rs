@@ -270,12 +270,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
-                    extra_derives: _,
-                    extra_attrs: _,
+                    extra_derives,
+                    extra_attrs,
                 },
             tag_type,
             variants,
-            deny_unknown_fields: _,
+            deny_unknown_fields,
         } = self
         else {
             unreachable!()
@@ -283,13 +283,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         let name = name.as_deref().expect("validated type has a name");
         let tag_type = tag_type.as_ref().expect("validated enum has a tag type");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
-        let serde = match tag_type {
-            EnumTagType::External => TokenStream::new(),
-            EnumTagType::Internal { tag } => quote! { #[serde(tag = #tag)] },
+
+        let mut serde_attrs = match tag_type {
+            EnumTagType::External => Vec::new(),
+            EnumTagType::Internal { tag } => vec![quote! { tag = #tag }],
             EnumTagType::Adjacent { tag, content } => {
-                quote! { #[serde(tag = #tag, content = #content)] }
+                vec![quote! { tag = #tag }, quote! { content = #content }]
             }
-            EnumTagType::Untagged => quote! { #[serde(untagged)] },
+            EnumTagType::Untagged => vec![quote! { untagged }],
         };
 
         let name_ident = format_ident!("{name}");
@@ -346,11 +347,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             }
         });
 
-        let derives_attr = typespace.render_derives(&derived_traits);
+        let derives_attr = typespace.render_derives(&derived_traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
+
+        if traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields {
+            serde_attrs.push(quote! { deny_unknown_fields });
+        }
+
+        let serde = (!serde_attrs.is_empty()).then(|| {
+            quote! { #[serde( #( #serde_attrs, )* )] }
+        });
 
         quote! {
-            // TODO I want to have the original unique id available
+            // TODO I want to have the original Id available
             #description
+            #( #attrs )*
             #derives_attr
             #serde
             pub enum #name_ident {

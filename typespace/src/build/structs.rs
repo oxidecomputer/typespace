@@ -213,11 +213,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
-                    extra_derives: _,
-                    extra_attrs: _,
+                    extra_derives,
+                    extra_attrs,
                 },
             properties,
-            deny_unknown_fields: _,
+            deny_unknown_fields,
         } = self
         else {
             unreachable!()
@@ -361,11 +361,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(traits);
+        let derive_attr = typespace.render_derives(traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
+
+        let serde = (traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields)
+            .then(|| quote! { #[serde(deny_unknown_fields)] });
 
         quote! {
             #description
+            #( #attrs )*
             #derive_attr
+            #serde
             pub struct #name_ident {
                 #( #rendered_properties, )*
             }
@@ -612,8 +618,8 @@ impl UnitStruct {
                     description,
                     built: Some(TypeCommonBuilt { traits }),
                     default: _,
-                    extra_derives: _,
-                    extra_attrs: _,
+                    extra_derives,
+                    extra_attrs,
                 },
             repr,
         } = self
@@ -630,53 +636,50 @@ impl UnitStruct {
         let mut traits = traits.clone();
         let serde_serialize = traits.remove(TypespaceTrait::Serialize).then(|| {
             quote! {
-            impl ::serde::Serialize for #name_ident {
-                fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                where
-                    S: ::serde::Serializer,
-                {
-                    #repr_tokens.serialize(serializer)
+                impl ::serde::Serialize for #name_ident {
+                    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                    where
+                        S: ::serde::Serializer,
+                    {
+                        #repr_tokens.serialize(serializer)
+                    }
                 }
             }
-
-
-            }
         });
+
         let serde_deserialize = traits.remove(TypespaceTrait::Deserialize).then(|| {
             quote! {
-            impl<'de> ::serde::Deserialize<'de> for #name_ident {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: ::serde::Deserializer<'de>,
-                {
-                    let expected = #repr_tokens;
-                    let value: serde_json::Value =
-                        ::serde::Deserialize::deserialize(deserializer)?;
-                    if value != expected {
-                        return Err(::serde::de::Error::custom(format!(
-                            "expected unit struct value {}, found {}",
-                            #repr_string,
-                            ::serde_json::to_string(&value).unwrap())));
+                impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                    where
+                        D: ::serde::Deserializer<'de>,
+                    {
+                        let expected = #repr_tokens;
+                        let value: serde_json::Value =
+                            ::serde::Deserialize::deserialize(deserializer)?;
+                        if value != expected {
+                            return Err(::serde::de::Error::custom(format!(
+                                "expected unit struct value {}, found {}",
+                                #repr_string,
+                                ::serde_json::to_string(&value).unwrap())));
+                        }
+                        Ok(#name_ident)
                     }
-                    Ok(#name_ident)
                 }
-            }
-
-
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits);
+        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {
             #description
             #derive_attr
+            #( #attrs )*
             pub struct #name_ident;
 
             #serde_serialize
             #serde_deserialize
-
-
         }
     }
 }
@@ -839,8 +842,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
-                    extra_derives: _,
-                    extra_attrs: _,
+                    extra_derives,
+                    extra_attrs,
                 },
             fields,
             rest,
@@ -955,10 +958,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits);
+        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {
             #description
+            #( #attrs )*
             #derive_attr
             pub struct #name_ident(
                 #( pub #field_ident, )*
@@ -1170,8 +1175,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     description,
                     default: _,
                     built: Some(TypeCommonBuilt { traits }),
-                    extra_derives: _,
-                    extra_attrs: _,
+                    extra_derives,
+                    extra_attrs,
                 },
             inner,
             constraints: _,
@@ -1186,7 +1191,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let inner_ident = typespace.render_ident(inner);
 
-        let derive_attr = typespace.render_derives(&traits);
+        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        let attrs = typespace.render_attrs(extra_attrs);
 
         // If either serde trait is derived, use the transparent attribute.
         let serde_attr = (traits.contains(&TypespaceTrait::Serialize)
@@ -1197,6 +1203,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         quote! {
             #description
+            #( #attrs )*
             #derive_attr
             #serde_attr
             pub struct #name_ident(pub #inner_ident);

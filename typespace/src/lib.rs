@@ -904,7 +904,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     /// Render the derive attribute given the computed traits for a type and
     /// the extra derives from settings.
-    pub(crate) fn render_derives(&self, traits: &TypespaceTraitSet) -> Option<TokenStream> {
+    pub(crate) fn render_derives(
+        &self,
+        traits: &TypespaceTraitSet,
+        extra_derives: &[String],
+    ) -> Option<TokenStream> {
         // Verify that traits that require manual implementation aren't
         // included as derives. If this happens it indicates that either the
         // finalize step didn't detect an unsatisfiable situation, or that the
@@ -929,16 +933,33 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         // I think that we should validate (and maybe render) these extra
         // derives from settings during finalization and store them in the
         // TypespaceRenderer.
-        derives.extend(self.settings.extra_derives.iter().map(|derive| {
-            syn::parse_str::<syn::Path>(derive)
-                .expect("invalid derive path")
-                .to_token_stream()
-        }));
+        derives.extend(
+            self.settings
+                .extra_derives
+                .iter()
+                .chain(extra_derives.iter())
+                .map(|derive| {
+                    syn::parse_str::<syn::Path>(derive)
+                        .expect("invalid derive path")
+                        .to_token_stream()
+                }),
+        );
         (!derives.is_empty()).then(|| {
             quote! {
                 #[derive( #( #derives ),* )]
             }
         })
+    }
+
+    pub(crate) fn render_attrs<'b>(
+        &'b self,
+        extra_attrs: &'b [String],
+    ) -> impl Iterator<Item = TokenStream> + 'b {
+        self.settings
+            .extra_attrs
+            .iter()
+            .chain(extra_attrs.iter())
+            .map(|attr| attr.parse().unwrap())
     }
 
     pub(crate) fn render_ident_impl(
