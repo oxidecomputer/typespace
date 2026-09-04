@@ -3273,3 +3273,110 @@ fn test_default_whole_type_value_with_required_property() {
          Default::default(): {rendered}"
     );
 }
+
+// The tests below cover the value walk in `default.rs`. Only its check
+// half is reachable from here: `finalize` validates a type's own
+// default value, and nothing renders one yet.
+
+/// A default value that fits its type survives `finalize`.
+///
+/// One type per shape the walk handles: a newtype struct over an alias,
+/// a native type, a JSON value, a float, and a unit struct.
+#[test]
+fn test_default_value_shapes_accepted() {
+    let builder = typespace_builder!(default_settings(), {
+        native ::std::net::IpAddr: Clone + Debug + PartialEq + Serialize + Deserialize;
+
+        type Count = u32;
+
+        #[default = 3]
+        struct Counted(Count);
+
+        #[default = "127.0.0.1"]
+        struct Addressed(::std::net::IpAddr);
+
+        #[default = { "a": [8, 6, 7] }]
+        struct Blob(JsonValue);
+
+        #[default = 1.5]
+        struct Weight(f64);
+
+        #[json = "marker"]
+        #[default = "marker"]
+        struct Marker;
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_shapes_accepted.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(import::Counted::from(3), import::Counted(3));
+        assert_eq!(import::Weight::from(1.5), import::Weight(1.5));
+        assert_eq!(
+            serde_json::from_str::<import::Marker>(r#""marker""#).unwrap(),
+            import::Marker
+        );
+    }
+}
+
+/// A native type's default value is taken on faith.
+///
+/// Nothing here knows what the type's own `Deserialize` accepts, so an
+/// unusable value reaches the generated code rather than `finalize`.
+#[test]
+fn test_default_value_native_unchecked() {
+    let builder = typespace_builder!(default_settings(), {
+        native ::std::net::IpAddr: Clone + Debug + PartialEq + Serialize + Deserialize;
+
+        #[default = { "not": "an address" }]
+        struct Addressed(::std::net::IpAddr);
+    });
+    assert!(builder.finalize(no_cycles).is_ok());
+}
+
+/// A float rejects a value that is not a number.
+#[test]
+fn test_default_value_float_rejects_non_number() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = "1.5"]
+        struct Weight(f64);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A newtype struct's default value is checked against its inner type.
+///
+/// The inner type here is an alias, so the alias has to forward for the
+/// mismatch to be found at all.
+#[test]
+fn test_default_value_newtype_rejects_inner_mismatch() {
+    let builder = typespace_builder!(default_settings(), {
+        type Count = u32;
+
+        #[default = "3"]
+        struct Counted(Count);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A unit struct accepts only the value it serializes as.
+#[test]
+fn test_default_value_unit_struct_rejects_other_value() {
+    let builder = typespace_builder!(default_settings(), {
+        #[json = "marker"]
+        #[default = "other"]
+        struct Marker;
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}

@@ -534,7 +534,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
             if let Some(common) = typ.common()
                 && let Some(default) = &common.default
             {
-                check_default(&self.types, &default.0, type_id.clone())?;
+                check_default(&self.types, &self.settings, &default.0, type_id.clone())?;
             }
         }
         Ok(())
