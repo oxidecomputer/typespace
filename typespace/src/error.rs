@@ -228,6 +228,18 @@ where
         /// The conflicts, in the order propagation found them.
         conflicts: Vec<TraitConflict<Id>>,
     },
+
+    /// TODO 9/4/2026
+    /// fix this up
+    #[error("the value `{value}` does not fit the type `{id}`: {reason}")]
+    InvalidDefault {
+        /// The value that does not fit the type.
+        value: serde_json::Value,
+        /// The type the value does not fit.
+        id: Id,
+        /// Why
+        reason: String,
+    },
 }
 
 /// The axis on which a name collision occurred.

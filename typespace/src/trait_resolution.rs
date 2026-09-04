@@ -19,7 +19,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use log::debug;
 
-use crate::build::{Native, NewtypeConstraints, NewtypeStruct, Struct, TupleStruct, Type};
+use crate::build::{
+    Native, NewtypeConstraints, NewtypeStruct, Struct, StructPropertyState, TupleStruct, Type,
+};
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::Settings;
 use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet};
@@ -142,8 +144,58 @@ where
         // An alias has no impl site of its own to realize anything
         // with; every trait's fate belongs entirely to its target.
         Type::TypeAlias(_) => Feasibility::Forward,
+        Type::Struct(struct_info) => {
+            match trait_name {
+                // Neither has a derive, and neither has a sensible
+                // manual rendering: a struct's fields have no implied
+                // textual order or separator.
+                TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+                TypespaceTrait::Default => {
+                    if struct_info.common.default().is_some() {
+                        Feasibility::ManuallyRealizable(Vec::new())
+                    } else if struct_info
+                        .properties
+                        .iter()
+                        .any(|prop| matches!(&prop.state, StructPropertyState::Required))
+                    {
+                        // If there's any required property, Default is not
+                        // possible.
+                        Feasibility::Impossible
+                    } else {
+                        let xxx = struct_info
+                            .properties
+                            .iter()
+                            .filter_map(|prop| {
+                                matches!(prop.state, StructPropertyState::DefaultValue(_)).then(
+                                    || {
+                                        (
+                                            Relation::Field(prop.rust_name.to_string()),
+                                            prop.type_id.clone(),
+                                        )
+                                    },
+                                )
+                            })
+                            .collect();
+                        Feasibility::ManuallyRealizable(xxx)
+                    }
+                    // } else if struct_info
+                    //     .properties
+                    //     .iter()
+                    //     .any(|prop| matches!(&prop.state, StructPropertyState::DefaultValue(_)))
+                    // {
+                    //     // Additionally, if there's any property with an
+                    //     // explicit default value, we *can* implement Default,
+                    //     // but need to do so by hand.
+                    //     Feasibility::ManuallyRealizable(struct_info.propert
+                    // } else {
+                    //     Feasibility::Derivable
+                    // }
+                }
+                _ => Feasibility::Derivable,
+            }
+        }
 
-        Type::Struct(Struct { common, .. }) | Type::TupleStruct(TupleStruct { common, .. }) => {
+        Type::TupleStruct(TupleStruct { common, .. }) => {
             match trait_name {
                 // Neither has a derive, and neither has a sensible
                 // manual rendering: a struct's fields have no implied
@@ -980,11 +1032,11 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{
+        Typespace, TypespaceTrait, TypespaceTraitSet,
         build::{Native, TupleStruct, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::{ContainerType, Settings},
-        Typespace, TypespaceTrait, TypespaceTraitSet,
     };
     use typespace_test_macro::typespace_builder;
 
@@ -2240,11 +2292,11 @@ mod tests {
         assert_eq!(built_traits(&typespace, "Inner"), only_clone);
     }
 
-    /// The `Settings::all_traits` preset over a struct with a float:
-    /// the required set lands whole, and of the desired set
-    /// `PartialEq`, `PartialOrd`, and `Default` survive while
-    /// `Display` and `FromStr` (impossible for a struct) and `Eq`,
-    /// `Ord`, and `Hash` (blocked by the float) are dropped.
+    /// The `Settings::all_traits` preset over a struct with a float: the
+    /// required set lands whole, and of the desired set `PartialEq` and
+    /// `PartialOrd` survive while `Default`, `Display` and `FromStr`
+    /// (impossible for a struct) and `Eq`, `Ord`, and `Hash` (blocked by the
+    /// float) are dropped.
     #[test]
     fn all_traits_preset_over_float_struct() {
         let builder = typespace_builder!(Settings::maximal(), {
@@ -2266,7 +2318,6 @@ mod tests {
                 TypespaceTrait::JsonSchema,
                 TypespaceTrait::PartialEq,
                 TypespaceTrait::PartialOrd,
-                TypespaceTrait::Default,
             ])
         );
     }
@@ -2769,6 +2820,7 @@ mod tests {
                 }
 
                 struct S {
+                    #[default]
                     swatch: Vec<Color>,
                 }
             }
@@ -2794,6 +2846,7 @@ mod tests {
                 }
 
                 struct S {
+                    #[default]
                     color: Nullable<Color>,
                 }
             }
@@ -2821,7 +2874,9 @@ mod tests {
             }
 
             struct S {
+                #[default]
                 list: Vec<NoDefault>,
+                #[default]
                 maybe: Nullable<NoDefault>,
             }
         });
@@ -3312,8 +3367,8 @@ mod tests {
     /// A removal reaches the top of a 32-level containment chain.
     #[test]
     fn desired_removal_crosses_a_deep_chain() {
-        use crate::build::NewtypeStruct;
         use crate::TypespaceBuilder;
+        use crate::build::NewtypeStruct;
 
         // Deeper than a macro literal wants to be: the blocked leaf is
         // 32 hops down, so the removal is queued and requeued all the
@@ -3460,6 +3515,7 @@ mod tests {
             }
 
             struct Top {
+                #[default]
                 m: Middle,
             }
         });

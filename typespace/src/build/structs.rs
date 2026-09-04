@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 
 use quote::{format_ident, quote};
 
-use crate::build::{validate_ident, JsonValue, Type, TypeCommon, TypeCommonBuilt};
+use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
 use crate::error::{Error, NameAxis};
-use crate::{RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
+use crate::{DefaultConstructor, RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
 
 /// A struct with named fields.
 ///
@@ -211,7 +211,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 TypeCommon {
                     name,
                     description,
-                    default: _,
+                    default,
                     built: Some(TypeCommonBuilt { traits }),
                     extra_derives,
                     extra_attrs,
@@ -226,6 +226,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let name_ident = format_ident!("{name}");
         let snake_name = heck::AsSnakeCase(name).to_string();
+
+        let mut traits = traits.clone();
 
         let rendered_properties = properties
             .iter()
@@ -361,7 +363,33 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(traits, extra_derives);
+        let default_impl = traits.contains(&TypespaceTrait::Default).then(|| {
+            // If there's no whole-type default value and every property's
+            // default is the intrinsic `Default::default()`, the hand-written
+            // `impl Default` would be exactly what `#[derive(Default)]`
+            // produces (and would trip clippy's `derivable_impls` lint
+            // downstream). In that case we derive `Default` rather than
+            // emitting the manual impl below.
+            if default.is_none()
+                && rendered_properties
+                    .iter()
+                    .all(|prop| matches!(&prop.default, DefaultConstructor::Default))
+            {
+                return Default::default();
+            }
+
+            traits.remove(TypespaceTrait::Default);
+
+            quote! {
+                impl Default for #name_ident {
+                    fn default() -> Self {
+                        todo!()
+                    }
+                }
+            }
+        });
+
+        let derive_attr = typespace.render_derives(&traits, extra_derives);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let serde = (traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields)

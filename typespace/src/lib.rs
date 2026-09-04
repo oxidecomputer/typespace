@@ -60,6 +60,7 @@
 
 pub mod build;
 pub(crate) mod cycles;
+mod default;
 pub mod error;
 pub mod settings;
 pub(crate) mod trait_resolution;
@@ -73,15 +74,16 @@ pub mod view;
 // they would from an external crate depending on `typespace`.
 extern crate self as typespace;
 
-use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 
 use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
 };
+use crate::default::check_default;
 use crate::error::Error;
 use crate::settings::{OptionalNullable, Settings, Std};
 
@@ -526,6 +528,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
+    fn check_type_defaults(&self) -> Result<(), Error<Id>> {
+        for (type_id, typ) in &self.types {
+            if let Some(common) = typ.common()
+                && let Some(default) = &common.default
+            {
+                check_default(&self.types, &default.0, type_id.clone())?;
+            }
+        }
+        Ok(())
+    }
+
     /// Reject `Type::Never` in any position that requires a value.
     ///
     /// `Never` renders as `::json_serde::Absent`, a type that can be
@@ -722,6 +735,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
         // Check the uniqueness of type names.
         self.check_type_names()?;
+
+        // Check type defaults
+        self.check_type_defaults()?;
 
         // Disallow never (!) from being used in positions where a value would
         // be required.

@@ -8,8 +8,7 @@
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    ::std::default::Default
+    PartialOrd
 )]
 pub struct MyStruct {
     pub a: ::std::string::String,
