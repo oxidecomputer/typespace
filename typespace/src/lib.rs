@@ -18,9 +18,12 @@
 //!
 //! - [serde](https://crates.io/crates/serde), with the `derive`
 //!   feature: required by every generated struct, enum, newtype
-//!   struct, unit struct, and tuple struct; each is emitted with serde
-//!   derives or hand-written `Serialize`/`Deserialize` impls. Only
-//!   output consisting solely of type aliases avoids it.
+//!   struct, unit struct, and tuple struct whose trait set holds
+//!   [`TypespaceTrait::Serialize`] or [`TypespaceTrait::Deserialize`];
+//!   each is emitted with serde derives or hand-written
+//!   `Serialize`/`Deserialize` impls. Settings that require neither
+//!   trait produce no derive, no impl, and no `#[serde(..)]`
+//!   attribute, and so no dependency.
 //! - [serde_json](https://crates.io/crates/serde_json): required if
 //!   the output contains a [`build::Type::JsonValue`] (rendered as
 //!   `::serde_json::Value`), a property with
@@ -43,6 +46,10 @@
 //!     `::json_serde::FlattenedSequenceDeserializer`);
 //!   - a [`build::Type::Never`] (rendered as `::json_serde::Absent`).
 //!
+//!   `Absent`'s use is independent of the trait set holds; the
+//!   rest ride on serde attributes and impls, so settings that require
+//!   neither serde trait leave them out.
+//!
 //!   The `::json_serde` path itself follows
 //!   [`settings::Settings::with_json_serde_crate`], for consumers that
 //!   re-export the crate under another name.
@@ -62,6 +69,7 @@ pub mod build;
 pub(crate) mod cycles;
 mod default;
 pub mod error;
+pub(crate) mod serde_attrs;
 pub mod settings;
 pub(crate) mod trait_resolution;
 pub(crate) mod value_tokens;
@@ -85,6 +93,7 @@ use crate::build::{
 };
 use crate::default::check_default;
 use crate::error::Error;
+use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
 use crate::settings::{OptionalNullable, Settings, Std};
 
 // 6/25/2025
@@ -1155,6 +1164,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             description,
             type_id,
         }: &StructProperty<Id>,
+        serde_derives: SerdeDerives,
         vis_pub: bool,
         context: &str,
         cs: &mut codespace::Codespace,
@@ -1165,7 +1175,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
         });
 
-        let mut serde_options = Vec::new();
+        let mut serde_options = serde_derives.attrs();
 
         match json_name {
             StructPropertySerde::None => {}
@@ -1373,18 +1383,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
         };
 
-        let serde = (!serde_options.is_empty()).then(|| {
-            quote! {
-                #[serde(
-                    #( #serde_options ),*
-                )]
-            }
-        });
         let rust_name_ident = format_ident!("{rust_name}");
 
         RenderedStructProperty {
             description,
-            serde,
+            serde: serde_options,
             vis_pub,
             rust_name_ident,
             prop_ty_ident,
@@ -1395,7 +1398,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     fn render_struct_property_add_skip(
         &self,
-        serde_options: &mut Vec<TokenStream>,
+        serde_options: &mut SerdeAttrs,
         ty_id: &Id,
         ty: &Type<Id>,
         std_opt_is_none: String,
@@ -1486,7 +1489,7 @@ pub(crate) enum DefaultConstructor {
 
 pub(crate) struct RenderedStructProperty {
     pub description: Option<TokenStream>,
-    pub serde: Option<TokenStream>,
+    pub serde: SerdeAttrs,
     pub vis_pub: bool,
     pub rust_name_ident: syn::Ident,
     pub prop_ty_ident: TokenStream,

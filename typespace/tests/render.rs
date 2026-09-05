@@ -2874,6 +2874,178 @@ fn test_deny_unknown_fields_gate() {
     }
 }
 
+// serde's derive macros are what read `#[serde(..)]`, so a type that
+// derives neither `Serialize` nor `Deserialize` must carry no such
+// attribute: the compiler rejects one with nothing to consume it. One
+// graph, reaching every site that emits an attribute, is rendered here
+// under all four combinations of the two traits. The snapshot is
+// compiled as part of this test, so the four modules existing is the
+// proof that each combination produces valid Rust.
+#[test]
+fn test_serde_trait_combinations() {
+    let configs = [
+        ("neither", Vec::new()),
+        ("serialize_only", vec![TypespaceTrait::Serialize]),
+        ("deserialize_only", vec![TypespaceTrait::Deserialize]),
+        (
+            "both",
+            vec![TypespaceTrait::Serialize, TypespaceTrait::Deserialize],
+        ),
+    ];
+
+    let outputs = configs.into_iter().map(|(name, serde_traits)| {
+        // Everything except the two serde traits is held constant, so
+        // the four modules differ only in what this test is about.
+        let settings = serde_traits.into_iter().fold(
+            Settings::minimal()
+                .with_std(Std::Unqualified)
+                .with_required_trait(TypespaceTrait::Debug),
+            Settings::with_required_trait,
+        );
+
+        let builder = typespace_builder!(settings, {
+            struct Inner {
+                value: u32,
+            }
+
+            // Every property state that pushes an option: rename,
+            // flatten, the optional/nullable spread, the skips that
+            // come with `default`, a default value with a generated
+            // function, and a property that must be absent.
+            struct Outer {
+                #[rename = "my-field"]
+                my_field: String,
+                #[flatten]
+                inner: Inner,
+                maybe: Optional<String>,
+                nullable: Nullable<String>,
+                maybe_nullable: OptionalNullable<String>,
+                #[default]
+                tags: Vec<String>,
+                #[default]
+                flag: bool,
+                #[default]
+                nothing: (),
+                #[default = "peanuts"]
+                peanut: String,
+                never: Optional<!>,
+            }
+
+            // Kept clear of `Outer`: serde rejects
+            // `deny_unknown_fields` alongside a flattened field.
+            #[deny_unknown_fields]
+            struct Strict {
+                name: String,
+            }
+
+            // Newtype struct: `transparent`.
+            struct Wrapper(String);
+
+            // Unit struct and tuple struct: hand-written serde impls
+            // rather than derives, and so no attributes either way.
+            #[json = "<<marker>>"]
+            struct Marker;
+
+            struct Pair(String, u32);
+
+            enum External {
+                Unit,
+                Payload(String),
+                Fields {
+                    #[rename = "cee"]
+                    c: u32,
+                },
+            }
+
+            #[tag = "type"]
+            enum Internal {
+                X { x: u32 },
+                Y { y: u32 },
+            }
+
+            #[tag = "t", content = "c"]
+            #[deny_unknown_fields]
+            enum Adjacent {
+                P(String),
+                Q(u32),
+            }
+
+            #[untagged]
+            enum Untagged {
+                S(String),
+                N(u32),
+            }
+
+            enum Renamed {
+                #[json = "one"]
+                One,
+                #[json = "two"]
+                Two,
+            }
+
+            type Alias = Vec<String>;
+        });
+
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        (name, ts.to_codespace())
+    });
+
+    let mut codespace = Codespace::default();
+
+    for (name, sub_codespace) in outputs {
+        codespace
+            .get_root_mod()
+            .replace_mod(name, sub_codespace.into_root_mod());
+    }
+
+    let out = codespace.into_stream();
+
+    #[check_and_include("tests/output/test_serde_trait_combinations.rs", out)]
+    fn inner() {
+        // Both traits: the attributes do their job in both directions.
+        let v: import::both::Outer =
+            serde_json::from_str(r#"{"my-field": "hi", "value": 7, "nullable": null}"#).unwrap();
+        assert_eq!(v.my_field, "hi");
+        assert_eq!(v.inner.value, 7);
+        assert_eq!(v.peanut, "peanuts");
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["my-field"], "hi");
+        assert_eq!(json["value"], 7);
+        assert_eq!(json.get("tags"), None);
+
+        // Serialize only: the deserialize-side options ride along
+        // inert, and serialization is unaffected by them.
+        let v = import::serialize_only::Outer {
+            my_field: "hi".to_string(),
+            inner: import::serialize_only::Inner { value: 7 },
+            maybe: None,
+            nullable: None,
+            maybe_nullable: None,
+            tags: Vec::new(),
+            flag: false,
+            nothing: (),
+            peanut: "peanuts".to_string(),
+            never: ::json_serde::Absent,
+        };
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["my-field"], "hi");
+        assert_eq!(json["value"], 7);
+
+        // Deserialize only: the serialize-side options ride along
+        // inert, and deserialization is unaffected by them.
+        let v: import::deserialize_only::Outer =
+            serde_json::from_str(r#"{"my-field": "hi", "value": 7, "nullable": null}"#).unwrap();
+        assert_eq!(v.my_field, "hi");
+        assert_eq!(v.peanut, "peanuts");
+
+        // Neither: no derive, so no attribute. The module compiling is
+        // the whole point; this just reaches into it.
+        let v = import::neither::Wrapper("x".to_string());
+        assert_eq!(v.0, "x");
+    }
+}
+
 // Per-type `#[derive = [..]]` renders alongside the computed traits and
 // the crate-wide `with_derive` list: computed traits first, then the
 // crate-wide derives, then the per-type ones last.

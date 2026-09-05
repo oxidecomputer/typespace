@@ -6,6 +6,7 @@ use quote::{format_ident, quote};
 
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
 use crate::error::{Error, NameAxis};
+use crate::serde_attrs::SerdeDerives;
 use crate::{DefaultConstructor, RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
 
 /// A struct with named fields.
@@ -224,10 +225,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let snake_name = heck::AsSnakeCase(name).to_string();
 
         let mut traits = traits.clone();
+        let serde_derives = SerdeDerives::new(&traits);
 
         let rendered_properties = properties
             .iter()
-            .map(|prop| typespace.render_struct_property(prop, true, &snake_name, cs))
+            .map(|prop| {
+                typespace.render_struct_property(prop, serde_derives, true, &snake_name, cs)
+            })
             .collect::<Vec<_>>();
 
         if typespace.settings.struct_builder {
@@ -411,8 +415,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let derive_attr = typespace.render_derives(&traits, extra_derives);
         let attrs = typespace.render_attrs(extra_attrs);
 
-        let serde = (traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields)
-            .then(|| quote! { #[serde(deny_unknown_fields)] });
+        let mut serde = serde_derives.attrs();
+        // An unknown field is a deserialization concern, so this one is
+        // held back from a Serialize-only type rather than left inert.
+        if serde_derives.deserialize() && *deny_unknown_fields {
+            serde.push(quote! { deny_unknown_fields });
+        }
 
         quote! {
             #description
@@ -1256,12 +1264,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let derive_attr = typespace.render_derives(&traits, extra_derives);
         let attrs = typespace.render_attrs(extra_attrs);
 
-        // If either serde trait is derived, use the transparent attribute.
-        let serde_attr = (traits.contains(&TypespaceTrait::Serialize)
-            || traits.contains(&TypespaceTrait::Deserialize))
-        .then(|| {
-            quote! { #[serde(transparent)] }
-        });
+        // A newtype struct is its inner value on the wire.
+        let mut serde_attr = SerdeDerives::new(traits).attrs();
+        serde_attr.push(quote! { transparent });
 
         quote! {
             #description

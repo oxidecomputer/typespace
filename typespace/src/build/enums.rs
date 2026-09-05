@@ -9,6 +9,7 @@ use crate::build::{
     JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt, check_properties, validate_ident,
 };
 use crate::error::{Error, NameAxis};
+use crate::serde_attrs::SerdeDerives;
 use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
 
 /// An enum.
@@ -284,15 +285,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         let tag_type = tag_type.as_ref().expect("validated enum has a tag type");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
-        let mut serde_attrs = match tag_type {
-            EnumTagType::External => Vec::new(),
-            EnumTagType::Internal { tag } => vec![quote! { tag = #tag }],
-            EnumTagType::Adjacent { tag, content } => {
-                vec![quote! { tag = #tag }, quote! { content = #content }]
-            }
-            EnumTagType::Untagged => vec![quote! { untagged }],
-        };
-
         let name_ident = format_ident!("{name}");
 
         // Display and FromStr have no derive. An enum that implements
@@ -302,6 +294,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         let mut derived_traits = traits.clone();
         let unit_variant_impls = self.all_unit_variants().then(|| {
             self.render_unit_variant_impls(typespace, cs, &name_ident, &mut derived_traits)
+        });
+
+        let serde_derives = SerdeDerives::new(&derived_traits);
+        let mut serde = serde_derives.attrs();
+        serde.extend(match tag_type {
+            EnumTagType::External => Vec::new(),
+            EnumTagType::Internal { tag } => vec![quote! { tag = #tag }],
+            EnumTagType::Adjacent { tag, content } => {
+                vec![quote! { tag = #tag }, quote! { content = #content }]
+            }
+            EnumTagType::Untagged => vec![quote! { untagged }],
         });
 
         let variant_from = self.render_variant_from(typespace, &name_ident);
@@ -314,7 +317,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 details,
             } = variant;
             let name = format_ident!("{}", rust_name);
-            let variant_serde = rename.as_ref().map(|n| quote! { #[serde(rename = #n)] });
+            let mut variant_serde = serde_derives.attrs();
+            variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
             let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
             let data = match details {
@@ -331,6 +335,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     let properties = properties.iter().map(|prop| {
                         typespace.render_struct_property(
                             prop,
+                            serde_derives,
                             false,
                             &format!("{}{}", name, rust_name),
                             cs,
@@ -347,13 +352,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             }
         });
 
-        if traits.contains(&TypespaceTrait::Deserialize) && *deny_unknown_fields {
-            serde_attrs.push(quote! { deny_unknown_fields });
+        // An unknown field is a deserialization concern, so this one is
+        // held back from a Serialize-only type rather than left inert.
+        if serde_derives.deserialize() && *deny_unknown_fields {
+            serde.push(quote! { deny_unknown_fields });
         }
-
-        let serde = (!serde_attrs.is_empty()).then(|| {
-            quote! { #[serde( #( #serde_attrs, )* )] }
-        });
 
         // `Default` comes out of the derive list unconditionally: a derived
         // `Default` on an enum needs a `#[default]` variant, and typespace
