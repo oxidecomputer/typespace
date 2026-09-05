@@ -92,3 +92,37 @@ fn desired_eq_not_granted_over_unknown_hash_key() {
          Hash: {derives:?}"
     );
 }
+
+// Box forwards Display, and typespace does not claim it.
+//
+// The graph, roughly:
+//
+//     struct Wrapper(Box<String>);
+//
+// `impl<T: Display + ?Sized> Display for Box<T>` exists, so a Display
+// desired of Wrapper can be granted: the newtype's generated impl
+// prints its inner value, and the inner value is a Box<String>, which
+// prints. Trait resolution treats Display and FromStr alike at every
+// container, and Box is where the two part company: Box has no FromStr
+// at any parameter, but it does have a Display.
+//
+// The answer is conservative rather than wrong -- a trait that could
+// have been granted is dropped, and a required one is refused rather
+// than emitted -- so this is a refinement, on the list with the rest of
+// the fixed containers' per-trait behavior.
+#[test]
+#[ignore = "Box's per-trait forwarding is a pending refinement"]
+fn box_provides_display() {
+    let settings = Settings::minimal().with_desired_trait(TypespaceTrait::Display);
+    let builder = typespace_test_macro::typespace_builder!(settings, {
+        struct Wrapper(Box<String>);
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "Wrapper"),
+        "Display was not granted through a Box, which forwards it"
+    );
+}

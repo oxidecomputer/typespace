@@ -8,7 +8,7 @@ use typespace::{
         StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias, UnitStruct,
         VariantDetails,
     },
-    error::{Error, NameAxis, OffenderReason, RequirementOrigin},
+    error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin},
     no_cycles,
     settings::{ContainerType, OptionalNullable, Settings, Std},
     TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
@@ -1095,7 +1095,8 @@ fn test_map_key_struct_with_float() {
         assert_eq!(conflict.offender, "float");
         assert!(matches!(
             &conflict.origin,
-            RequirementOrigin::MapKey(id) if id == "map"
+            RequirementOrigin::ContainerParameter { container, relation }
+                if container == "map" && matches!(relation, Relation::Key)
         ));
         assert!(matches!(
             &conflict.reason,
@@ -1109,7 +1110,7 @@ fn test_map_key_struct_with_float() {
         conflicts[0].to_string(),
         "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
          required because `key` passes the requirement to its field `value`\n    \
-         required because keys of map `map` must implement `Eq`"
+         required because the container `map` requires `Eq` of its key type"
     );
 }
 
@@ -1872,7 +1873,8 @@ fn test_set_element_float_path() {
         "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
          required because `vec` passes the requirement to its element type\n    \
          required because `Sample` passes the requirement to its field `values`\n    \
-         required because elements of set `set` must implement `Eq`"
+         required because the container `set` requires `Eq` of its element \
+         type"
     );
 }
 
@@ -1918,7 +1920,8 @@ fn test_native_map_key() {
         assert_eq!(conflict.offender, "date");
         assert!(matches!(
             &conflict.origin,
-            RequirementOrigin::MapKey(id) if id == "map"
+            RequirementOrigin::ContainerParameter { container, relation }
+                if container == "map" && matches!(relation, Relation::Key)
         ));
         assert!(matches!(
             &conflict.reason,
@@ -1930,7 +1933,8 @@ fn test_native_map_key() {
         conflicts[0].to_string(),
         "native type `chrono::NaiveDate` (id `date`) does not declare the \
          required trait `Eq`\n    \
-         required because keys of map `map` must implement `Eq`"
+         required because the container `map` requires `Eq` of its key \
+         type"
     );
 
     // Declaring the comparison impls fixes the conflict.

@@ -24,7 +24,7 @@ use crate::build::{
     Type, VariantDetails,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
-use crate::settings::Settings;
+use crate::settings::{ContainerType, Settings, TraitProvision};
 use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet};
 
 /// Resolve the trait set for every named type in the graph.
@@ -362,28 +362,53 @@ where
         path: Vec<PathStep<Id>>,
     }
 
-    // Maps and sets require traits of their type parameters: the
-    // configured map and set types state what they require of their key
-    // and element types (the built-in defaults require the Ord family).
-    // Look through all types for maps and sets and seed the work queue
-    // with those requirements. Finalization has checked each container's
-    // arity, so the key and element obligations are present.
+    // A container's blanket obligations are what its own type needs of its
+    // parameters to exist at all: BTreeMap needs Ord of its key, HashMap needs
+    // Eq and Hash. They're necessary irrespective of other constraints.
+    // Finalization has checked each container's type parameter count, so every
+    // position is present.
     let mut work = types
         .iter()
-        .filter_map(|(type_id, ty)| match ty {
-            Type::Map(key_schema_ref, _) => Some(WorkItem {
-                target: key_schema_ref.clone(),
-                traits: close_supertraits(settings.map_type.obligation(0).clone()),
-                origin: RequirementOrigin::MapKey(type_id.clone()),
-                path: Vec::new(),
-            }),
-            Type::Set(element_schema_ref) => Some(WorkItem {
+        .flat_map(|(type_id, ty)| match ty {
+            Type::Map(key_schema_ref, value_schema_ref) => vec![
+                WorkItem {
+                    target: key_schema_ref.clone(),
+                    traits: close_supertraits(settings.map_type.obligation(0).clone()),
+                    origin: RequirementOrigin::ContainerParameter {
+                        container: type_id.clone(),
+                        relation: Relation::Key,
+                    },
+                    path: Vec::new(),
+                },
+                WorkItem {
+                    target: value_schema_ref.clone(),
+                    traits: close_supertraits(settings.map_type.obligation(1).clone()),
+                    origin: RequirementOrigin::ContainerParameter {
+                        container: type_id.clone(),
+                        relation: Relation::Value,
+                    },
+                    path: Vec::new(),
+                },
+            ],
+            Type::Set(element_schema_ref) => vec![WorkItem {
                 target: element_schema_ref.clone(),
                 traits: close_supertraits(settings.set_type.obligation(0).clone()),
-                origin: RequirementOrigin::SetElement(type_id.clone()),
+                origin: RequirementOrigin::ContainerParameter {
+                    container: type_id.clone(),
+                    relation: Relation::Element,
+                },
                 path: Vec::new(),
-            }),
-            _ => None,
+            }],
+            Type::Vec(element_schema_ref) => vec![WorkItem {
+                target: element_schema_ref.clone(),
+                traits: close_supertraits(settings.vec_type.obligation(0).clone()),
+                origin: RequirementOrigin::ContainerParameter {
+                    container: type_id.clone(),
+                    relation: Relation::Element,
+                },
+                path: Vec::new(),
+            }],
+            _ => Vec::new(),
         })
         .collect::<VecDeque<_>>();
 
@@ -464,6 +489,31 @@ where
             .filter(|tt| !matches!(tt, TypespaceTrait::Default))
             .copied()
             .collect::<TypespaceTraitSet>()
+    };
+
+    // Split `traits` at a configurable container according to what the
+    // container declares it provides: the traits it never provides are
+    // conflicts here, the traits it provides only when its parameters do
+    // pass to those parameters, and the traits it provides
+    // unconditionally are satisfied and go no further.
+    let container_split = |declaration: &ContainerType, traits: &TypespaceTraitSet| {
+        let bad = traits
+            .iter()
+            .filter(|tt| matches!(declaration.provision(**tt), TraitProvision::Never))
+            .copied()
+            .collect::<Vec<_>>();
+        // Re-close the forwarded set: dropping a trait the container
+        // provides unconditionally can leave a subtrait behind without
+        // its supertraits, and a parameter that absorbed `Eq` with no
+        // `PartialEq` derives code that does not compile.
+        let pass = close_supertraits(
+            traits
+                .iter()
+                .filter(|tt| matches!(declaration.provision(**tt), TraitProvision::IfParameters))
+                .copied()
+                .collect::<TypespaceTraitSet>(),
+        );
+        (bad, pass)
     };
 
     // In each iteration, we need to assert the set of required traits to the
@@ -644,18 +694,17 @@ where
                     }
                 }
 
-                // Vec<T> and arrays impl everything we care about--except for
-                // Display and FromStr--as long as T implemented them. Vec<T>
-                // additionally implements Default unconditionally.
+                // The configured vec type states which traits it never
+                // provides, which it provides whatever the element does,
+                // and which follow the element.
                 Type::Vec(schema_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    let (bad, pass) = container_split(&settings.vec_type, &traits);
                     conflict(
                         bad,
                         OffenderReason::Primitive {
                             type_name: "Vec".to_string(),
                         },
                     );
-                    let pass = strip_default(rest);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
                             target: schema_ref.clone(),
@@ -704,19 +753,17 @@ where
                     }
                 }
 
-                // Like Vec, the map and set containers implement the traits
-                // we care about--except for Display and FromStr--as long as
-                // their key/value/element types do; both implement Default
-                // unconditionally.
+                // The configured map and set types answer the same way,
+                // over the key and value parameters and over the element
+                // parameter respectively.
                 Type::Map(key_ref, value_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    let (bad, pass) = container_split(&settings.map_type, &traits);
                     conflict(
                         bad,
                         OffenderReason::Primitive {
                             type_name: "map".to_string(),
                         },
                     );
-                    let pass = strip_default(rest);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
                             target: key_ref.clone(),
@@ -733,14 +780,13 @@ where
                     }
                 }
                 Type::Set(element_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    let (bad, pass) = container_split(&settings.set_type, &traits);
                     conflict(
                         bad,
                         OffenderReason::Primitive {
                             type_name: "set".to_string(),
                         },
                     );
-                    let pass = strip_default(rest);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
                             target: element_ref.clone(),
@@ -844,6 +890,23 @@ fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = Typespac
     std::iter::once(trait_name).chain(dependents.iter().copied())
 }
 
+/// Whether a configurable container provides `trait_name`.
+///
+/// `parameters` answers whether every one of the container's type
+/// parameters has the trait; it is consulted only when the declaration
+/// makes the container's impl conditional on them.
+fn container_provides(
+    declaration: &ContainerType,
+    trait_name: TypespaceTrait,
+    parameters: impl FnOnce() -> bool,
+) -> bool {
+    match declaration.provision(trait_name) {
+        TraitProvision::Never => false,
+        TraitProvision::Always => true,
+        TraitProvision::IfParameters => parameters(),
+    }
+}
+
 /// Whether `ty` provides `trait_name`, given `has`.
 ///
 /// `has` records what the types `ty` is built from still have. A
@@ -852,10 +915,11 @@ fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = Typespac
 /// contained child, and a manually realized one needs only the targets
 /// that realization obligates--often none at all, as with an attached
 /// default value. Containers and built-in types answer with the rules
-/// required resolution applies to them, hop for hop: a container
-/// forwards a trait to its parameters, except that no container has
-/// `Display` or `FromStr` and `Option`, `Vec`, maps, and sets provide
-/// `Default` whatever they hold.
+/// required resolution applies to them, hop for hop: a configured
+/// container answers from its declaration, and the containers a
+/// consumer cannot configure forward a trait to their parameters,
+/// except that none has `Display` or `FromStr` and `Option` provides
+/// `Default` whatever it holds.
 fn provides<Id>(
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
@@ -904,15 +968,19 @@ where
             Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
             Type::Box(schema_ref) => supported && child_has(schema_ref),
 
-            // Vec<T> and the map and set containers implement the
-            // traits we care about--except for Display and
-            // FromStr--as long as their parameters do; all three
-            // implement Default unconditionally.
-            Type::Vec(schema_ref) | Type::Set(schema_ref) => {
-                supported && (is_default || child_has(schema_ref))
+            // The configurable containers answer from what their
+            // declaration says they provide, the same table required
+            // resolution consults.
+            Type::Vec(schema_ref) => {
+                container_provides(&settings.vec_type, trait_name, || child_has(schema_ref))
+            }
+            Type::Set(schema_ref) => {
+                container_provides(&settings.set_type, trait_name, || child_has(schema_ref))
             }
             Type::Map(key_ref, value_ref) => {
-                supported && (is_default || (child_has(key_ref) && child_has(value_ref)))
+                container_provides(&settings.map_type, trait_name, || {
+                    child_has(key_ref) && child_has(value_ref)
+                })
             }
 
             // Arrays and tuples forward everything they can provide,
@@ -1218,7 +1286,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("no conflict for {required}"));
             assert!(matches!(
                 &conflict.origin,
-                RequirementOrigin::MapKey(id) if id == "Map<KeyStruct, String>"
+                RequirementOrigin::ContainerParameter { container, relation }
+                    if container == "Map<KeyStruct, String>"
+                        && matches!(relation, Relation::Key)
             ));
             assert_eq!(conflict.offender, "f64");
             assert!(matches!(

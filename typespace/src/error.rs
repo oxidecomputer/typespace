@@ -330,18 +330,14 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
             )?;
         }
         match origin {
-            RequirementOrigin::MapKey(id) => {
+            RequirementOrigin::ContainerParameter {
+                container,
+                relation,
+            } => {
                 write!(
                     f,
-                    "\n    required because keys of map `{id}` must \
-                     implement `{required}`"
-                )
-            }
-            RequirementOrigin::SetElement(id) => {
-                write!(
-                    f,
-                    "\n    required because elements of set `{id}` must \
-                     implement `{required}`"
+                    "\n    required because the container `{container}` \
+                     requires `{required}` of {relation}"
                 )
             }
             RequirementOrigin::PropertyDefault(id) => {
@@ -367,11 +363,17 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum RequirementOrigin<Id> {
-    /// The requirement applies to the key type of the map with this ID.
-    MapKey(Id),
-    /// The requirement applies to the element type of the set with this
-    /// ID.
-    SetElement(Id),
+    /// The requirement applies to one type parameter of the container
+    /// with this ID, because the container demands it of that
+    /// parameter.
+    ContainerParameter {
+        /// The ID of the container that makes the demand.
+        container: Id,
+        /// The parameter position the demand lands on: [`Relation::Key`]
+        /// or [`Relation::Value`] for a map, [`Relation::Element`] for a
+        /// set or a vec.
+        relation: Relation,
+    },
     /// The requirement applies to the type of a property of the type
     /// with this ID, because that property carries `#[serde(default)]`.
     PropertyDefault(Id),
@@ -394,6 +396,10 @@ pub struct PathStep<Id> {
 
 /// The relation by which a trait requirement moves from a type to one
 /// of the types it contains.
+///
+/// It names a hop in a [`PathStep`] and, in
+/// [`RequirementOrigin::ContainerParameter`], the parameter position a
+/// container's own demand lands on.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Relation {
