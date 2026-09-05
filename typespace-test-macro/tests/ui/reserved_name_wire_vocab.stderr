@@ -1,5 +1,5 @@
 error: `Optional` is reserved for typespace_builder!'s own type vocabulary and can't name an item
- --> tests/ui/reserved_name_wire_vocab.rs:5:16
+ --> tests/ui/reserved_name_wire_vocab.rs:6:16
   |
-5 |         struct Optional {
+6 |         struct Optional {
   |                ^^^^^^^^

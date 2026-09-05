@@ -1,4 +1,4 @@
-// `HashMap`/`BTreeMap` are Rust types; typespace_builder! spells its
+// `HashMap`/`BTreeMap` are Rust types; typespace_builder! names its
 // map marker `Map<K, V>` instead, since the rendered container is a
 // settings decision.
 

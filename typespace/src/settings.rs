@@ -20,23 +20,12 @@ use crate::{TypespaceTrait, TypespaceTraitSet, ALL_TRAITS};
 /// `Deserialize` so settings can come from configuration data.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
-    /// When set to `FullyQualified`, (the default), types in the `std` crate's
-    /// prelude are fully qualified. For example, the `Option` type is rendered
-    /// as `::std::option::Option`. When set to `Unqualified`, these types
-    /// appear in their more typical, auto-imported form. The latter is useful
-    /// if one intends to use type generation as a starting point for
-    /// manually-edited code. Note that this is relevant only to types in the
-    /// `std` crate's prelude such as `Option`, `Vec`, and `String`; types such
-    /// as `std::collections::BTreeMap` are always fully qualified since they
-    /// are not in the prelude.
+    /// How types in the `std` prelude are rendered; see [`Std`].
     #[serde(default)]
     pub(crate) std: Std,
 
-    /// Specify the modeling of values that may be either `null` or optional
-    /// (i.e. absent). The default is `ConflateAsAbsent`, which models `null`
-    /// and `optional` as equivalent by using the `std::option::Option<T>` type
-    /// and skipping serialization of `None` values. While imprecise, this is
-    /// typical of Rust code.
+    /// How values that may be `null` or absent are represented; see
+    /// [`OptionalNullable`]. The default is `ConflateAsAbsent`.
     #[serde(default)]
     pub(crate) optional_nullable: OptionalNullable,
 
@@ -186,8 +175,8 @@ impl Settings {
         }
     }
 
-    /// Set how types from the `std` prelude are spelled in generated
-    /// code; see [`Std`]. The default is [`Std::FullyQualified`].
+    /// Set the [`Std`] syntax used to render types from the `std`
+    /// prelude. The default is [`Std::FullyQualified`].
     pub fn with_std(mut self, std: Std) -> Self {
         self.std = std;
         self
@@ -317,7 +306,7 @@ impl Settings {
         self
     }
 
-    /// Specify an attribute that will proceed every generated type.
+    /// Specify an attribute that will precede every generated type.
     pub fn with_attr(mut self, attr: impl Into<String>) -> Self {
         self.extra_attrs.push(attr.into());
         self
@@ -341,7 +330,7 @@ impl Settings {
 ///
 /// The path is emitted verbatim, with the contained types as its generic
 /// arguments. The obligations are what the container demands of those
-/// parameters--irrespective of what traits the container itself is expecte to
+/// parameters--irrespective of what traits the container itself is expected to
 /// implement: `K: Eq + Hash` for a `HashMap`, `K: Ord` for `BTreeMap`, nothing
 /// of a value or an element type (for those types). The [`TraitProvision`]
 /// entries say, for each trait typespace tracks, whether the container never
@@ -349,11 +338,11 @@ impl Settings {
 /// every parameter does.
 ///
 /// The number of obligations must match the number of type parameters the
-/// type expect (two for a map, one for a set or a vec). Finalization produces
+/// type expects (two for a map, one for a set or a vec). Finalization produces
 /// an error if that's not the case.
 ///
 /// Finalization imposes an obligations on type parameters according to these
-/// settings (and this may cascade to depenent traits i.e. `Ord` implies
+/// settings (and this may cascade to dependent traits i.e. `Ord` implies
 /// `PartialOrd`; `Eq`, and `PartialEq`).
 ///
 /// There are presets for common modalities:
@@ -822,8 +811,8 @@ impl ProvisionTable {
     }
 }
 
-/// Specify how types in the `std` crate's prelude are spelled in
-/// generated code. Types outside the prelude, such as
+/// Specify the syntax used to render types in the `std` crate's
+/// prelude. Types outside the prelude, such as
 /// `std::collections::BTreeMap`, are always fully qualified.
 #[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -844,8 +833,7 @@ pub enum Std {
 pub enum OptionalNullable {
     /// Model `null` and `optional` as equivalent by using the
     /// `std::option::Option<T>` type. Skip serialization of `None` values.
-    /// This is the default--it's a typical configuration where `None` values
-    /// are omitted.
+    /// This is the default.
     #[default]
     ConflateAsAbsent,
 

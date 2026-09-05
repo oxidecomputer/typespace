@@ -315,8 +315,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
-    /// Return the list of child types that are contained (i.e. contributed to
-    /// the size of this type). This is used to consider containment cycles.
+    /// Exclusive-reference form of [`Type::contained_children`]: the same
+    /// children, as mutable references, for in-place cycle breaking.
     pub fn contained_children_mut(&mut self) -> Vec<&mut Id> {
         match self {
             Type::Enum(Enum { variants, .. }) => {

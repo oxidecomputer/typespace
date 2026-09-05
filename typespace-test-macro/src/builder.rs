@@ -1980,7 +1980,7 @@ mod tests {
     use quote::quote;
 
     /// Pretty-print `expand(input)`'s result as a standalone item so it
-    /// reads like ordinary source in the golden file, rather than as
+    /// reads like ordinary source in the output file, rather than as
     /// one long token stream.
     fn expand_pretty(input: proc_macro2::TokenStream) -> String {
         let expanded = expand(input);
@@ -1993,7 +1993,7 @@ mod tests {
         prettyplease::unparse(&wrapped)
     }
 
-    // Golden tests: each captures the exact generated code for one
+    // Snapshot tests: each captures the exact generated code for one
     // representative input, so the expansion is visible and reviewable
     // in the diff of `tests/output/`. These complement, not replace,
     // the behavioral tests in typespace/src/trait_resolution.rs, which

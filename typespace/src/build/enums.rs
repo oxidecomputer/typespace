@@ -481,20 +481,22 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         typespace: &TypespaceRenderer<'_, Id>,
         name_ident: &Ident,
     ) -> Vec<TokenStream> {
-        // Key each Item and Tuple variant by the rendered text of the types it
-        // carries. A key carried by more than one variant yields no impl for
-        // any of them, since two `From<Foo> for E` impls would not compile.
+        // Key each Item and Tuple variant by the rendered form of the types
+        // it carries. A key carried by more than one variant yields no impl
+        // for any of them, since two `From<Foo> for E` impls would not
+        // compile.
         //
-        // The key is rendered text rather than ids because typespace gives
+        // The key is the rendered form rather than ids because typespace gives
         // each anonymous type its own node, so two variants can carry
-        // different ids that render as the same Rust type. It is rendered text
-        // rather than a structural summary because the question is exactly
-        // whether two payloads render alike, and any structure faithful enough
-        // to answer that is the rendering written a second way, which then has
-        // to be kept in agreement with the first. Rendering settles it
-        // directly: a set and a vec that share a path, a unit and an empty
-        // tuple, a one-element tuple and its element, and a native declared as
-        // a container's path all compare equal without a rule for each.
+        // different ids that render as the same Rust type. It is the rendered
+        // form rather than a structural summary because the question is
+        // exactly whether two payloads render alike, and any structure
+        // faithful enough to answer that is the rendering written a second
+        // way, which then has to be kept in agreement with the first.
+        // Rendering settles it directly: a set and a vec that share a path, a
+        // unit and an empty tuple, a one-element tuple and its element, and a
+        // native declared as a container's path all compare equal without a
+        // rule for each.
         //
         // TODO the key is the list of payload types, but what decides
         // whether two impls collide is the type each one converts FROM: an

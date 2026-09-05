@@ -546,8 +546,8 @@ pub enum StructPropertyState {
     /// will be omitted.
     Default,
     /// The field may be omitted; if it is, its value comes from the provided
-    /// JSON value. Note that this applies only to deserialization;
-    /// serialization will always emit the field.
+    /// JSON value. This applies only to deserialization; serialization
+    /// will always emit the field.
     DefaultValue(JsonValue),
 }
 

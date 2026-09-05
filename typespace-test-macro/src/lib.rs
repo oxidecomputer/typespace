@@ -165,7 +165,7 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `P` needs two or more segments, and its leading `::` is part of it:
 /// the path is emitted verbatim, so `chrono::NaiveDate` and
 /// `::chrono::NaiveDate` are two different native types, with different
-/// ids and different generated text. Generic arguments become the
+/// ids and different generated code. Generic arguments become the
 /// type's parameters, each lowered like any other type, so
 /// `::foo::Wrapper<Inner>` emits the name `::foo::Wrapper` alongside the
 /// single parameter id `Inner`.

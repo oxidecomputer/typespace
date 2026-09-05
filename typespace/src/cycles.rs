@@ -126,11 +126,9 @@ where
             child_ids.partition::<Vec<_>, _>(|child_id| active.contains(child_id))
         };
 
-        // Note that while `snip` might contain duplicates, `make_box_id` is
-        // idempotent insofar as the same input Id will result in the same
-        // output Id. Ergo the resulting pairs from which we construct the
-        // mapping would contain exact duplicates; it would not contain two
-        // values associated with the same key.
+        // `snip` may contain duplicate ids, but `make_box_id` is
+        // idempotent, so a duplicate maps to the same box id rather than
+        // colliding with a different one under the same key.
         let replace = snip
             .into_iter()
             .map(|type_id| {
