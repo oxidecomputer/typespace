@@ -67,6 +67,11 @@ pub struct Settings {
     #[serde(default)]
     pub(crate) struct_builder: bool,
 
+    // TYPIFY COMPAT ANCHOR. This setting exists so typespace can
+    // imitate typify's renderer while typify moves onto it, and it goes
+    // away when that finishes. Every site whose behavior changes under
+    // it carries a TYPIFY COMPAT marker; grep the marker to find all of
+    // them, and removing the setting means removing every one.
     #[doc(hidden)]
     #[serde(default)]
     pub(crate) typify_compat: bool,
@@ -318,6 +323,7 @@ impl Settings {
         self
     }
 
+    // TYPIFY COMPAT
     #[doc(hidden)]
     pub fn with_typify_compat(mut self, typify_compat: bool) -> Self {
         self.typify_compat = typify_compat;

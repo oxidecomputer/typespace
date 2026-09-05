@@ -292,9 +292,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         // the trait set as it is rendered so that render_derives, which
         // rejects both, sees only derivable traits.
         let mut derived_traits = traits.clone();
-        let unit_variant_impls = self.all_unit_variants().then(|| {
+        let all_unit_variants = self.all_unit_variants();
+        let unit_variant_impls = all_unit_variants.then(|| {
             self.render_unit_variant_impls(typespace, cs, &name_ident, &mut derived_traits)
         });
+
+        // typify's comparison-derive exception checks only that every
+        // variant is a unit variant, which an empty variant list
+        // satisfies vacuously; it asks nothing about a tag type. That
+        // is broader than all_unit_variants, which excludes an empty
+        // or untagged enum--exclusions that serve the Display/FromStr
+        // impls above, not the derive list.
+        // TYPIFY COMPAT: read only by render_derives' exemption.
+        let every_variant_is_unit = variants
+            .iter()
+            .all(|variant| matches!(variant.details, VariantDetails::Unit));
 
         let serde_derives = SerdeDerives::new(&derived_traits);
         let mut serde = serde_derives.attrs();
@@ -371,7 +383,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .remove(TypespaceTrait::Default)
             .then_some(default);
 
-        let derives_attr = typespace.render_derives(&derived_traits, extra_derives);
+        let derives_attr =
+            typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit);
         let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {

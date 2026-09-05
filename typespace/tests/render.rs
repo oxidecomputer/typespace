@@ -15,6 +15,8 @@ use typespace::{
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
 
+mod common;
+
 // Alias used by test_json_serde_crate_override: generated code refers to
 // json-serde helpers through this renamed path.
 use json_serde as my_json_serde;
@@ -3493,15 +3495,118 @@ fn test_default_other_struct_shapes_typify_compat() {
         ts.to_codespace().into_stream()
     )]
     fn inner() {
-        assert_eq!(
-            import::TupleShape("a".to_string(), 7),
-            import::TupleShape("a".to_string(), 7)
-        );
-        assert_eq!(import::UnitShape, import::UnitShape);
+        // TupleShape and UnitShape are neither of typify's two
+        // comparison-derive exceptions, so under typify_compat they no
+        // longer derive PartialEq; only construction is checked here.
+        let tuple_shape = import::TupleShape("a".to_string(), 7);
+        assert_eq!(tuple_shape.0, "a");
+        assert_eq!(tuple_shape.1, 7);
+        assert_eq!(format!("{:?}", import::UnitShape), "UnitShape");
+        // NewtypeShape wraps String, so it keeps PartialEq.
         assert_eq!(
             import::NewtypeShape::from("x".to_string()),
             import::NewtypeShape("x".to_string())
         );
+    }
+}
+
+/// The five comparison traits, desired on every type the way typify
+/// asks for them, but withheld at render by `typify_compat` outside its
+/// two exceptions.
+///
+/// `AllUnit` (every variant a unit variant) and `StringWrapper` (a
+/// newtype over `String`) keep `Eq`, `PartialEq`, `Ord`, `PartialOrd`,
+/// and `Hash` in their derive lists. `Ordinary` (a struct) and
+/// `IntWrapper` (a newtype over something other than `String`) resolve
+/// the same five traits--every field involved supports all of
+/// them--but typify never derives them there, so typify_compat trims
+/// them from the rendered list.
+#[test]
+fn test_comparison_derives_typify_compat_on() {
+    let settings = Settings::minimal()
+        .with_typify_compat(true)
+        .with_desired_trait(TypespaceTrait::Eq)
+        .with_desired_trait(TypespaceTrait::PartialEq)
+        .with_desired_trait(TypespaceTrait::Ord)
+        .with_desired_trait(TypespaceTrait::PartialOrd)
+        .with_desired_trait(TypespaceTrait::Hash);
+
+    let builder = typespace_builder!(settings, {
+        enum AllUnit {
+            First,
+            Second,
+        }
+
+        struct StringWrapper(String);
+
+        struct IntWrapper(u32);
+
+        struct Ordinary {
+            value: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    let comparison_traits = ["Eq", "PartialEq", "Ord", "PartialOrd", "Hash"];
+    for name in ["AllUnit", "StringWrapper"] {
+        let derives = common::derives_of(&file, name);
+        for trait_name in comparison_traits {
+            assert!(
+                derives.iter().any(|d| d == trait_name),
+                "{name} should keep {trait_name}: {derives:?}"
+            );
+        }
+    }
+    for name in ["Ordinary", "IntWrapper"] {
+        let derives = common::derives_of(&file, name);
+        for trait_name in comparison_traits {
+            assert!(
+                !derives.iter().any(|d| d == trait_name),
+                "{name} should not derive {trait_name}: {derives:?}"
+            );
+        }
+    }
+}
+
+/// The same graph as [`test_comparison_derives_typify_compat_on`], with
+/// `typify_compat` off: nothing narrows the derive list, so every type
+/// keeps all five comparison traits.
+#[test]
+fn test_comparison_derives_typify_compat_off() {
+    let settings = Settings::minimal()
+        .with_desired_trait(TypespaceTrait::Eq)
+        .with_desired_trait(TypespaceTrait::PartialEq)
+        .with_desired_trait(TypespaceTrait::Ord)
+        .with_desired_trait(TypespaceTrait::PartialOrd)
+        .with_desired_trait(TypespaceTrait::Hash);
+
+    let builder = typespace_builder!(settings, {
+        enum AllUnit {
+            First,
+            Second,
+        }
+
+        struct StringWrapper(String);
+
+        struct IntWrapper(u32);
+
+        struct Ordinary {
+            value: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    let comparison_traits = ["Eq", "PartialEq", "Ord", "PartialOrd", "Hash"];
+    for name in ["AllUnit", "StringWrapper", "Ordinary", "IntWrapper"] {
+        let derives = common::derives_of(&file, name);
+        for trait_name in comparison_traits {
+            assert!(
+                derives.iter().any(|d| d == trait_name),
+                "{name} should keep {trait_name}: {derives:?}"
+            );
+        }
     }
 }
 

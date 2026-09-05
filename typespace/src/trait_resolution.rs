@@ -233,6 +233,7 @@ where
                 // manual rendering: a struct's fields have no implied
                 // textual order or separator.
                 TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+                // TYPIFY COMPAT
                 TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
                 TypespaceTrait::Default => {
                     if common.default().is_some() {
@@ -249,6 +250,7 @@ where
             // Same reasoning as Struct: there is no field to render
             // and no textual form to parse.
             TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+            // TYPIFY COMPAT
             TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
             // No fields means no obligations either way.
             _ => Feasibility::Derivable,
@@ -281,6 +283,8 @@ where
             // NewtypeStruct::render does not write. Claiming the trait
             // would derive one that ignores the value, or fail to
             // compile where the inner type has no Default.
+            // TYPIFY COMPAT: the typify_compat half only; the attached
+            // default value half stands on its own.
             TypespaceTrait::Default if settings.typify_compat || common.default().is_some() => {
                 Feasibility::Impossible
             }

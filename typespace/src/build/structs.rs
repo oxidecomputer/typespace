@@ -412,7 +412,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        // An ordinary struct is neither of typify's comparison-derive
+        // exceptions, so it is never exempt.
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let mut serde = serde_derives.attrs();
@@ -739,7 +741,9 @@ impl UnitStruct {
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        // A unit struct is neither of typify's comparison-derive
+        // exceptions, so it is never exempt.
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {
@@ -1028,7 +1032,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        // A tuple struct is neither of typify's comparison-derive
+        // exceptions, so it is never exempt.
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
         quote! {
@@ -1261,7 +1267,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let inner_ident = typespace.render_ident(inner);
 
-        let derive_attr = typespace.render_derives(&traits, extra_derives);
+        // A newtype wrapping `String` directly is typify's other
+        // comparison-derive exception.
+        // TYPIFY COMPAT: read only by render_derives' exemption.
+        let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
+        let derive_attr = typespace.render_derives(&traits, extra_derives, wraps_string);
         let attrs = typespace.render_attrs(extra_attrs);
 
         // A newtype struct is its inner value on the wire.
