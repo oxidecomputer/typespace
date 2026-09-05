@@ -3136,6 +3136,73 @@ fn test_extra_derives_multi_shape() {
     }
 }
 
+// A fieldless enum has nothing to check Copy against, so a desired
+// Copy is granted whole, and Clone--its supertrait--rides along even
+// though nothing asked for it directly.
+#[test]
+fn test_copy_desired_fieldless_enum_gets_copy_and_clone() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::Copy),
+        {
+            enum Color {
+                Red,
+                Green,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let mut derives = common::derives_of(&file, "Color");
+    derives.sort();
+    assert_eq!(derives, ["Clone", "Copy"]);
+}
+
+// A struct holding a String can never be Copy: the derive requires
+// every field to be Copy, and a String owns a heap buffer. Clone is
+// required directly here (not merely desired as Copy's supertrait) so
+// it survives on its own account, isolating the case: Copy alone drops
+// out of the desired phase.
+#[test]
+fn test_copy_desired_struct_with_string_field_drops_copy() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Clone)
+            .with_desired_trait(TypespaceTrait::Copy),
+        {
+            struct Widget {
+                name: String,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    assert_eq!(common::derives_of(&file, "Widget"), ["Clone"]);
+}
+
+// Requiring Copy directly--not merely desiring it--brings Clone along
+// as well, because the supertrait closure runs over required traits
+// too: an emitted `derive(Copy)` with no `Clone` would not compile.
+#[test]
+fn test_copy_required_brings_clone() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::Copy),
+        {
+            enum Flag {
+                On,
+                Off,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let mut derives = common::derives_of(&file, "Flag");
+    derives.sort();
+    assert_eq!(derives, ["Clone", "Copy"]);
+}
+
 #[test]
 fn test_struct_builder() {
     let builder = typespace_builder!(Settings::maximal(), {

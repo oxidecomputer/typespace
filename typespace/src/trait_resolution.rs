@@ -54,12 +54,13 @@ where
 /// imply.
 ///
 /// `Ord` requires `PartialOrd`, `Eq`, and `PartialEq`; `Eq` requires
-/// `PartialEq`; `PartialOrd` requires `PartialEq`. Applied to every
-/// requirement set as it is formed (the settings-required set, map key
-/// traits, and set element traits) so that a work item's `traits` is
-/// always already closed--otherwise a lone `Ord` requirement would
-/// derive `Ord` without the `Eq`/`PartialEq`/`PartialOrd` impls it
-/// needs, and the emitted derive would not compile.
+/// `PartialEq`; `PartialOrd` requires `PartialEq`; `Copy` requires
+/// `Clone`. Applied to every requirement set as it is formed (the
+/// settings-required set, map key traits, and set element traits) so
+/// that a work item's `traits` is always already closed--otherwise a
+/// lone `Ord` requirement would derive `Ord` without the
+/// `Eq`/`PartialEq`/`PartialOrd` impls it needs, and the emitted derive
+/// would not compile.
 fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     if traits.contains(&TypespaceTrait::Ord) {
         traits.add(TypespaceTrait::PartialOrd);
@@ -71,6 +72,9 @@ fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     }
     if traits.contains(&TypespaceTrait::PartialOrd) {
         traits.add(TypespaceTrait::PartialEq);
+    }
+    if traits.contains(&TypespaceTrait::Copy) {
+        traits.add(TypespaceTrait::Clone);
     }
     traits
 }
@@ -136,7 +140,10 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 /// carries an attached default value, in which case the manual impl
 /// needs nothing further (an enum with no attached default value has
 /// no derive and no invented `#[default]` variant, so it is
-/// impossible). Every other trait derives normally.
+/// impossible). Every other trait derives normally--`Copy` included:
+/// `Derivable` already means every contained child must have the
+/// trait, which is exactly `derive(Copy)`'s own condition, so no
+/// separate case is needed for it.
 fn feasibility<Id>(
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
@@ -679,9 +686,17 @@ where
 
                 // The utility of Box is primarily to break containment cycles.
                 // We treat it like a container with regard to trait
-                // forwarding.
+                // forwarding, except for Copy: a box heap-allocates and is
+                // never Copy no matter what it holds.
                 Type::Box(schema_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    let (bad, rest) = split(
+                        &traits,
+                        &[
+                            TypespaceTrait::Display,
+                            TypespaceTrait::FromStr,
+                            TypespaceTrait::Copy,
+                        ],
+                    );
                     conflict(
                         bad,
                         OffenderReason::Primitive {
@@ -833,15 +848,31 @@ where
                     );
                 }
 
-                // String implements every trait we track.
-                Type::String => (),
+                // String implements every trait we track except Copy: an
+                // owned heap buffer can never be Copy.
+                Type::String => {
+                    let (bad, _) = split(&traits, &[TypespaceTrait::Copy]);
+                    conflict(
+                        bad,
+                        OffenderReason::Primitive {
+                            type_name: "String".to_string(),
+                        },
+                    );
+                }
 
-                // JsonValue implements everything except for Ord and
-                // PartialOrd: serde_json::Value derives Clone, Eq,
-                // PartialEq, and Hash, and has no ordering impls.
+                // JsonValue implements everything except for Ord,
+                // PartialOrd, and Copy: serde_json::Value derives Clone,
+                // Eq, PartialEq, and Hash, has no ordering impls, and owns
+                // a String and a Vec, which rule out Copy.
                 Type::JsonValue => {
-                    let (bad, _) =
-                        split(&traits, &[TypespaceTrait::Ord, TypespaceTrait::PartialOrd]);
+                    let (bad, _) = split(
+                        &traits,
+                        &[
+                            TypespaceTrait::Ord,
+                            TypespaceTrait::PartialOrd,
+                            TypespaceTrait::Copy,
+                        ],
+                    );
                     conflict(
                         bad,
                         OffenderReason::Primitive {
@@ -879,8 +910,8 @@ where
 ///
 /// The supertrait closure run backwards: `Ord` needs `PartialOrd`,
 /// `Eq`, and `PartialEq`, and `Eq` and `PartialOrd` each need
-/// `PartialEq`, so a type that loses one of those loses everything
-/// resting on it.
+/// `PartialEq`; `Copy` needs `Clone`. A type that loses one of those
+/// loses everything resting on it.
 fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = TypespaceTrait> {
     let dependents: &'static [TypespaceTrait] = match trait_name {
         TypespaceTrait::PartialEq => &[
@@ -889,6 +920,7 @@ fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = Typespac
             TypespaceTrait::Ord,
         ],
         TypespaceTrait::Eq | TypespaceTrait::PartialOrd => &[TypespaceTrait::Ord],
+        TypespaceTrait::Clone => &[TypespaceTrait::Copy],
         _ => &[],
     };
     std::iter::once(trait_name).chain(dependents.iter().copied())
@@ -970,7 +1002,11 @@ where
             // offers... except for Default, which Option<T> implements
             // no matter what T is.
             Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
-            Type::Box(schema_ref) => supported && child_has(schema_ref),
+            // Box is never Copy, whatever it holds; every other trait
+            // follows the boxed type.
+            Type::Box(schema_ref) => {
+                supported && trait_name != TypespaceTrait::Copy && child_has(schema_ref)
+            }
 
             // The configurable containers answer from what their
             // declaration says they provide, the same table required
@@ -992,9 +1028,12 @@ where
             Type::Array(schema_ref, _) => supported && child_has(schema_ref),
             Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
 
-            // Integers, booleans, and String implement every trait we
-            // track.
-            Type::Integer(_) | Type::Boolean | Type::String => true,
+            // Integers and booleans implement every trait we track.
+            Type::Integer(_) | Type::Boolean => true,
+
+            // String implements every trait we track except Copy: an
+            // owned heap buffer can never be Copy.
+            Type::String => trait_name != TypespaceTrait::Copy,
 
             // The unit type and ::json_serde::Absent implement
             // everything except Display and FromStr.
@@ -1007,11 +1046,12 @@ where
                 TypespaceTrait::Ord | TypespaceTrait::Eq | TypespaceTrait::Hash
             ),
 
-            // JsonValue implements everything except for Ord and
-            // PartialOrd.
-            Type::JsonValue => {
-                !matches!(trait_name, TypespaceTrait::Ord | TypespaceTrait::PartialOrd)
-            }
+            // JsonValue implements everything except for Ord,
+            // PartialOrd, and Copy: it owns a String and a Vec.
+            Type::JsonValue => !matches!(
+                trait_name,
+                TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy
+            ),
         }
     }
 }

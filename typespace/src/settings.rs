@@ -173,6 +173,7 @@ impl Settings {
                 TypespaceTrait::PartialOrd,
                 TypespaceTrait::Hash,
                 TypespaceTrait::Default,
+                TypespaceTrait::Copy,
             ]
             .into_iter()
             .collect(),
@@ -750,10 +751,16 @@ impl ProvisionTable {
     /// The table for the ordered std families (`BTreeMap`, `BTreeSet`)
     /// and for `Vec`: every trait follows the parameters except
     /// `Display` and `FromStr`, which these containers do not
-    /// implement, and `Default`, which needs nothing of them.
+    /// implement, and `Copy`, which none of them has at any parameter
+    /// (each owns a heap-allocated buffer), and `Default`, which needs
+    /// nothing of them.
     fn forwarding() -> Self {
         Self::new(
-            &[TypespaceTrait::Display, TypespaceTrait::FromStr],
+            &[
+                TypespaceTrait::Display,
+                TypespaceTrait::FromStr,
+                TypespaceTrait::Copy,
+            ],
             &[TypespaceTrait::Default],
         )
     }
@@ -766,6 +773,7 @@ impl ProvisionTable {
             &[
                 TypespaceTrait::Display,
                 TypespaceTrait::FromStr,
+                TypespaceTrait::Copy,
                 TypespaceTrait::Ord,
                 TypespaceTrait::PartialOrd,
                 TypespaceTrait::Hash,

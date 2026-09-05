@@ -95,6 +95,7 @@ macro_rules! trait_probe {
 /// One [`trait_probe`] per trait typespace tracks.
 pub mod probes {
     trait_probe!(clone, ::std::clone::Clone);
+    trait_probe!(copy, ::std::marker::Copy);
     trait_probe!(debug, ::std::fmt::Debug);
     trait_probe!(serialize, ::serde::Serialize);
     trait_probe!(deserialize, for<'de> ::serde::Deserialize<'de>);
@@ -122,14 +123,15 @@ macro_rules! implemented_traits {
         // consulted and the imports look unused.
         #[allow(unused_imports)]
         use $crate::common::probes::{
-            clone::Fallback as _, debug::Fallback as _, default::Fallback as _,
-            deserialize::Fallback as _, display::Fallback as _, eq::Fallback as _,
-            from_str::Fallback as _, hash::Fallback as _, json_schema::Fallback as _,
-            ord::Fallback as _, partial_eq::Fallback as _, partial_ord::Fallback as _,
-            serialize::Fallback as _, *,
+            clone::Fallback as _, copy::Fallback as _, debug::Fallback as _,
+            default::Fallback as _, deserialize::Fallback as _, display::Fallback as _,
+            eq::Fallback as _, from_str::Fallback as _, hash::Fallback as _,
+            json_schema::Fallback as _, ord::Fallback as _, partial_eq::Fallback as _,
+            partial_ord::Fallback as _, serialize::Fallback as _, *,
         };
         [
             (T::Clone, <clone::Probe<$ty>>::IMPLS),
+            (T::Copy, <copy::Probe<$ty>>::IMPLS),
             (T::Debug, <debug::Probe<$ty>>::IMPLS),
             (T::Serialize, <serialize::Probe<$ty>>::IMPLS),
             (T::Deserialize, <deserialize::Probe<$ty>>::IMPLS),

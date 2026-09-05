@@ -82,15 +82,17 @@ fn claimed(declaration: &ContainerType) -> (TypespaceTraitSet, TypespaceTraitSet
     (with_parameters, without_parameters)
 }
 
-// `String` has every trait typespace tracks, which is what makes it the
-// parameter the propagation matrix reaches for when it wants one that
-// blocks nothing. Asking the probes about it also states that a probe
-// exists per trait: a trait added to the vocabulary without one would
-// leave a hole here rather than quietly narrowing every check below.
+// `u32` has every trait typespace tracks, `Copy` included, which is
+// what makes it the parameter the propagation matrix reaches for when
+// it wants one that blocks nothing; `String` no longer qualifies once
+// `Copy` is tracked, since an owned heap buffer can never be `Copy`.
+// Asking the probes about it also states that a probe exists per
+// trait: a trait added to the vocabulary without one would leave a
+// hole here rather than quietly narrowing every check below.
 #[test]
 fn probes_cover_every_tracked_trait() {
     assert_eq!(
-        crate::implemented_traits!(String),
+        crate::implemented_traits!(u32),
         all_traits().into_iter().collect::<TypespaceTraitSet>()
     );
 }
@@ -175,10 +177,12 @@ fn vec_matches_std() {
 // trait_resolution's own arms, and nothing installs a declaration for
 // them. Stating those answers in the declaration vocabulary anyway lets
 // the same checks drive them -- neither has Display or FromStr, Option
-// has Default whatever it holds, and everything else follows the
-// parameter.
+// has Default whatever it holds, Option forwards Copy but Box never has
+// it (a box heap-allocates), and everything else follows the parameter.
 fn option_rules() -> ContainerType {
-    ContainerType::vec().with_path("::std::option::Option")
+    ContainerType::vec()
+        .with_path("::std::option::Option")
+        .with_provision(TypespaceTrait::Copy, TraitProvision::IfParameters)
 }
 
 fn box_rules() -> ContainerType {
@@ -190,8 +194,10 @@ fn box_rules() -> ContainerType {
 #[test]
 fn option_rules_match_std() {
     let (with_parameter, without_parameter) = claimed(&option_rules());
+    // u32, not String: Option<T> forwards Copy when T has it, and String
+    // never does.
     assert_eq!(
-        crate::implemented_traits!(::std::option::Option<String>),
+        crate::implemented_traits!(::std::option::Option<u32>),
         with_parameter
     );
     assert_eq!(
@@ -281,8 +287,9 @@ impl Position {
 /// What stands in one of the container's parameter positions.
 #[derive(Debug, Clone, Copy)]
 enum Parameter {
-    /// `String`, which has every trait typespace tracks and so blocks
-    /// nothing.
+    /// An integer, which has every trait typespace tracks -- `Copy`
+    /// included -- and so blocks nothing. `String` no longer serves
+    /// here: it cannot be `Copy`.
     Everything,
     /// A native declaring every trait but one.
     AllBut(TypespaceTrait),
@@ -291,7 +298,7 @@ enum Parameter {
 impl Parameter {
     fn node(self) -> Type<String> {
         match self {
-            Parameter::Everything => Type::String,
+            Parameter::Everything => Type::Integer("u32".to_string()),
             Parameter::AllBut(missing) => Type::Native(Native::new(
                 "::ext::Poison",
                 all_traits()
@@ -308,12 +315,12 @@ impl Parameter {
 ///
 /// Approximately, for the map position:
 ///
-///     struct Wrapper(Map<Poison, String>);
+///     struct Wrapper(Map<Poison, u32>);
 ///
 /// A newtype carries every trait typespace tracks to its inner type,
-/// Display and FromStr included, so this one graph probes all thirteen.
-/// It is built by hand because `typespace_builder!` cannot state a
-/// native's traits from a set computed at run time.
+/// Display and FromStr included, so this one graph probes all
+/// fourteen. It is built by hand because `typespace_builder!` cannot
+/// state a native's traits from a set computed at run time.
 fn wrapped_container(
     settings: Settings,
     position: Position,

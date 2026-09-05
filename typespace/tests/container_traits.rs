@@ -74,6 +74,7 @@ fn a_declaration_answers_every_trait() {
 
     let mut expected = vec![
         (Clone, IfParameters),
+        (Copy, Never),
         (Debug, IfParameters),
         (Serialize, IfParameters),
         (Deserialize, IfParameters),

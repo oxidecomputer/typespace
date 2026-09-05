@@ -147,6 +147,11 @@ pub enum TypespaceTrait {
     Deserialize,
     Serialize,
     Clone,
+    /// A marker trait: derivable only when every constituent is `Copy`,
+    /// which rules out anything holding a `String` or a
+    /// `serde_json::Value`. `Copy` implies `Clone`, so requiring or
+    /// desiring it brings `Clone` along.
+    Copy,
     Debug,
     /// A map's key is treated as bound by this trait, which schemars 1.x
     /// requires and schemars 0.8 does not: 0.8 renders a map key as a
@@ -172,6 +177,8 @@ impl TypespaceTrait {
                 // TypespaceTrait::Clone => quote! { ::std::clone::Clone },
                 // TypespaceTrait::Debug => quote! { ::std::fmt::Debug },
                 TypespaceTrait::Clone => quote! { Clone },
+                // TypespaceTrait::Copy => quote! { ::std::marker::Copy },
+                TypespaceTrait::Copy => quote! { Copy },
                 TypespaceTrait::Debug => quote! { Debug },
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
@@ -194,6 +201,7 @@ impl TypespaceTrait {
         } else {
             match self {
                 TypespaceTrait::Clone => quote! { Clone },
+                TypespaceTrait::Copy => quote! { Copy },
                 TypespaceTrait::Debug => quote! { Debug },
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
@@ -215,6 +223,7 @@ impl std::fmt::Display for TypespaceTrait {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             TypespaceTrait::Clone => "Clone",
+            TypespaceTrait::Copy => "Copy",
             TypespaceTrait::Debug => "Debug",
             TypespaceTrait::Serialize => "Serialize",
             TypespaceTrait::Deserialize => "Deserialize",
@@ -290,8 +299,9 @@ impl TypespaceTraitSet {
 
 // REVIEW: this seems like it's likely going to fall out of date when we add a new variants.
 /// Every trait typespace tracks, in declaration order.
-pub(crate) const ALL_TRAITS: [TypespaceTrait; 13] = [
+pub(crate) const ALL_TRAITS: [TypespaceTrait; 14] = [
     TypespaceTrait::Clone,
+    TypespaceTrait::Copy,
     TypespaceTrait::Debug,
     TypespaceTrait::Serialize,
     TypespaceTrait::Deserialize,
