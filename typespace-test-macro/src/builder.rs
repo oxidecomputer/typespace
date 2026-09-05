@@ -847,6 +847,18 @@ const RESERVED_NAMES: &[&str] = &[
     "i64",
     "i128",
     "isize",
+    "NonZeroU8",
+    "NonZeroU16",
+    "NonZeroU32",
+    "NonZeroU64",
+    "NonZeroU128",
+    "NonZeroUsize",
+    "NonZeroI8",
+    "NonZeroI16",
+    "NonZeroI32",
+    "NonZeroI64",
+    "NonZeroI128",
+    "NonZeroIsize",
     "f32",
     "f64",
     "JsonValue",
@@ -1669,6 +1681,22 @@ fn lower_path_type(
             );
             return Ok(name);
         }
+        "NonZeroU8" | "NonZeroU16" | "NonZeroU32" | "NonZeroU64" | "NonZeroU128"
+        | "NonZeroUsize" | "NonZeroI8" | "NonZeroI16" | "NonZeroI32" | "NonZeroI64"
+        | "NonZeroI128" | "NonZeroIsize" => {
+            // `Type::Integer` carries the full `::std::num::NonZero*` path,
+            // not the bare name: the default-value walk keys off that
+            // prefix to build the value through `new` rather than a bare
+            // literal, and typify's own prefix check looks for the same
+            // path. The graph id stays the bare name, matching every
+            // other primitive here.
+            let path = format!("::std::num::{name}");
+            lowering.ensure_anon(
+                &name,
+                quote! { ::typespace::build::Type::Integer(#path.to_string()) },
+            );
+            return Ok(name);
+        }
         "f32" | "f64" => {
             lowering.ensure_anon(
                 &name,
@@ -2432,5 +2460,23 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/builder_struct_with_never.rs", &out);
+    }
+
+    /// A `NonZero` integer lowers to `Type::Integer` carrying its full
+    /// `::std::num::NonZero*` path, keyed to the id of its bare name
+    /// like any other primitive.
+    #[test]
+    fn test_nonzero_integer_kinds() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Test {
+                    a: NonZeroU8,
+                    b: NonZeroU64,
+                    c: NonZeroUsize,
+                    d: NonZeroI32,
+                }
+            }
+        });
+        expectorate::assert_contents("tests/output/builder_nonzero_integer_kinds.rs", &out);
     }
 }

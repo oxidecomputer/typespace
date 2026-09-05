@@ -130,7 +130,10 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// resolve.
 ///
 /// Primitives (each an anonymous node): `String`, `bool`,
-/// `u8..=usize`/`i8..=isize`, `f32`/`f64`, `()`, `JsonValue`. Containers
+/// `u8..=usize`/`i8..=isize`, `NonZeroU8..=NonZeroUsize`/
+/// `NonZeroI8..=NonZeroIsize`, `f32`/`f64`, `()`, `JsonValue`. A `NonZero`
+/// name lowers to `Type::Integer` carrying its full
+/// `::std::num::NonZero*` path, not the bare name. Containers
 /// (each an anonymous node): `Vec<T>`, `Box<T>`, `Map<K, V>`, `Set<T>`,
 /// `[T; N]`, `(A, B, ..)`. `Map`/`Set` are typespace markers, not Rust
 /// types--the rendered container is a settings decision, so

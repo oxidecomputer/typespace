@@ -3129,7 +3129,7 @@ fn test_default_impl_from_property_value() {
 /// plain integer; this rounds out the rest from the property side.
 #[test]
 fn test_default_value_property_kinds() {
-    let mut builder = typespace_builder!(default_settings(), {
+    let builder = typespace_builder!(default_settings(), {
         native ::std::net::IpAddr: Clone + Debug + PartialEq + Serialize + Deserialize;
 
         type Count = u32;
@@ -3153,15 +3153,6 @@ fn test_default_value_property_kinds() {
             maybe: Nullable<u32>,
         }
     });
-
-    // The macro's type grammar has no way to name a `NonZero` integer
-    // directly, so its type is added by hand.
-    builder
-        .insert(
-            "NonZeroU64".to_string(),
-            Type::Integer("::std::num::NonZeroU64".to_string()),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
 
