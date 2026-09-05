@@ -139,6 +139,12 @@ pub enum TypespaceTrait {
     Serialize,
     Clone,
     Debug,
+    /// A map's key is treated as bound by this trait, which schemars 1.x
+    /// requires and schemars 0.8 does not: 0.8 renders a map key as a
+    /// schema string whatever the key type is, so its map impls bound
+    /// only the value. typespace tracks one JsonSchema across both, and
+    /// states the stronger form, so a 0.8 consumer whose map key lacks
+    /// the trait is refused a typespace that would have compiled.
     JsonSchema,
     Display,
     FromStr,

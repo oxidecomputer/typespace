@@ -3,7 +3,7 @@
 //! What a caller states about a container type, and what reads back.
 
 use typespace::{
-    build::Type,
+    build::{Native, Struct, StructProperty, Type},
     error::Error,
     no_cycles,
     settings::{ContainerType, Settings, TraitProvision},
@@ -354,4 +354,61 @@ fn an_arity_mismatch_is_rejected_at_finalization() {
         ),
         "{err}"
     );
+}
+
+// A map key is demanded JsonSchema even where schemars 0.8 would not
+// need it. The graph, roughly:
+//
+//     struct Holder { m: BTreeMap<::ext::RawKey, u32> }
+//
+// where RawKey declares neither JsonSchema nor anything else beyond the
+// serde four. Under schemars 0.8 the derive compiles anyway, since its
+// map impls bound only the value; under 1.x the key is bound and the
+// refusal is right. typespace has one JsonSchema trait for both and
+// states the stronger form, so this refusal is deliberate.
+#[test]
+fn json_schema_demanded_of_map_key() {
+    let native = Native::new(
+        "::ext::RawKey",
+        [
+            TypespaceTrait::Clone,
+            TypespaceTrait::Debug,
+            TypespaceTrait::Serialize,
+            TypespaceTrait::Deserialize,
+        ]
+        .into_iter()
+        .collect(),
+        Vec::new(),
+    );
+
+    let settings = Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema);
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("key".to_string(), Type::Native(native))
+        .unwrap();
+    builder
+        .insert("value".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "map".to_string(),
+            Type::Map("key".to_string(), "value".to_string()),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "Holder".to_string(),
+            Struct::new()
+                .name("Holder")
+                .properties(vec![StructProperty::new("m", "map".to_string())])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("the key is demanded JsonSchema");
+    };
+    let rendered = err.to_string();
+    assert!(rendered.contains("JsonSchema"), "{rendered}");
 }
