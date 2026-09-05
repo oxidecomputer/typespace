@@ -3486,3 +3486,392 @@ fn test_default_value_unit_struct_rejects_other_value() {
     };
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
 }
+
+// The tests below cover the container and enum arms the value walk in
+// `default.rs` gained alongside this comment: `Vec`, `Map`, `Set`,
+// `Array`, `Tuple`, `TupleStruct`, and the internal/adjacent/untagged
+// (and external-with-a-payload) enum tag types.
+
+/// A property default value across every container kind: `Vec`, `Map`
+/// (string-keyed), `Set`, a fixed-size array, and a tuple.
+#[test]
+fn test_default_value_container_kinds() {
+    let builder = typespace_builder!(default_settings(), {
+        struct ContainerDefaults {
+            #[default = [8, 6, 7]]
+            numbers: Vec<u32>,
+            #[default = { "a": 1, "b": 2 }]
+            counts: Map<String, u32>,
+            #[default = [1, 2, 3]]
+            tags: Set<u32>,
+            #[default = [1, 2, 3]]
+            fixed: [u32; 3],
+            #[default = ["x", 1]]
+            pair: (String, u32),
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_container_kinds.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::ContainerDefaults>("{}").unwrap(),
+            import::ContainerDefaults {
+                numbers: vec![8, 6, 7],
+                counts: [("a".to_string(), 1), ("b".to_string(), 2)]
+                    .into_iter()
+                    .collect(),
+                tags: vec![1, 2, 3],
+                fixed: [1, 2, 3],
+                pair: ("x".to_string(), 1),
+            }
+        );
+    }
+}
+
+/// A container default renders correctly whatever container the
+/// settings configure `vec_type`, `map_type`, or `set_type` as: the
+/// `[elem, ..].into_iter().collect()` expression the walk emits only
+/// needs `FromIterator`, which every one of these implements.
+#[test]
+fn test_default_value_configured_containers() {
+    let settings = default_settings()
+        .with_vec_type(ContainerType::vec().with_path("::std::collections::VecDeque"))
+        .with_map_type(ContainerType::hash_map())
+        .with_set_type(ContainerType::hash_set());
+
+    let builder = typespace_builder!(settings, {
+        struct ConfiguredContainers {
+            #[default = [8, 6, 7]]
+            numbers: Vec<u32>,
+            #[default = { "a": 1 }]
+            counts: Map<String, u32>,
+            #[default = [1, 2, 3]]
+            tags: Set<u32>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_configured_containers.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        let value = serde_json::from_str::<import::ConfiguredContainers>("{}").unwrap();
+        assert_eq!(
+            value.numbers,
+            [8u32, 6, 7]
+                .into_iter()
+                .collect::<::std::collections::VecDeque<_>>()
+        );
+        assert_eq!(
+            value.counts,
+            [("a".to_string(), 1u32)]
+                .into_iter()
+                .collect::<::std::collections::HashMap<_, _>>()
+        );
+        assert_eq!(
+            value.tags,
+            [1u32, 2, 3]
+                .into_iter()
+                .collect::<::std::collections::HashSet<_>>()
+        );
+    }
+}
+
+/// A map's key type need not be `String`: a JSON object key is always
+/// text, but that text is wrapped and walked as a value of the key
+/// type, whatever it is, exactly as `Map`'s reference implementation
+/// does.
+#[test]
+fn test_default_value_map_key_type() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Key(String);
+
+        struct KeyedDefaults {
+            #[default = { "a": 1, "b": 2 }]
+            counts: Map<Key, u32>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_map_key_type.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::KeyedDefaults>("{}").unwrap(),
+            import::KeyedDefaults {
+                counts: [
+                    (import::Key("a".to_string()), 1),
+                    (import::Key("b".to_string()), 2),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+}
+
+/// A property default value for a tuple struct, both a plain one and
+/// one whose trailing field collects the rest of the sequence.
+#[test]
+fn test_default_value_tuple_struct_kinds() {
+    let builder = typespace_builder!(default_settings(), {
+        struct FixedTuple(u32, String);
+
+        struct OpenTuple(u32, #[flatten] Vec<u32>);
+
+        struct TupleStructDefaults {
+            #[default = [1, "a"]]
+            fixed: FixedTuple,
+            #[default = [1, 2, 3, 4]]
+            open: OpenTuple,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_tuple_struct_kinds.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::TupleStructDefaults>("{}").unwrap(),
+            import::TupleStructDefaults {
+                fixed: import::FixedTuple(1, "a".to_string()),
+                open: import::OpenTuple(1, vec![2, 3, 4]),
+            }
+        );
+    }
+}
+
+/// A property default value across the enum tag/payload combinations
+/// the walk now handles: external, internal, and adjacent tagging with
+/// a newtype-, tuple-, or struct-shaped payload, and untagged picking
+/// between a newtype- and a tuple-shaped variant.
+#[test]
+fn test_default_value_enum_tag_kinds() {
+    let builder = typespace_builder!(default_settings(), {
+        enum External {
+            Solo,
+            Newtype(u32),
+            Duo(u32, String),
+            Trio { x: u32 },
+        }
+
+        #[tag = "t"]
+        enum Internal {
+            Solo,
+            Trio { x: u32 },
+        }
+
+        #[tag = "t", content = "c"]
+        enum Adjacent {
+            Solo,
+            Newtype(u32),
+            Duo(u32, String),
+            Trio { x: u32 },
+        }
+
+        #[untagged]
+        enum Untagged {
+            AsNewtype(u32),
+            AsDuo(u32, String),
+        }
+
+        struct EnumDefaults {
+            #[default = { "Newtype": 7 }]
+            external_item: External,
+            #[default = { "Duo": [3, "hi"] }]
+            external_tuple: External,
+            #[default = { "Trio": { "x": 5 } }]
+            external_struct: External,
+            #[default = { "t": "Trio", "x": 5 }]
+            internal_struct: Internal,
+            #[default = { "t": "Newtype", "c": 7 }]
+            adjacent_item: Adjacent,
+            #[default = { "t": "Duo", "c": [3, "hi"] }]
+            adjacent_tuple: Adjacent,
+            #[default = { "t": "Trio", "c": { "x": 5 } }]
+            adjacent_struct: Adjacent,
+            #[default = 9]
+            untagged_item: Untagged,
+            #[default = [3, "hi"]]
+            untagged_tuple: Untagged,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_enum_tag_kinds.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::EnumDefaults>("{}").unwrap(),
+            import::EnumDefaults {
+                external_item: import::External::Newtype(7),
+                external_tuple: import::External::Duo(3, "hi".to_string()),
+                external_struct: import::External::Trio { x: 5 },
+                internal_struct: import::Internal::Trio { x: 5 },
+                adjacent_item: import::Adjacent::Newtype(7),
+                adjacent_tuple: import::Adjacent::Duo(3, "hi".to_string()),
+                adjacent_struct: import::Adjacent::Trio { x: 5 },
+                untagged_item: import::Untagged::AsNewtype(9),
+                untagged_tuple: import::Untagged::AsDuo(3, "hi".to_string()),
+            }
+        );
+    }
+}
+
+/// A vec rejects a value that is not a JSON array.
+#[test]
+fn test_default_value_vec_rejects_non_array() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = "nope"]
+        struct Numbers(Vec<u32>);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A map rejects a value that is not a JSON object.
+#[test]
+fn test_default_value_map_rejects_non_object() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = [1, 2]]
+        struct Counts(Map<String, u32>);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A set rejects a default value containing a duplicate: `Value` has
+/// no `Ord` impl to dedup with, and silently dropping one would make
+/// the generated value diverge from the default actually declared.
+#[test]
+fn test_default_value_set_rejects_duplicate() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = [1, 2, 1]]
+        struct Tags(Set<u32>);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A fixed-size array rejects a value of the wrong length.
+#[test]
+fn test_default_value_array_rejects_wrong_length() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = [1, 2]]
+        struct Triple([u32; 3]);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A tuple rejects a value of the wrong length.
+#[test]
+fn test_default_value_tuple_rejects_wrong_length() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = [1]]
+        struct Pair((u32, String));
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A tuple struct rejects a value of the wrong length.
+#[test]
+fn test_default_value_tuple_struct_rejects_wrong_length() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = [1]]
+        struct Pair(u32, String);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An external-tagged enum default naming a variant whose payload
+/// doesn't fit is rejected.
+#[test]
+fn test_default_value_external_enum_rejects_wrong_payload_shape() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = { "Newtype": "not a number" }]
+        enum External {
+            Newtype(u32),
+        }
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An internally-tagged enum default naming a tag that matches no
+/// variant is rejected.
+#[test]
+fn test_default_value_internal_enum_rejects_unknown_tag() {
+    let builder = typespace_builder!(default_settings(), {
+        #[tag = "t"]
+        #[default = { "t": "Nope" }]
+        enum Internal {
+            Solo,
+        }
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An adjacently-tagged enum default that names a payload-carrying
+/// variant but omits the content field is rejected.
+#[test]
+fn test_default_value_adjacent_enum_rejects_missing_content() {
+    let builder = typespace_builder!(default_settings(), {
+        #[tag = "t", content = "c"]
+        #[default = { "t": "Newtype" }]
+        enum Adjacent {
+            Newtype(u32),
+        }
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An untagged enum default that fits none of its variants is
+/// rejected.
+#[test]
+fn test_default_value_untagged_enum_rejects_no_match() {
+    let builder = typespace_builder!(default_settings(), {
+        #[untagged]
+        #[default = "not a number"]
+        enum Untagged {
+            AsNewtype(u32),
+        }
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}

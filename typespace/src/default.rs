@@ -10,7 +10,7 @@ use quote::{format_ident, quote};
 
 use crate::{
     TypespaceRenderer,
-    build::{self, StructPropertySerde, StructPropertyState, Type},
+    build::{self, StructProperty, StructPropertySerde, StructPropertyState, Type, VariantDetails},
     error::Error,
     settings::{OptionalNullable, Settings, Std},
 };
@@ -189,11 +189,99 @@ where
                 // We need Settings to know what to render here...
                 Ok(inner.map(|inner| quote! { Box::new(#inner) }))
             }
-            Type::Vec(_) => todo!(),
-            Type::Map(_, _) => todo!(),
-            Type::Set(_) => todo!(),
-            Type::Array(_, _) => todo!(),
-            Type::Tuple(items) => todo!(),
+            Type::Vec(elem_id) => {
+                let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: "expected array".to_string(),
+                })?;
+                self.default_impl_collected(elem_id, arr)
+            }
+            Type::Map(key_id, value_id) => {
+                let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: "expected object".to_string(),
+                })?;
+
+                let entries = map
+                    .iter()
+                    .map(|(key, entry_value)| {
+                        // A JSON object's keys are always strings, but the
+                        // map's key type need not be: wrap the raw key text
+                        // as a JSON string and let the key type's own walk
+                        // make sense of it, exactly as it would any other
+                        // string value.
+                        let key_value = serde_json::Value::String(key.clone());
+                        let key = self.default_impl(key_id.clone(), &key_value)?;
+                        let entry_value = self.default_impl(value_id.clone(), entry_value)?;
+                        Ok((key, entry_value))
+                    })
+                    .collect::<Result<Vec<_>, Error<Id>>>()?;
+
+                Ok(self.mode.then(|| {
+                    let entries = entries.into_iter().map(|(key, entry_value)| {
+                        let key = key.expect("a value should be generated with Mode::Generate");
+                        let entry_value =
+                            entry_value.expect("a value should be generated with Mode::Generate");
+                        quote! { (#key, #entry_value) }
+                    });
+                    // This expression works whatever `map_type` renders as:
+                    // every container it can be (a `BTreeMap`, a `HashMap`,
+                    // or a consumer's own choice) implements `FromIterator`.
+                    quote! { [ #( #entries ),* ].into_iter().collect() }
+                }))
+            }
+            Type::Set(elem_id) => {
+                let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: "expected a JSON array".to_string(),
+                })?;
+
+                // A set can't contain duplicates; `Value` has no `Ord`
+                // impl, so this is the O(n^2) check.
+                for (index, element) in arr.iter().enumerate() {
+                    if arr[..index].contains(element) {
+                        return Err(Error::InvalidDefault {
+                            value: value.clone(),
+                            id: id.clone(),
+                            reason: format!("duplicate value in set default: {element}"),
+                        });
+                    }
+                }
+
+                self.default_impl_collected(elem_id, arr)
+            }
+            Type::Array(elem_id, len) => {
+                let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: "expected a JSON array".to_string(),
+                })?;
+                if arr.len() != *len {
+                    return Err(Error::InvalidDefault {
+                        value: value.clone(),
+                        id: id.clone(),
+                        reason: format!("expected an array of length {len}"),
+                    });
+                }
+
+                let elems = arr
+                    .iter()
+                    .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.mode.then(|| {
+                    let elems = elems
+                        .into_iter()
+                        .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
+                    quote! { [ #( #elems ),* ] }
+                }))
+            }
+            Type::Tuple(items) => {
+                let elems = self.default_impl_tuple_items(items, value, &id)?;
+                Ok(elems.map(|elems| quote! { ( #( #elems ),* ) }))
+            }
 
             Type::Unit => {
                 if value.is_null() {
@@ -287,12 +375,82 @@ where
         }
     }
 
-    fn default_impl_struct(
+    /// Validate and (in `Mode::Generate`) render a homogeneous array of
+    /// elements as `[elem, ..].into_iter().collect()`.
+    ///
+    /// This expression works for all containers since we require them (by
+    /// fiat) to implement `FromIterator`. It's the same construction the
+    /// `Type::Map` arm above uses for its entries.
+    fn default_impl_collected(
         &self,
-        struct_info: &build::Struct<Id>,
+        elem_id: &Id,
+        elements: &[serde_json::Value],
+    ) -> Result<Option<TokenStream>, Error<Id>> {
+        let elems = elements
+            .iter()
+            .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.mode.then(|| {
+            let elems = elems
+                .into_iter()
+                .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
+            quote! { [ #( #elems ),* ].into_iter().collect() }
+        }))
+    }
+
+    /// Validate and (in `Mode::Generate`) render a tuple-shaped value's
+    /// components against `items`, in order.
+    ///
+    /// Shared by `Type::Tuple` and the enum variants whose payload is a
+    /// tuple: both check a JSON array's length against a fixed list of
+    /// types and walk each component in turn.
+    fn default_impl_tuple_items(
+        &self,
+        items: &[Id],
+        value: &serde_json::Value,
+        id: &Id,
+    ) -> Result<Option<Vec<TokenStream>>, Error<Id>> {
+        let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
+            value: value.clone(),
+            id: id.clone(),
+            reason: "expected a JSON array".to_string(),
+        })?;
+        if arr.len() != items.len() {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!("expected a tuple of length {}", items.len()),
+            });
+        }
+
+        let elems = items
+            .iter()
+            .zip(arr.iter())
+            .map(|(item_id, item_value)| self.default_impl(item_id.clone(), item_value))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(match self.mode {
+            Mode::Check => None,
+            Mode::Generate => Some(
+                elems
+                    .into_iter()
+                    .map(|elem| elem.expect("a value should be generated with Mode::Generate"))
+                    .collect(),
+            ),
+        })
+    }
+
+    /// Build the field initializers for a struct-shaped value: `f: expr`
+    /// for each property, in declaration order.
+    ///
+    /// For structs, we wrap this in the struct's name; for struct enum
+    /// variant's, we wrap it in the variant's name.
+    fn default_impl_struct_props(
+        &self,
+        properties: &[StructProperty<Id>],
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Vec<TokenStream>, Error<Id>> {
         let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
             value: value.clone(),
             id: id.clone(),
@@ -303,8 +461,7 @@ where
         // flattened properties with the value. If deny_unknown_fields is set,
         // things may be weird.
 
-        let (local_properties, flattened_properties): (Vec<_>, Vec<_>) = struct_info
-            .properties
+        let (local_properties, flattened_properties): (Vec<_>, Vec<_>) = properties
             .iter()
             .partition(|prop| !matches!(prop.json_name, StructPropertySerde::Flatten));
 
@@ -410,8 +567,22 @@ where
             }
         }
 
+        // TODO 9/5/2026
+        // Obviously we'll need to fix these....
         assert!(extra_keys.is_empty());
         assert!(flattened_properties.is_empty());
+
+        Ok(rendered_properties)
+    }
+
+    fn default_impl_struct(
+        &self,
+        struct_info: &build::Struct<Id>,
+        value: &serde_json::Value,
+        id: Id,
+    ) -> Result<Option<TokenStream>, Error<Id>> {
+        let rendered_properties =
+            self.default_impl_struct_props(&struct_info.properties, value, id)?;
 
         Ok(self.mode.then(|| {
             let struct_ident = format_ident!("{}", struct_info.common.name.as_ref().unwrap());
@@ -429,11 +600,8 @@ where
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        let type_name = enum_info.common.name.as_ref().unwrap();
         match enum_info.tag_type.as_ref().unwrap() {
-            build::EnumTagType::External => {
-                self.default_impl_enum_external(type_name, enum_info, value, id)
-            }
+            build::EnumTagType::External => self.default_impl_enum_external(enum_info, value, id),
             build::EnumTagType::Internal { tag } => {
                 self.default_impl_enum_internal(enum_info, tag, value, id)
             }
@@ -446,7 +614,6 @@ where
 
     fn default_impl_enum_external(
         &self,
-        type_name: &str,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
@@ -469,10 +636,62 @@ where
                 })?;
 
             let var_ident = format_ident!("{}", variant.rust_name);
-            let type_ident = format_ident!("{}", type_name);
+            let type_ident = self.render_ident(&id);
             Ok(self.mode.then(|| quote! { #type_ident::#var_ident }))
+        } else if let Some(map) = value.as_object() {
+            if map.len() != 1 {
+                return Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: "expected an object with exactly one entry".to_string(),
+                });
+            }
+            let (variant_name, var_value) = map.iter().next().unwrap();
+
+            let Some(variant) = enum_info
+                .variants
+                .iter()
+                .find(|variant| variant_name == variant.json_name())
+            else {
+                return Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: format!("no variant matching {}", variant_name),
+                });
+            };
+
+            let var_ident = format_ident!("{}", variant.rust_name);
+            let type_ident = self.render_ident(&id);
+
+            match &variant.details {
+                VariantDetails::Unit => Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: format!("variant {} carries no payload", variant_name),
+                }),
+                VariantDetails::Item(item_id) => {
+                    let item = self.default_impl(item_id.clone(), var_value)?;
+                    Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
+                }
+                VariantDetails::Tuple(items) => {
+                    let elems = self.default_impl_tuple_items(items, var_value, &id)?;
+                    Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
+                }
+                VariantDetails::Struct(props) => {
+                    let rendered = self.default_impl_struct_props(props, var_value, id.clone())?;
+                    Ok(self
+                        .mode
+                        .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                }
+            }
         } else {
-            todo!()
+            // A variant carrying a payload serializes as a single-entry
+            // object, keyed by the variant's serialized name.
+            Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: "expected a string or a single-entry object".to_string(),
+            })
         }
     }
 
@@ -483,7 +702,58 @@ where
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        todo!()
+        let Some(map) = value.as_object() else {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: "expected a JSON object".to_string(),
+            });
+        };
+
+        let Some(tag_value) = map.get(tag).and_then(serde_json::Value::as_str) else {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!("expected a string tag property {tag:?}"),
+            });
+        };
+
+        let Some(variant) = enum_info
+            .variants
+            .iter()
+            .find(|variant| tag_value == variant.json_name())
+        else {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!("variant {} not found in enum", tag_value),
+            });
+        };
+
+        let var_ident = format_ident!("{}", variant.rust_name);
+        let type_ident = self.render_ident(&id);
+
+        match &variant.details {
+            VariantDetails::Unit => Ok(self.mode.then(|| quote! { #type_ident::#var_ident })),
+            VariantDetails::Struct(props) => {
+                // Everything but the tag belongs to the variant's own
+                // properties; walk it as an ordinary struct-shaped value.
+                let inner_value = serde_json::Value::Object(
+                    map.iter()
+                        .filter(|(name, _)| name.as_str() != tag)
+                        .map(|(name, prop_value)| (name.clone(), prop_value.clone()))
+                        .collect(),
+                );
+                let rendered = self.default_impl_struct_props(props, &inner_value, id.clone())?;
+                Ok(self
+                    .mode
+                    .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+            }
+            // Serde's internal tagging can only place the tag alongside a
+            // map, so a variant carrying an internally-tagged payload is
+            // always struct-shaped (or unit); this can't be reached.
+            VariantDetails::Item(_) | VariantDetails::Tuple(_) => unreachable!(),
+        }
     }
 
     fn default_impl_enum_adjacent(
@@ -494,7 +764,67 @@ where
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        todo!()
+        let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
+            value: value.clone(),
+            id: id.clone(),
+            reason: "expected a JSON object".to_string(),
+        })?;
+
+        let tag_value = map.get(tag).and_then(serde_json::Value::as_str);
+        let content_value = map.get(content);
+
+        let (tag_value, content_value) = match (map.len(), tag_value, content_value) {
+            (1, Some(tag_value), None) => (tag_value, None),
+            (2, Some(tag_value), content_value @ Some(_)) => (tag_value, content_value),
+            _ => {
+                return Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: format!(
+                        "expected an object with a {tag:?} tag property and, if the variant \
+                         carries a payload, a {content:?} content property"
+                    ),
+                });
+            }
+        };
+
+        let variant = enum_info
+            .variants
+            .iter()
+            .find(|variant| tag_value == variant.json_name())
+            .ok_or_else(|| Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!("variant {} not found in enum", tag_value),
+            })?;
+
+        let var_ident = format_ident!("{}", variant.rust_name);
+        let type_ident = self.render_ident(&id);
+
+        match (&variant.details, content_value) {
+            (VariantDetails::Unit, None) => {
+                Ok(self.mode.then(|| quote! { #type_ident::#var_ident }))
+            }
+            (VariantDetails::Item(item_id), Some(content_value)) => {
+                let item = self.default_impl(item_id.clone(), content_value)?;
+                Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
+            }
+            (VariantDetails::Tuple(items), Some(content_value)) => {
+                let elems = self.default_impl_tuple_items(items, content_value, &id)?;
+                Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
+            }
+            (VariantDetails::Struct(props), Some(content_value)) => {
+                let rendered = self.default_impl_struct_props(props, content_value, id.clone())?;
+                Ok(self
+                    .mode
+                    .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+            }
+            _ => Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!("variant {} does not accept this payload", tag_value),
+            }),
+        }
     }
 
     fn default_impl_enum_untagged(
@@ -503,7 +833,48 @@ where
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        todo!()
+        let type_ident = self.render_ident(&id);
+
+        // Untagged deserialization tries each variant in declaration
+        // order and keeps the first whose shape fits; a default value
+        // follows the same rule, so the first variant this value fits is
+        // the one used to build it. A variant that always fits (a native
+        // type, say, which accepts anything) makes every variant behind
+        // it unreachable here, exactly as it would at deserialization
+        // time.
+        enum_info
+            .variants
+            .iter()
+            .find_map(|variant| {
+                let var_ident = format_ident!("{}", variant.rust_name);
+                match &variant.details {
+                    VariantDetails::Unit => value
+                        .is_null()
+                        .then(|| self.mode.then(|| quote! { #type_ident::#var_ident })),
+                    VariantDetails::Item(item_id) => self
+                        .default_impl(item_id.clone(), value)
+                        .ok()
+                        .map(|item| item.map(|item| quote! { #type_ident::#var_ident(#item) })),
+                    VariantDetails::Tuple(items) => self
+                        .default_impl_tuple_items(items, value, &id)
+                        .ok()
+                        .map(|elems| {
+                            elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) })
+                        }),
+                    VariantDetails::Struct(props) => self
+                        .default_impl_struct_props(props, value, id.clone())
+                        .ok()
+                        .map(|rendered| {
+                            self.mode
+                                .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } })
+                        }),
+                }
+            })
+            .ok_or_else(|| Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: "no variant of the untagged enum accepts this value".to_string(),
+            })
     }
 
     fn default_impl_tuple_struct(
@@ -512,7 +883,56 @@ where
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        todo!()
+        let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
+            value: value.clone(),
+            id: id.clone(),
+            reason: "expected a JSON array".to_string(),
+        })?;
+
+        let field_count = tuple_struct.fields.len();
+        let has_enough = match tuple_struct.rest {
+            Some(_) => arr.len() >= field_count,
+            None => arr.len() == field_count,
+        };
+        if !has_enough {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: match tuple_struct.rest {
+                    Some(_) => format!("expected an array of at least length {field_count}"),
+                    None => format!("expected an array of length {field_count}"),
+                },
+            });
+        }
+
+        let (head, tail) = arr.split_at(field_count);
+
+        let field_values = tuple_struct
+            .fields
+            .iter()
+            .zip(head.iter())
+            .map(|(field_id, field_value)| self.default_impl(field_id.clone(), field_value))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Anything past the fixed fields belongs to `rest` as a whole,
+        // walked as a value of its own array-shaped type.
+        let rest_value = tuple_struct
+            .rest
+            .as_ref()
+            .map(|rest_id| {
+                self.default_impl(rest_id.clone(), &serde_json::Value::Array(tail.to_vec()))
+            })
+            .transpose()?;
+
+        Ok(self.mode.then(|| {
+            let field_values = field_values
+                .into_iter()
+                .map(|value| value.expect("a value should be generated with Mode::Generate"));
+            let rest_value = rest_value
+                .map(|value| value.expect("a value should be generated with Mode::Generate"));
+            let struct_ident = self.render_ident(&id);
+            quote! { #struct_ident( #( #field_values, )* #rest_value ) }
+        }))
     }
 
     fn default_impl_unit_struct(
