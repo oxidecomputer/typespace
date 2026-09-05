@@ -64,25 +64,13 @@ enum Mode {
     Check,
     Generate,
 }
-impl Mode {
-    fn then<F>(&self, generate: F) -> Option<TokenStream>
-    where
-        F: FnOnce() -> TokenStream,
-    {
-        match self {
-            Mode::Check => None,
-            Mode::Generate => Some(generate()),
-        }
-    }
-}
 
 /// Holds the shared context threaded through default-value processing.
 struct DefaultImpl<'a, Id> {
     types: &'a BTreeMap<Id, Type<Id>>,
     settings: &'a Settings,
-    /// Scope to find generated types. Generated default functions live in the
-    /// `defaults` module; to reach generated types it typically needs to
-    /// prepend `super::`.
+    /// Scope for reaching a type from the generated `defaults` module,
+    /// typically `super::`.
     scope: Option<&'a str>,
     mode: Mode,
 }
@@ -91,6 +79,18 @@ impl<Id> DefaultImpl<'_, Id>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    /// Produce `f`'s value in `Mode::Generate`; nothing in
+    /// `Mode::Check`, which only validates a value's shape.
+    fn generate<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce() -> T,
+    {
+        match self.mode {
+            Mode::Check => None,
+            Mode::Generate => Some(f()),
+        }
+    }
+
     /// Render `id`'s type, qualified for the walk's scope.
     fn render_ident(&self, id: &Id) -> TokenStream {
         TypespaceRenderer::new(self.types, self.settings).render_ident_with_scope(id, self.scope)
@@ -162,7 +162,7 @@ where
                 // TODO 9/4/2026
                 // expect rather than unwrap?
                 let text = value.to_string();
-                Ok(self.mode.then(|| {
+                Ok(self.generate(|| {
                     let type_path = self.render_ident(&id);
                     quote! {
                         ::serde_json::from_str::<#type_path>(#text).unwrap()
@@ -174,7 +174,7 @@ where
             // also permitted as a value.
             Type::Option(type_id) => {
                 if value.is_null() {
-                    Ok(self.mode.then(|| self.render_option_variant(&id, "None")))
+                    Ok(self.generate(|| self.render_option_variant(&id, "None")))
                 } else {
                     let inner = self.default_impl(type_id.clone(), value)?;
                     Ok(inner.map(|inner| {
@@ -219,7 +219,7 @@ where
                     })
                     .collect::<Result<Vec<_>, Error<Id>>>()?;
 
-                Ok(self.mode.then(|| {
+                Ok(self.generate(|| {
                     let entries = entries.into_iter().map(|(key, entry_value)| {
                         let key = key.expect("a value should be generated with Mode::Generate");
                         let entry_value =
@@ -271,7 +271,7 @@ where
                     .iter()
                     .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(self.mode.then(|| {
+                Ok(self.generate(|| {
                     let elems = elems
                         .into_iter()
                         .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
@@ -285,7 +285,7 @@ where
 
             Type::Unit => {
                 if value.is_null() {
-                    Ok(self.mode.then(|| quote! { () }))
+                    Ok(self.generate(|| quote! { () }))
                 } else {
                     Err(Error::InvalidDefault {
                         value: value.clone(),
@@ -296,15 +296,14 @@ where
             }
 
             Type::Boolean => {
-                if let Some(v) = value.as_bool() {
-                    Ok(self.mode.then(|| quote! { #v }))
-                } else {
-                    Err(Error::InvalidDefault {
+                let Some(v) = value.as_bool() else {
+                    return Err(Error::InvalidDefault {
                         value: value.clone(),
                         id: id.clone(),
                         reason: "expected a boolean".to_string(),
-                    })
-                }
+                    });
+                };
+                Ok(self.generate(|| quote! { #v }))
             }
             Type::Integer(itype) => {
                 let Some(_) = value.as_number() else {
@@ -319,7 +318,7 @@ where
                     let type_path = syn::parse_str::<syn::TypePath>(itype).unwrap();
                     let num = proc_macro2::Literal::from_str(value.to_string().as_str()).unwrap();
 
-                    Ok(self.mode.then(|| {
+                    Ok(self.generate(|| {
                         quote! {
                             #type_path::new(#num).unwrap()
                         }
@@ -330,9 +329,7 @@ where
                         Ok(v) => v,
                         Err(_) => unreachable!(),
                     };
-                    Ok(self
-                        .mode
-                        .then(|| TokenStream::from(proc_macro2::TokenTree::from(val))))
+                    Ok(self.generate(|| TokenStream::from(proc_macro2::TokenTree::from(val))))
                 }
             }
             Type::Float(ftype) => {
@@ -348,24 +345,21 @@ where
                     Ok(v) => v,
                     Err(_) => unreachable!(),
                 };
-                Ok(self
-                    .mode
-                    .then(|| TokenStream::from(proc_macro2::TokenTree::from(val))))
+                Ok(self.generate(|| TokenStream::from(proc_macro2::TokenTree::from(val))))
             }
             Type::String => {
-                if let Some(s) = value.as_str() {
-                    Ok(self.mode.then(|| quote! { #s.to_string()}))
-                } else {
-                    Err(Error::InvalidDefault {
+                let Some(s) = value.as_str() else {
+                    return Err(Error::InvalidDefault {
                         value: value.clone(),
                         id: id.clone(),
                         reason: "expected a string".to_string(),
-                    })
-                }
+                    });
+                };
+                Ok(self.generate(|| quote! { #s.to_string()}))
             }
             Type::JsonValue => {
                 let text = value.to_string();
-                Ok(self.mode.then(|| {
+                Ok(self.generate(|| {
                     quote! {
                         ::serde_json::from_str::<::serde_json::Value>(#text).unwrap()
                     }
@@ -390,7 +384,7 @@ where
             .iter()
             .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(self.mode.then(|| {
+        Ok(self.generate(|| {
             let elems = elems
                 .into_iter()
                 .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
@@ -401,9 +395,10 @@ where
     /// Validate and (in `Mode::Generate`) render a tuple-shaped value's
     /// components against `items`, in order.
     ///
-    /// Shared by `Type::Tuple` and the enum variants whose payload is a
-    /// tuple: both check a JSON array's length against a fixed list of
-    /// types and walk each component in turn.
+    /// Shared by `Type::Tuple`, the enum variants whose payload is a
+    /// tuple, and a tuple struct's fixed fields: all three check a JSON
+    /// array's length against a fixed list of types and walk each
+    /// component in turn.
     fn default_impl_tuple_items(
         &self,
         items: &[Id],
@@ -429,15 +424,12 @@ where
             .map(|(item_id, item_value)| self.default_impl(item_id.clone(), item_value))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(match self.mode {
-            Mode::Check => None,
-            Mode::Generate => Some(
-                elems
-                    .into_iter()
-                    .map(|elem| elem.expect("a value should be generated with Mode::Generate"))
-                    .collect(),
-            ),
-        })
+        Ok(self.generate(|| {
+            elems
+                .into_iter()
+                .map(|elem| elem.expect("a value should be generated with Mode::Generate"))
+                .collect()
+        }))
     }
 
     /// Build the field initializers for a struct-shaped value: `f: expr`
@@ -494,13 +486,15 @@ where
                 (None, None) => unreachable!(),
                 (None, Some(_)) => extra_keys.push(key),
                 (Some(prop_info), None) => {
-                    if prop_info.state != StructPropertyState::Optional {
-                        return Err(Error::InvalidDefault {
-                            value: value.clone(),
-                            id: id.clone(),
-                            reason: format!("missing required property {}", key),
-                        });
-                    } else if self.mode == Mode::Generate {
+                    // Absent from the value: every state falls back to
+                    // Default::default(), matching typify1's
+                    // value_for_struct_props and the empty (or
+                    // Optional-only) obligation set feasibility computes
+                    // for this branch. check_type_defaults runs before
+                    // trait resolution, so this is a shape check only,
+                    // not a check of whether the property's type
+                    // actually has Default.
+                    if self.mode == Mode::Generate {
                         // TODO 9/4/2026
                         // Qualify default
                         let prop_ident = format_ident!("{}", prop_info.rust_name);
@@ -582,10 +576,10 @@ where
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         let rendered_properties =
-            self.default_impl_struct_props(&struct_info.properties, value, id)?;
+            self.default_impl_struct_props(&struct_info.properties, value, id.clone())?;
 
-        Ok(self.mode.then(|| {
-            let struct_ident = format_ident!("{}", struct_info.common.name.as_ref().unwrap());
+        Ok(self.generate(|| {
+            let struct_ident = self.render_ident(&id);
             quote! {
                 #struct_ident {
                     #( #rendered_properties, )*
@@ -637,7 +631,7 @@ where
 
             let var_ident = format_ident!("{}", variant.rust_name);
             let type_ident = self.render_ident(&id);
-            Ok(self.mode.then(|| quote! { #type_ident::#var_ident }))
+            Ok(self.generate(|| quote! { #type_ident::#var_ident }))
         } else if let Some(map) = value.as_object() {
             if map.len() != 1 {
                 return Err(Error::InvalidDefault {
@@ -679,9 +673,7 @@ where
                 }
                 VariantDetails::Struct(props) => {
                     let rendered = self.default_impl_struct_props(props, var_value, id.clone())?;
-                    Ok(self
-                        .mode
-                        .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                    Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
                 }
             }
         } else {
@@ -733,26 +725,38 @@ where
         let var_ident = format_ident!("{}", variant.rust_name);
         let type_ident = self.render_ident(&id);
 
+        // Everything but the tag belongs to the variant's own payload.
+        let inner_value = serde_json::Value::Object(
+            map.iter()
+                .filter(|(name, _)| name.as_str() != tag)
+                .map(|(name, prop_value)| (name.clone(), prop_value.clone()))
+                .collect(),
+        );
+
         match &variant.details {
-            VariantDetails::Unit => Ok(self.mode.then(|| quote! { #type_ident::#var_ident })),
-            VariantDetails::Struct(props) => {
-                // Everything but the tag belongs to the variant's own
-                // properties; walk it as an ordinary struct-shaped value.
-                let inner_value = serde_json::Value::Object(
-                    map.iter()
-                        .filter(|(name, _)| name.as_str() != tag)
-                        .map(|(name, prop_value)| (name.clone(), prop_value.clone()))
-                        .collect(),
-                );
-                let rendered = self.default_impl_struct_props(props, &inner_value, id.clone())?;
-                Ok(self
-                    .mode
-                    .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+            VariantDetails::Unit => Ok(self.generate(|| quote! { #type_ident::#var_ident })),
+            // Serde accepts an internally-tagged newtype variant as long
+            // as its payload serializes as a map, so the tag can sit
+            // alongside the payload's own keys; walk the payload's type
+            // against the tag-stripped object exactly as Struct does.
+            VariantDetails::Item(item_id) => {
+                let item = self.default_impl(item_id.clone(), &inner_value)?;
+                Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
             }
-            // Serde's internal tagging can only place the tag alongside a
-            // map, so a variant carrying an internally-tagged payload is
-            // always struct-shaped (or unit); this can't be reached.
-            VariantDetails::Item(_) | VariantDetails::Tuple(_) => unreachable!(),
+            VariantDetails::Struct(props) => {
+                let rendered = self.default_impl_struct_props(props, &inner_value, id.clone())?;
+                Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+            }
+            // Serde rejects an internally-tagged tuple variant outright: a
+            // tuple's payload has no keys to merge the tag alongside.
+            VariantDetails::Tuple(_) => Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: format!(
+                    "variant {tag_value} carries a tuple payload, which \
+                     internal tagging cannot represent"
+                ),
+            }),
         }
     }
 
@@ -803,7 +807,7 @@ where
 
         match (&variant.details, content_value) {
             (VariantDetails::Unit, None) => {
-                Ok(self.mode.then(|| quote! { #type_ident::#var_ident }))
+                Ok(self.generate(|| quote! { #type_ident::#var_ident }))
             }
             (VariantDetails::Item(item_id), Some(content_value)) => {
                 let item = self.default_impl(item_id.clone(), content_value)?;
@@ -815,9 +819,7 @@ where
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
                 let rendered = self.default_impl_struct_props(props, content_value, id.clone())?;
-                Ok(self
-                    .mode
-                    .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
             }
             _ => Err(Error::InvalidDefault {
                 value: value.clone(),
@@ -850,7 +852,7 @@ where
                 match &variant.details {
                     VariantDetails::Unit => value
                         .is_null()
-                        .then(|| self.mode.then(|| quote! { #type_ident::#var_ident })),
+                        .then(|| self.generate(|| quote! { #type_ident::#var_ident })),
                     VariantDetails::Item(item_id) => self
                         .default_impl(item_id.clone(), value)
                         .ok()
@@ -865,8 +867,7 @@ where
                         .default_impl_struct_props(props, value, id.clone())
                         .ok()
                         .map(|rendered| {
-                            self.mode
-                                .then(|| quote! { #type_ident::#var_ident { #( #rendered, )* } })
+                            self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } })
                         }),
                 }
             })
@@ -906,13 +907,11 @@ where
         }
 
         let (head, tail) = arr.split_at(field_count);
-
-        let field_values = tuple_struct
-            .fields
-            .iter()
-            .zip(head.iter())
-            .map(|(field_id, field_value)| self.default_impl(field_id.clone(), field_value))
-            .collect::<Result<Vec<_>, _>>()?;
+        let field_values = self.default_impl_tuple_items(
+            &tuple_struct.fields,
+            &serde_json::Value::Array(head.to_vec()),
+            &id,
+        )?;
 
         // Anything past the fixed fields belongs to `rest` as a whole,
         // walked as a value of its own array-shaped type.
@@ -924,10 +923,10 @@ where
             })
             .transpose()?;
 
-        Ok(self.mode.then(|| {
+        Ok(self.generate(|| {
             let field_values = field_values
-                .into_iter()
-                .map(|value| value.expect("a value should be generated with Mode::Generate"));
+                .expect("a value should be generated with Mode::Generate")
+                .into_iter();
             let rest_value = rest_value
                 .map(|value| value.expect("a value should be generated with Mode::Generate"));
             let struct_ident = self.render_ident(&id);
@@ -942,7 +941,7 @@ where
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         if value == &unit_struct.repr {
-            Ok(self.mode.then(|| self.render_ident(&id)))
+            Ok(self.generate(|| self.render_ident(&id)))
         } else {
             Err(Error::InvalidDefault {
                 value: value.clone(),
@@ -959,7 +958,7 @@ where
         _type_name: &str,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         if value.is_null() {
-            Ok(self.mode.then(|| {
+            Ok(self.generate(|| {
                 quote! {
                     // TODO 9/4/2026
                     // Create the null value.
@@ -1334,7 +1333,7 @@ mod tests {
             )),
             reparse(
                 &quote! {
-                   Test {
+                   super::Test {
                        a: 1_u32,
                        b: Some(2_u32),
                        c: Default::default(),

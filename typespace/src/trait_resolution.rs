@@ -175,15 +175,13 @@ where
                             .properties
                             .iter()
                             .filter(|prop| {
-                                !matches!(
-                                    prop.state,
-                                    StructPropertyState::Optional // | StructPropertyState::DefaultValue(_)
-                                ) && match (named, prop.wire_name()) {
-                                    (Some(named), Some(wire_name)) => {
-                                        !named.contains_key(wire_name)
+                                !matches!(prop.state, StructPropertyState::Optional)
+                                    && match (named, prop.wire_name()) {
+                                        (Some(named), Some(wire_name)) => {
+                                            !named.contains_key(wire_name)
+                                        }
+                                        _ => true,
                                     }
-                                    _ => true,
-                                }
                             })
                             .map(|prop| {
                                 (
@@ -202,17 +200,23 @@ where
                         // possible.
                         Feasibility::Impossible
                     } else {
+                        // A property in the Default state fills from
+                        // Default::default(), so its type must implement
+                        // it. serde_default_properties seeds the same
+                        // requirement for serde's #[serde(default)]; this
+                        // records it again because the impl calls it in
+                        // its own right. An optional property is an
+                        // Option, Default whatever it holds, and a
+                        // property with its own default value fills from a
+                        // generated function.
                         let obligations = struct_info
                             .properties
                             .iter()
-                            .filter_map(|prop| {
-                                matches!(prop.state, StructPropertyState::DefaultValue(_)).then(
-                                    || {
-                                        (
-                                            Relation::Field(prop.rust_name.to_string()),
-                                            prop.type_id.clone(),
-                                        )
-                                    },
+                            .filter(|prop| matches!(prop.state, StructPropertyState::Default))
+                            .map(|prop| {
+                                (
+                                    Relation::Field(prop.rust_name.clone()),
+                                    prop.type_id.clone(),
                                 )
                             })
                             .collect();
@@ -277,9 +281,7 @@ where
             // NewtypeStruct::render does not write. Claiming the trait
             // would derive one that ignores the value, or fail to
             // compile where the inner type has no Default.
-            TypespaceTrait::Default
-                if settings.typify_compat || common.default().is_some() =>
-            {
+            TypespaceTrait::Default if settings.typify_compat || common.default().is_some() => {
                 Feasibility::Impossible
             }
             TypespaceTrait::Default => Feasibility::Derivable,

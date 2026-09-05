@@ -37,6 +37,21 @@ pub struct EnumDefaults {
     #[serde(default = "defaults::enum_defaults_untagged_tuple")]
     pub untagged_tuple: Untagged,
 }
+impl ::std::default::Default for EnumDefaults {
+    fn default() -> Self {
+        Self {
+            external_item: defaults::enum_defaults_external_item(),
+            external_tuple: defaults::enum_defaults_external_tuple(),
+            external_struct: defaults::enum_defaults_external_struct(),
+            internal_struct: defaults::enum_defaults_internal_struct(),
+            adjacent_item: defaults::enum_defaults_adjacent_item(),
+            adjacent_tuple: defaults::enum_defaults_adjacent_tuple(),
+            adjacent_struct: defaults::enum_defaults_adjacent_struct(),
+            untagged_item: defaults::enum_defaults_untagged_item(),
+            untagged_tuple: defaults::enum_defaults_untagged_tuple(),
+        }
+    }
+}
 #[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq)]
 pub enum External {
     Solo,

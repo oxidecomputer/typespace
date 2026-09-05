@@ -16,6 +16,19 @@ pub struct PropertyDefaults {
     #[serde(default = "defaults::property_defaults_maybe")]
     pub maybe: ::std::option::Option<u32>,
 }
+impl ::std::default::Default for PropertyDefaults {
+    fn default() -> Self {
+        Self {
+            address: defaults::property_defaults_address(),
+            blob: defaults::property_defaults_blob(),
+            weight: defaults::property_defaults_weight(),
+            wrapped: defaults::property_defaults_wrapped(),
+            count: defaults::property_defaults_count(),
+            nz: defaults::property_defaults_nz(),
+            maybe: defaults::property_defaults_maybe(),
+        }
+    }
+}
 #[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq, Default)]
 #[serde(transparent)]
 pub struct Wrapped(pub u32);

@@ -3165,15 +3165,18 @@ fn test_default_value_property_kinds() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    // `::std::net::IpAddr` has no `Default` impl to declare, so
-    // `PropertyDefaults` cannot derive or hand-write `Default` either;
-    // an empty object exercises the same `defaults::` functions
-    // through `Deserialize` instead.
+    // Every property takes its value from a generated function, so the
+    // struct's own Default calls each of them, and an empty object
+    // deserializes to the same thing.
     #[check_and_include(
         "tests/output/test_default_value_property_kinds.rs",
         ts.to_codespace().into_stream()
     )]
     fn inner() {
+        assert_eq!(
+            import::PropertyDefaults::default(),
+            serde_json::from_str::<import::PropertyDefaults>("{}").unwrap()
+        );
         assert_eq!(
             serde_json::from_str::<import::PropertyDefaults>("{}").unwrap(),
             import::PropertyDefaults {
@@ -3184,6 +3187,42 @@ fn test_default_value_property_kinds() {
                 count: 7,
                 nz: ::std::num::NonZeroU64::new(1).unwrap(),
                 maybe: Some(5),
+            }
+        );
+    }
+}
+
+/// A property whose default value is itself a struct-shaped literal.
+///
+/// The generated `defaults::` function body constructs `Inner` by name;
+/// that function lives in the `defaults` submodule, so the name needs
+/// the walk's `super::` scope. This is the only place in `default.rs`
+/// that renders a plain struct's own name, so a scoping bug there (a
+/// bare `format_ident!` instead of `render_ident`) would compile-fail
+/// silently until something exercised it.
+#[test]
+fn test_default_value_property_struct_kind() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Inner {
+            x: u32,
+        }
+
+        struct PropertyStructDefault {
+            #[default = { "x": 5 }]
+            inner: Inner,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_property_struct_kind.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::PropertyStructDefault>("{}").unwrap(),
+            import::PropertyStructDefault {
+                inner: import::Inner { x: 5 },
             }
         );
     }
@@ -3729,6 +3768,51 @@ fn test_default_value_enum_tag_kinds() {
     }
 }
 
+/// An internally-tagged newtype variant whose payload is itself a
+/// struct: serde accepts this shape (the tag sits alongside the
+/// payload's own keys in the same map), and the builder does not
+/// reject constructing one, so the walk must handle it rather than
+/// treat it as unreachable.
+#[test]
+fn test_default_value_internal_enum_item_variant() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Payload {
+            y: u32,
+        }
+
+        #[tag = "t"]
+        enum Internal {
+            Solo,
+            Wrapped(Payload),
+        }
+
+        struct InternalItemDefault {
+            #[default = { "t": "Wrapped", "y": 9 }]
+            wrapped: Internal,
+            // A unit variant under internal tagging: serde is already
+            // known to support this (it serializes as just the tag), so
+            // this confirms the walk agrees.
+            #[default = { "t": "Solo" }]
+            solo: Internal,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_internal_enum_item_variant.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::InternalItemDefault>("{}").unwrap(),
+            import::InternalItemDefault {
+                wrapped: import::Internal::Wrapped(import::Payload { y: 9 }),
+                solo: import::Internal::Solo,
+            }
+        );
+    }
+}
+
 /// A vec rejects a value that is not a JSON array.
 #[test]
 fn test_default_value_vec_rejects_non_array() {
@@ -3834,6 +3918,25 @@ fn test_default_value_internal_enum_rejects_unknown_tag() {
         #[default = { "t": "Nope" }]
         enum Internal {
             Solo,
+        }
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An internally-tagged enum default naming a tuple-payload variant is
+/// rejected: serde has no map-shaped representation for a tuple
+/// alongside a tag, so there is no value to build.
+#[test]
+fn test_default_value_internal_enum_rejects_tuple_variant() {
+    let builder = typespace_builder!(default_settings(), {
+        #[tag = "t"]
+        #[default = { "t": "Duo" }]
+        enum Internal {
+            Solo,
+            Duo(u32, String),
         }
     });
     let Err(err) = builder.finalize(no_cycles) else {
