@@ -8,10 +8,10 @@
 //! behavior and drop the attribute.
 
 use typespace::{
+    TypespaceBuilder, TypespaceTrait,
     build::{Native, Struct, StructProperty, Type},
     no_cycles,
     settings::{ContainerType, Settings},
-    TypespaceBuilder, TypespaceTrait,
 };
 
 mod common;

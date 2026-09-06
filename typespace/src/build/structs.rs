@@ -1,12 +1,14 @@
 // Copyright 2026 Oxide Computer Company
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use quote::{format_ident, quote};
 
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
+use crate::default::check_default;
 use crate::error::{Error, NameAxis};
 use crate::serde_attrs::SerdeDerives;
+use crate::settings::Settings;
 use crate::{DefaultConstructor, RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
 
 /// A struct with named fields.
@@ -114,6 +116,19 @@ impl<Id> Struct<Id> {
     {
         self.common.validate_name("struct")?;
         check_properties(self.common.built_name(), &self.properties)
+    }
+
+    pub(crate) fn check_field_defaults(
+        &self,
+        types: &BTreeMap<Id, Type<Id>>,
+        settings: &Settings,
+    ) -> Result<(), Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        self.properties
+            .iter()
+            .try_for_each(|prop| prop.check_defaults(types, settings))
     }
 
     /// The struct's name, if one has been set.
@@ -531,6 +546,21 @@ impl<Id> StructProperty<Id> {
     /// The ID of the property's type.
     pub fn type_id(&self) -> &Id {
         &self.type_id
+    }
+
+    pub(crate) fn check_defaults(
+        &self,
+        types: &BTreeMap<Id, Type<Id>>,
+        settings: &Settings,
+    ) -> Result<(), Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        let StructPropertyState::DefaultValue(JsonValue(value)) = &self.state else {
+            return Ok(());
+        };
+
+        check_default(types, settings, value, self.type_id.clone())
     }
 }
 

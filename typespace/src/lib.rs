@@ -556,10 +556,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     fn check_type_defaults(&self) -> Result<(), Error<Id>> {
         for (type_id, typ) in &self.types {
-            if let Some(common) = typ.common()
-                && let Some(default) = &common.default
-            {
-                check_default(&self.types, &self.settings, &default.0, type_id.clone())?;
+            if let Some(common) = typ.common() {
+                if let Some(default) = &common.default {
+                    check_default(&self.types, &self.settings, &default.0, type_id.clone())?;
+                }
+            }
+
+            match typ {
+                Type::Struct(struct_info) => {
+                    struct_info.check_field_defaults(&self.types, &self.settings)?
+                }
+                Type::Enum(enum_info) => {
+                    enum_info.check_field_defaults(&self.types, &self.settings)?
+                }
+                _ => (),
             }
         }
         Ok(())
@@ -762,15 +772,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // Check the uniqueness of type names.
         self.check_type_names()?;
 
-        // Check type defaults
-        self.check_type_defaults()?;
-
         // Disallow never (!) from being used in positions where a value would
         // be required.
         // TODO 9/1/2026 I hate this; I think we should be doing general type
         // validation for which this is one kind of validation. There may be
         // multiple passes: per-type and then intra-type.
         self.check_never_positions()?;
+
+        // Check type defaults
+        self.check_type_defaults()?;
 
         let Self {
             mut types,

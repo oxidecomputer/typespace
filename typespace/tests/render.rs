@@ -3,6 +3,7 @@
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::{
+    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::{
         Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeStruct, Struct, StructProperty,
         StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias, UnitStruct,
@@ -11,15 +12,10 @@ use typespace::{
     error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin},
     no_cycles,
     settings::{ContainerType, OptionalNullable, Settings, Std},
-    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
 
 mod common;
-
-// Alias used by test_json_serde_crate_override: generated code refers to
-// json-serde helpers through this renamed path.
-use json_serde as my_json_serde;
 
 // Stub for the user-provided type referenced by OptionalNullable::CustomType.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -1397,7 +1393,7 @@ fn test_cycles() {
             Struct::new()
                 .name("A")
                 .properties(vec![
-                    StructProperty::new("a", struct_a_id).with_state(StructPropertyState::Optional)
+                    StructProperty::new("a", struct_a_id).with_state(StructPropertyState::Optional),
                 ])
                 .build()
                 .unwrap(),
@@ -1412,7 +1408,7 @@ fn test_cycles() {
             Struct::new()
                 .name("B")
                 .properties(vec![
-                    StructProperty::new("c", c_id).with_state(StructPropertyState::Optional)
+                    StructProperty::new("c", c_id).with_state(StructPropertyState::Optional),
                 ])
                 .build()
                 .unwrap(),
@@ -1424,7 +1420,7 @@ fn test_cycles() {
             Struct::new()
                 .name("C")
                 .properties(vec![
-                    StructProperty::new("b", b_id).with_state(StructPropertyState::Optional)
+                    StructProperty::new("b", b_id).with_state(StructPropertyState::Optional),
                 ])
                 .build()
                 .unwrap(),
@@ -2829,19 +2825,19 @@ fn test_deny_unknown_fields_enum_tags() {
         // Internal: composes with `tag = "type"`.
         let v: import::DenyInternal = serde_json::from_str(r#"{"type": "Only", "x": 1}"#).unwrap();
         assert!(matches!(v, import::DenyInternal::Only { x: 1 }));
-        assert!(serde_json::from_str::<import::DenyInternal>(
-            r#"{"type": "Only", "x": 1, "y": 2}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<import::DenyInternal>(r#"{"type": "Only", "x": 1, "y": 2}"#)
+                .is_err()
+        );
 
         // Adjacent: composes with `tag = "t", content = "c"`.
         let v: import::DenyAdjacent =
             serde_json::from_str(r#"{"t": "Only", "c": {"x": 1}}"#).unwrap();
         assert!(matches!(v, import::DenyAdjacent::Only { x: 1 }));
-        assert!(serde_json::from_str::<import::DenyAdjacent>(
-            r#"{"t": "Only", "c": {"x": 1, "y": 2}}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<import::DenyAdjacent>(r#"{"t": "Only", "c": {"x": 1, "y": 2}}"#)
+                .is_err()
+        );
 
         // Untagged: composes with `untagged`.
         let v: import::DenyUntagged = serde_json::from_str(r#"{"x": 1}"#).unwrap();
@@ -4316,4 +4312,185 @@ fn test_default_value_untagged_enum_rejects_no_match() {
         panic!("expected finalize to reject the default value");
     };
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+#[test]
+fn test_default_simple_struct_cycle() {
+    let builder = typespace_builder!(default_settings(), {
+        struct A {
+            #[default = {}]
+            a: OptionalNullable<A>,
+        }
+    });
+
+    fn make_box_id(id: &String) -> String {
+        format!("boxed {}", id)
+    }
+
+    let Err(err) = builder.finalize(make_box_id) else {
+        panic!("expected finalize to reject cyclic default value");
+    };
+
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+#[test]
+fn test_default_simple_enum_cycle() {
+    let builder = typespace_builder!(default_settings(), {
+        enum A {
+            Whatever,
+            B {
+                #[default = { B: {} }]
+                a: Optional<A>,
+            }
+        }
+    });
+
+    fn make_box_id(id: &String) -> String {
+        format!("boxed {}", id)
+    }
+
+    let Err(err) = builder.finalize(make_box_id) else {
+        panic!("expected finalize to reject cyclic default value");
+    };
+
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+// These structures seem like they might have cylic defaults, but they
+// actually don't.
+#[test]
+fn test_default_not_actually_a_cycle() {
+    let builder = typespace_builder!(default_settings(), {
+        struct A {
+            a: Optional<A>,
+        }
+
+        // We pass through A several times, but we don't actually cycle
+        // infinitely. We should only ever have a single item in the
+        // expansion_set that looks for cycles.
+        struct B {
+            #[default = { a: { a: {} } }]
+            a: A,
+        }
+
+        struct C {
+            #[default = { x: 1, c: { x: 2, c: null } }]
+            c: OptionalNullable<C>,
+            x: u32,
+        }
+
+        struct D {
+            #[default = { x: 100 }]
+            c: OptionalNullable<C>,
+        }
+
+        // This case highlights the need to track not just nodes visited (we
+        // see C twice), but the value that we expand into C.
+        struct E {
+            #[default = {}]
+            d: D,
+        }
+    });
+
+    fn make_box_id(id: &String) -> String {
+        format!("boxed {}", id)
+    }
+
+    let ts = builder.finalize(make_box_id).expect("finalize typespace");
+
+    #[check_and_include("tests/output/test_default_not_actually_a_cycle.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        use import::*;
+
+        let b = B::default();
+        assert_eq!(
+            b,
+            B {
+                a: A {
+                    a: Some(Box::new(A {
+                        a: Some(Box::new(A { a: None }))
+                    })),
+                }
+            }
+        );
+
+        let e = E::default();
+        assert_eq!(
+            e,
+            E {
+                d: D {
+                    // TODO 9/6/2026
+                    // I don't think we need this box here; agents working on
+                    // why that's happening and if it's reaonsable to avoid
+                    // (which it may not be).
+                    c: Some(Box::new(C {
+                        x: 100,
+                        c: Some(Box::new(C {
+                            x: 1,
+                            c: Some(Box::new(C { x: 2, c: None }))
+                        }))
+                    }))
+                }
+            }
+        )
+    }
+}
+
+// A property whose default value omits a property of its own type
+// takes that property's declared default, not the language's.
+//
+// Consider, the almost-a-JSON schema:
+//
+//     "SeparatorConfig": {
+//       "properties": {
+//         "lineThickness": { "type": "integer", "default": 1 },
+//         "lineColor": { "type": ["string","null"], "default": "#B2000000" }
+//       }
+//     },
+//     "separator": { "$ref": "#/definitions/SeparatorConfig", "default": {} }
+//
+// Every property of SeparatorConfig declares a default, and the value standing
+// in for the whole object names none of them. A poor interpretation would
+// yield a default with line_thickness: 0 and line_color: None, rather than 1
+// and "#B2000000".
+//
+// The same JSON text means two different things: deserializing `{}`
+// off the wire runs each property's own default and gives 1, while `{}`
+// written as the default gives 0. That is what makes it a defect rather
+// than a reading. See default_impl_struct's absent-property arm.
+#[test]
+fn object_default_takes_the_properties_own_defaults() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_desired_trait(TypespaceTrait::Default);
+
+    let builder = typespace_test_macro::typespace_builder!(settings, {
+        struct SeparatorConfig {
+            #[default = 1]
+            line_thickness: u32,
+            #[default = "#B2000000"]
+            line_color: Optional<String>,
+        }
+
+        struct Holder {
+            #[default = {}]
+            separator: SeparatorConfig,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/object_default_takes_the_properties_own_defaults.rs", ts.to_codespace().into_stream())]
+    fn inner() {
+        let holder = import::Holder::default();
+
+        println!("{:#?}", holder);
+
+        assert_eq!(holder.separator.line_thickness, 1);
+        assert_eq!(holder.separator.line_color, "#B2000000");
+    }
 }

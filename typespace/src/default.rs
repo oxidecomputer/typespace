@@ -36,7 +36,8 @@ where
         scope: None,
         mode: Mode::Check,
     };
-    imp.default_impl(id, value).map(|_| ())
+    let mut expansion_set = Vec::new();
+    imp.default_impl(&mut expansion_set, id, value).map(|_| ())
 }
 
 pub(crate) fn generate_default<Id>(
@@ -48,13 +49,15 @@ pub(crate) fn generate_default<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    println!("generating default");
     let imp = DefaultImpl {
         types,
         settings,
         scope: Some("super"),
         mode: Mode::Generate,
     };
-    imp.default_impl(id, value)
+    let mut expansion_set = Vec::new();
+    imp.default_impl(&mut expansion_set, id, value)
         .expect("an error should not be possible post-validation")
         .expect("a value should be generated with Mode::Generate")
 }
@@ -131,29 +134,36 @@ where
 
     fn default_impl(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         id: Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
+        println!("expansion set {:#?}", expansion_set);
         let ty = self.types.get(&id).unwrap();
         match ty {
-            Type::Enum(enum_info) => self.default_impl_enum(enum_info, value, id),
-            Type::Struct(struct_info) => self.default_impl_struct(struct_info, value, id),
+            Type::Enum(enum_info) => self.default_impl_enum(expansion_set, enum_info, value, id),
+            Type::Struct(struct_info) => {
+                self.default_impl_struct(expansion_set, struct_info, value, id)
+            }
             Type::UnitStruct(unit_struct) => self.default_impl_unit_struct(unit_struct, value, id),
             Type::TupleStruct(tuple_struct) => {
-                self.default_impl_tuple_struct(tuple_struct, value, id)
+                self.default_impl_tuple_struct(expansion_set, tuple_struct, value, id)
             }
             Type::NewtypeStruct(newtype_struct) => {
                 // TODO 9/4/2026
                 // if mode = validate we need to check the value against
                 // constraints for the newtype
 
-                let inner = self.default_impl(newtype_struct.inner.clone(), value)?;
+                let inner =
+                    self.default_impl(expansion_set, newtype_struct.inner.clone(), value)?;
                 Ok(inner.map(|inner| {
                     let ident = self.render_ident(&id);
                     quote! { #ident(#inner) }
                 }))
             }
-            Type::TypeAlias(type_alias) => self.default_impl(type_alias.target.clone(), value),
+            Type::TypeAlias(type_alias) => {
+                self.default_impl(expansion_set, type_alias.target.clone(), value)
+            }
             Type::Native(_) => {
                 // A native type's value is whatever its own Deserialize
                 // accepts, which we have no way to check here; a value that
@@ -176,7 +186,7 @@ where
                 if value.is_null() {
                     Ok(self.generate(|| self.render_option_variant(&id, "None")))
                 } else {
-                    let inner = self.default_impl(type_id.clone(), value)?;
+                    let inner = self.default_impl(expansion_set, type_id.clone(), value)?;
                     Ok(inner.map(|inner| {
                         let some = self.render_option_variant(&id, "Some");
                         quote! { #some(#inner) }
@@ -184,7 +194,7 @@ where
                 }
             }
             Type::Box(type_id) => {
-                let inner = self.default_impl(type_id.clone(), value)?;
+                let inner = self.default_impl(expansion_set, type_id.clone(), value)?;
                 // TODO 9/4/2026
                 // We need Settings to know what to render here...
                 Ok(inner.map(|inner| quote! { Box::new(#inner) }))
@@ -195,7 +205,7 @@ where
                     id: id.clone(),
                     reason: "expected array".to_string(),
                 })?;
-                self.default_impl_collected(elem_id, arr)
+                self.default_impl_collected(expansion_set, elem_id, arr)
             }
             Type::Map(key_id, value_id) => {
                 let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
@@ -213,8 +223,9 @@ where
                         // make sense of it, exactly as it would any other
                         // string value.
                         let key_value = serde_json::Value::String(key.clone());
-                        let key = self.default_impl(key_id.clone(), &key_value)?;
-                        let entry_value = self.default_impl(value_id.clone(), entry_value)?;
+                        let key = self.default_impl(expansion_set, key_id.clone(), &key_value)?;
+                        let entry_value =
+                            self.default_impl(expansion_set, value_id.clone(), entry_value)?;
                         Ok((key, entry_value))
                     })
                     .collect::<Result<Vec<_>, Error<Id>>>()?;
@@ -251,7 +262,7 @@ where
                     }
                 }
 
-                self.default_impl_collected(elem_id, arr)
+                self.default_impl_collected(expansion_set, elem_id, arr)
             }
             Type::Array(elem_id, len) => {
                 let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
@@ -269,7 +280,7 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
+                    .map(|elem_value| self.default_impl(expansion_set, elem_id.clone(), elem_value))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -279,7 +290,7 @@ where
                 }))
             }
             Type::Tuple(items) => {
-                let elems = self.default_impl_tuple_items(items, value, &id)?;
+                let elems = self.default_impl_tuple_items(expansion_set, items, value, &id)?;
                 Ok(elems.map(|elems| quote! { ( #( #elems ),* ) }))
             }
 
@@ -365,7 +376,11 @@ where
                     }
                 }))
             }
-            Type::Never => todo!(),
+            Type::Never => Err(Error::InvalidDefault {
+                value: value.clone(),
+                id,
+                reason: "a never type may not have a value".to_string(),
+            }),
         }
     }
 
@@ -377,12 +392,13 @@ where
     /// `Type::Map` arm above uses for its entries.
     fn default_impl_collected(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         elem_id: &Id,
         elements: &[serde_json::Value],
     ) -> Result<Option<TokenStream>, Error<Id>> {
         let elems = elements
             .iter()
-            .map(|elem_value| self.default_impl(elem_id.clone(), elem_value))
+            .map(|elem_value| self.default_impl(expansion_set, elem_id.clone(), elem_value))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(self.generate(|| {
             let elems = elems
@@ -401,6 +417,7 @@ where
     /// component in turn.
     fn default_impl_tuple_items(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         items: &[Id],
         value: &serde_json::Value,
         id: &Id,
@@ -421,7 +438,9 @@ where
         let elems = items
             .iter()
             .zip(arr.iter())
-            .map(|(item_id, item_value)| self.default_impl(item_id.clone(), item_value))
+            .map(|(item_id, item_value)| {
+                self.default_impl(expansion_set, item_id.clone(), item_value)
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(self.generate(|| {
@@ -439,6 +458,7 @@ where
     /// variant's, we wrap it in the variant's name.
     fn default_impl_struct_props(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         properties: &[StructProperty<Id>],
         value: &serde_json::Value,
         id: Id,
@@ -486,21 +506,88 @@ where
                 (None, None) => unreachable!(),
                 (None, Some(_)) => extra_keys.push(key),
                 (Some(prop_info), None) => {
-                    // Absent from the value: every state falls back to
-                    // Default::default(), matching typify1's
-                    // value_for_struct_props and the empty (or
-                    // Optional-only) obligation set feasibility computes
-                    // for this branch. check_type_defaults runs before
-                    // trait resolution, so this is a shape check only,
-                    // not a check of whether the property's type
-                    // actually has Default.
-                    if self.mode == Mode::Generate {
-                        // TODO 9/4/2026
-                        // Qualify default
-                        let prop_ident = format_ident!("{}", prop_info.rust_name);
-                        rendered_properties.push(quote! {
-                            #prop_ident: Default::default()
-                        });
+                    match &prop_info.state {
+                        // A required property with a missing value is an
+                        // error.
+                        StructPropertyState::Required => {
+                            return Err(Error::InvalidDefault {
+                                value: value.clone(),
+                                id: id.clone(),
+                                reason: format!("property {} is required", prop_info.rust_name),
+                            });
+                        }
+
+                        // Both an optional and default value rely on
+                        // Default::default(). For the latter, it's explicit
+                        // (and trait resolution will ensure that it exists).
+                        // For the former, it means "absent" regardless of
+                        // whether the field is optional or optional and
+                        // nullable (and regardless of how that combination is
+                        // modeled).
+                        StructPropertyState::Optional | StructPropertyState::Default => {
+                            if self.mode == Mode::Generate {
+                                // TODO 9/4/2026
+                                // Qualify default
+                                let prop_ident = format_ident!("{}", prop_info.rust_name);
+                                rendered_properties.push(quote! {
+                                    #prop_ident: Default::default()
+                                });
+                            }
+                        }
+
+                        // If there's a default value, we use that value. Note this
+                        // is the only place in this recursive descent where
+                        // we're **expanding** the input. This leaves open the
+                        // possibility of an infinitely recursive pattern for
+                        // example with a type like:
+                        //
+                        // struct A {
+                        //     #[default = {}]
+                        //     a: Optional<A>,
+                        // }
+                        //
+                        // Note that that's a useless, but totally fine
+                        // structure; the issue is with its default which
+                        // expands without bound.
+                        //
+                        // We could avoid the recursion here by using the
+                        // function we generate for serde (here,
+                        // `default::a_a`), but that would move the infinite
+                        // recursion to runtime which we'd rather not do.
+                        //
+                        // To detect the recusion, we save both the Id *and*
+                        // JSON value--both are required. The Id would be
+                        // insufficient in a case like this:
+                        //
+                        // struct A {
+                        //     #[]
+                        // }
+                        StructPropertyState::DefaultValue(prop_default_value) => {
+                            let key = (prop_info.type_id.clone(), prop_default_value.0.clone());
+                            // let key = (prop_info.type_id.clone(), serde_json::json!(null));
+                            if expansion_set.contains(&key) {
+                                let (id, value) = key;
+                                return Err(Error::InvalidDefault {
+                                    value,
+                                    id,
+                                    reason: "property default value is recursive".to_string(),
+                                });
+                            }
+                            println!("pushing {:#?}", key);
+                            expansion_set.push(key);
+                            let try_rendered_prop_value = self.default_impl(
+                                expansion_set,
+                                prop_info.type_id.clone(),
+                                &prop_default_value.0,
+                            );
+                            expansion_set.pop();
+                            if let Some(rendered_prop_value) = try_rendered_prop_value? {
+                                let prop_ident = format_ident!("{}", prop_info.rust_name);
+                                rendered_properties.push(quote! {
+                                    #prop_ident: #rendered_prop_value
+                                })
+                            }
+                        }
                     }
                 }
                 (Some(prop_info), Some(prop_value)) => {
@@ -516,11 +603,11 @@ where
                                 // A simple Option<T> is sufficient.
                                 OptionalNullable::ConflateAsAbsent
                                 | OptionalNullable::ConflateAsNull => {
-                                    self.default_impl(prop_id.clone(), prop_value)?
+                                    self.default_impl(expansion_set, prop_id.clone(), prop_value)?
                                 }
                                 // Nest the option in a `Some`.
                                 OptionalNullable::DoubleOption => self
-                                    .default_impl(prop_id.clone(), prop_value)?
+                                    .default_impl(expansion_set, prop_id.clone(), prop_value)?
                                     .map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
@@ -529,14 +616,17 @@ where
                                 // Construct the custom type
                                 OptionalNullable::CustomType(type_name) => self
                                     .default_impl_custom_optional_nullable(
-                                        prop_id, prop_value, type_name,
+                                        expansion_set,
+                                        prop_id,
+                                        prop_value,
+                                        type_name,
                                     )?,
                             }
                         }
 
                         // Optional field with a non-Option type.
                         (StructPropertyState::Optional, false) => self
-                            .default_impl(prop_id.clone(), prop_value)?
+                            .default_impl(expansion_set, prop_id.clone(), prop_value)?
                             .map(|prop_value| {
                                 let some = self.render_option_variant2("Some");
                                 quote! { #some(#prop_value) }
@@ -544,7 +634,7 @@ where
 
                         // Non-optional field, and we don't care about the
                         // type.
-                        _ => self.default_impl(prop_id.clone(), prop_value)?,
+                        _ => self.default_impl(expansion_set, prop_id.clone(), prop_value)?,
                     };
 
                     let prop_default = prop_default_value.map(|value| {
@@ -571,12 +661,17 @@ where
 
     fn default_impl_struct(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         struct_info: &build::Struct<Id>,
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        let rendered_properties =
-            self.default_impl_struct_props(&struct_info.properties, value, id.clone())?;
+        let rendered_properties = self.default_impl_struct_props(
+            expansion_set,
+            &struct_info.properties,
+            value,
+            id.clone(),
+        )?;
 
         Ok(self.generate(|| {
             let struct_ident = self.render_ident(&id);
@@ -590,24 +685,30 @@ where
 
     fn default_impl_enum(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         match enum_info.tag_type.as_ref().unwrap() {
-            build::EnumTagType::External => self.default_impl_enum_external(enum_info, value, id),
+            build::EnumTagType::External => {
+                self.default_impl_enum_external(expansion_set, enum_info, value, id)
+            }
             build::EnumTagType::Internal { tag } => {
-                self.default_impl_enum_internal(enum_info, tag, value, id)
+                self.default_impl_enum_internal(expansion_set, enum_info, tag, value, id)
             }
             build::EnumTagType::Adjacent { tag, content } => {
-                self.default_impl_enum_adjacent(enum_info, tag, content, value, id)
+                self.default_impl_enum_adjacent(expansion_set, enum_info, tag, content, value, id)
             }
-            build::EnumTagType::Untagged => self.default_impl_enum_untagged(enum_info, value, id),
+            build::EnumTagType::Untagged => {
+                self.default_impl_enum_untagged(expansion_set, enum_info, value, id)
+            }
         }
     }
 
     fn default_impl_enum_external(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
@@ -664,15 +765,21 @@ where
                     reason: format!("variant {} carries no payload", variant_name),
                 }),
                 VariantDetails::Item(item_id) => {
-                    let item = self.default_impl(item_id.clone(), var_value)?;
+                    let item = self.default_impl(expansion_set, item_id.clone(), var_value)?;
                     Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
                 }
                 VariantDetails::Tuple(items) => {
-                    let elems = self.default_impl_tuple_items(items, var_value, &id)?;
+                    let elems =
+                        self.default_impl_tuple_items(expansion_set, items, var_value, &id)?;
                     Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
                 }
                 VariantDetails::Struct(props) => {
-                    let rendered = self.default_impl_struct_props(props, var_value, id.clone())?;
+                    let rendered = self.default_impl_struct_props(
+                        expansion_set,
+                        props,
+                        var_value,
+                        id.clone(),
+                    )?;
                     Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
                 }
             }
@@ -689,6 +796,7 @@ where
 
     fn default_impl_enum_internal(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         value: &serde_json::Value,
@@ -740,11 +848,12 @@ where
             // alongside the payload's own keys; walk the payload's type
             // against the tag-stripped object exactly as Struct does.
             VariantDetails::Item(item_id) => {
-                let item = self.default_impl(item_id.clone(), &inner_value)?;
+                let item = self.default_impl(expansion_set, item_id.clone(), &inner_value)?;
                 Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
             }
             VariantDetails::Struct(props) => {
-                let rendered = self.default_impl_struct_props(props, &inner_value, id.clone())?;
+                let rendered =
+                    self.default_impl_struct_props(expansion_set, props, &inner_value, id.clone())?;
                 Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
             }
             // Serde rejects an internally-tagged tuple variant outright: a
@@ -762,6 +871,7 @@ where
 
     fn default_impl_enum_adjacent(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         content: &str,
@@ -810,15 +920,21 @@ where
                 Ok(self.generate(|| quote! { #type_ident::#var_ident }))
             }
             (VariantDetails::Item(item_id), Some(content_value)) => {
-                let item = self.default_impl(item_id.clone(), content_value)?;
+                let item = self.default_impl(expansion_set, item_id.clone(), content_value)?;
                 Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
             }
             (VariantDetails::Tuple(items), Some(content_value)) => {
-                let elems = self.default_impl_tuple_items(items, content_value, &id)?;
+                let elems =
+                    self.default_impl_tuple_items(expansion_set, items, content_value, &id)?;
                 Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
-                let rendered = self.default_impl_struct_props(props, content_value, id.clone())?;
+                let rendered = self.default_impl_struct_props(
+                    expansion_set,
+                    props,
+                    content_value,
+                    id.clone(),
+                )?;
                 Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
             }
             _ => Err(Error::InvalidDefault {
@@ -831,6 +947,7 @@ where
 
     fn default_impl_enum_untagged(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
@@ -854,20 +971,22 @@ where
                         .is_null()
                         .then(|| self.generate(|| quote! { #type_ident::#var_ident })),
                     VariantDetails::Item(item_id) => self
-                        .default_impl(item_id.clone(), value)
+                        .default_impl(expansion_set, item_id.clone(), value)
                         .ok()
                         .map(|item| item.map(|item| quote! { #type_ident::#var_ident(#item) })),
                     VariantDetails::Tuple(items) => self
-                        .default_impl_tuple_items(items, value, &id)
+                        .default_impl_tuple_items(expansion_set, items, value, &id)
                         .ok()
                         .map(|elems| {
                             elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) })
                         }),
                     VariantDetails::Struct(props) => self
-                        .default_impl_struct_props(props, value, id.clone())
+                        .default_impl_struct_props(expansion_set, props, value, id.clone())
                         .ok()
                         .map(|rendered| {
-                            self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } })
+                            self.generate(
+                                || quote! { #type_ident::#var_ident { #( #rendered, )* } },
+                            )
                         }),
                 }
             })
@@ -880,6 +999,7 @@ where
 
     fn default_impl_tuple_struct(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         tuple_struct: &build::TupleStruct<Id>,
         value: &serde_json::Value,
         id: Id,
@@ -908,6 +1028,7 @@ where
 
         let (head, tail) = arr.split_at(field_count);
         let field_values = self.default_impl_tuple_items(
+            expansion_set,
             &tuple_struct.fields,
             &serde_json::Value::Array(head.to_vec()),
             &id,
@@ -919,7 +1040,11 @@ where
             .rest
             .as_ref()
             .map(|rest_id| {
-                self.default_impl(rest_id.clone(), &serde_json::Value::Array(tail.to_vec()))
+                self.default_impl(
+                    expansion_set,
+                    rest_id.clone(),
+                    &serde_json::Value::Array(tail.to_vec()),
+                )
             })
             .transpose()?;
 
@@ -953,6 +1078,7 @@ where
 
     fn default_impl_custom_optional_nullable(
         &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
         id: &Id,
         value: &serde_json::Value,
         _type_name: &str,
@@ -966,13 +1092,15 @@ where
                 }
             }))
         } else {
-            Ok(self.default_impl(id.clone(), value)?.map(|_value_stream| {
-                quote! {
-                    // TODO 9/4/2026
-                    // Create the typed value
-                    todo!()
-                }
-            }))
+            Ok(self
+                .default_impl(expansion_set, id.clone(), value)?
+                .map(|_value_stream| {
+                    quote! {
+                        // TODO 9/4/2026
+                        // Create the typed value
+                        todo!()
+                    }
+                }))
         }
     }
 }

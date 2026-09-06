@@ -249,6 +249,24 @@ impl<Id> Enum<Id> {
                 .iter()
                 .all(|variant| matches!(variant.details, VariantDetails::Item(_)))
     }
+
+    pub(crate) fn check_field_defaults(
+        &self,
+        types: &BTreeMap<Id, Type<Id>>,
+        settings: &crate::settings::Settings,
+    ) -> Result<(), Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        self.variants
+            .iter()
+            .try_for_each(|variant| match &variant.details {
+                VariantDetails::Struct(items) => items
+                    .iter()
+                    .try_for_each(|prop| prop.check_defaults(types, settings)),
+                _ => Ok(()),
+            })
+    }
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
