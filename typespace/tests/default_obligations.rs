@@ -11,6 +11,8 @@
 use typespace::{no_cycles, settings::Settings, TypespaceTrait};
 use typespace_test_macro::typespace_builder;
 
+mod common;
+
 /// A property with its own attached default value is never filled with
 /// `Default::default()`: the rendered impl takes its value from a
 /// generated `defaults::` function instead (see
@@ -79,5 +81,46 @@ fn whole_type_default_fills_absent_default_state_property() {
         "count is absent from the struct's whole-type default value but \
          is not Optional; feasibility says its obligation is met and \
          the impl should fill it with Default::default()",
+    );
+}
+
+/// A generated property default asks nothing of the property's type.
+///
+/// `Outer.inner` is `#[serde(default)]`, so `Inner` is required to
+/// implement `Default`. `Inner` can: its only property has its own
+/// default value, so the impl is `color: defaults::inner_color()`,
+/// which needs no `Default` from `Color`. Finalization must succeed.
+#[test]
+fn generated_property_default_needs_nothing_of_its_type() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::Debug),
+        {
+            enum Color {
+                Red,
+                Green,
+            }
+
+            struct Inner {
+                #[default = "Red"]
+                color: Color,
+            }
+
+            struct Outer {
+                #[default]
+                inner: Inner,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).expect(
+        "a property with its own default value obligates nothing of its \
+         type",
+    );
+
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream())
+        .expect("rendered output parses as a Rust file");
+    assert!(
+        common::has_impl(&file, "Default", "Inner"),
+        "no Default impl for Inner"
     );
 }
