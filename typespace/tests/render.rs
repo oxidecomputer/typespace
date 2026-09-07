@@ -4349,7 +4349,7 @@ fn test_default_simple_struct_cycle() {
     let builder = typespace_builder!(default_settings(), {
         struct A {
             #[default = {}]
-            a: OptionalNullable<A>,
+            a: Nullable<A>,
             #[default = 1]
             z: u32,
         }
@@ -4371,7 +4371,7 @@ fn test_default_simple_struct_cycle() {
             #[default = 1]
             a: u32,
             #[default = {}]
-            z: OptionalNullable<A>,
+            z: Nullable<A>,
         }
     });
 
@@ -4389,7 +4389,7 @@ fn test_default_simple_enum_cycle() {
             Whatever,
             B {
                 #[default = { B: {} }]
-                a: Optional<A>,
+                a: A,
             }
         }
     });
@@ -4424,13 +4424,13 @@ fn test_default_not_actually_a_cycle() {
 
         struct C {
             #[default = { x: 1, c: { x: 2, c: null } }]
-            c: OptionalNullable<C>,
+            c: Nullable<C>,
             x: u32,
         }
 
         struct D {
             #[default = { x: 100 }]
-            c: OptionalNullable<C>,
+            c: Nullable<C>,
         }
 
         // This case highlights the need to track not just nodes visited (we
@@ -4521,7 +4521,7 @@ fn object_default_takes_the_properties_own_defaults() {
             #[default = 1]
             line_thickness: u32,
             #[default = "#B2000000"]
-            line_color: Optional<String>,
+            line_color: String,
         }
 
         struct Holder {
