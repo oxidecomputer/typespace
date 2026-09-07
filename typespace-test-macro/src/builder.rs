@@ -570,6 +570,37 @@ fn field_state_override(claims: &Claims, base: TokenStream) -> syn::Result<Token
     }
 }
 
+/// Reject `Optional<T>`/`OptionalNullable<T>` on a field that also claims
+/// `#[default]` (with or without a value): the default already makes the field
+/// able to be omitted, and [`field_state_override`] replaces `base` wholesale
+/// when it is claimed, so the wrapper's own baseline state never reaches the
+/// rendered `StructProperty`. Spanned at `ty` (the field's declared type), not
+/// the attribute, so the error points at the part to change.
+fn reject_redundant_optional_with_default(
+    ty: &Type,
+    base: &FieldBaseline,
+    claims: &Claims,
+) -> syn::Result<()> {
+    if claims.get("default").is_none() {
+        return Ok(());
+    }
+    match base {
+        FieldBaseline::Required => Ok(()),
+        FieldBaseline::Optional => Err(syn::Error::new_spanned(
+            ty,
+            "`Optional<T>` is redundant here: #[default] already makes \
+            the field able to be omitted, and its value wins; write the bare \
+            type `T` instead",
+        )),
+        FieldBaseline::OptionalNullable => Err(syn::Error::new_spanned(
+            ty,
+            "`OptionalNullable<T>` is redundant here: #[default] already \
+            makes the field able to be omitted, and its value wins; write \
+            `Nullable<T>` instead",
+        )),
+    }
+}
+
 /// A claimed bare-marker attribute's value, if any, is an error: an
 /// attribute like `#[flatten]`, `#[deny_unknown_fields]`, or
 /// `#[tuple]` carries no value at all. Shared by every bare-marker
@@ -980,7 +1011,8 @@ fn lower_struct_properties(
         .map(|field| {
             let (type_id, base_state) = lower_field_type(&field.ty, lowering)?;
             let claims = claim_attrs(&field.attrs, &["default", "rename", "flatten"])?;
-            let state = field_state_override(&claims, base_state)?;
+            reject_redundant_optional_with_default(&field.ty, &base_state, &claims)?;
+            let state = field_state_override(&claims, base_state.tokens())?;
             let json_name = field_json_name(&claims)?;
             let field_name = field.name.to_string();
             Ok(quote! {
@@ -1495,6 +1527,35 @@ fn lower_native_use(path: &syn::Path, lowering: &Lowering) -> syn::Result<String
 // Types
 // ---------------------------------------------------------------------
 
+/// The baseline `StructPropertyState` a field's declared type implies,
+/// before a field-level `#[default]` attribute (if claimed) overrides
+/// it wholesale in [`field_state_override`]. `Optional` and
+/// `OptionalNullable` remember which wire-vocabulary wrapper produced
+/// them, so [`lower_struct_properties`] can reject that wrapper as
+/// redundant when `#[default]` is also claimed, pointing at whichever
+/// one was actually written.
+enum FieldBaseline {
+    Required,
+    Optional,
+    OptionalNullable,
+}
+
+impl FieldBaseline {
+    /// The `StructPropertyState` this baseline renders as, absent a
+    /// `#[default]` override: `Optional` and `OptionalNullable` both
+    /// mean "may be absent", so both render the same state.
+    fn tokens(&self) -> TokenStream {
+        match self {
+            FieldBaseline::Required => {
+                quote! { ::typespace::build::StructPropertyState::Required }
+            }
+            FieldBaseline::Optional | FieldBaseline::OptionalNullable => {
+                quote! { ::typespace::build::StructPropertyState::Optional }
+            }
+        }
+    }
+}
+
 /// Lower a struct field's declared type, handling the field-top-level-only
 /// wire vocabulary (`Optional<T>`, `OptionalNullable<T>`).
 ///
@@ -1503,32 +1564,23 @@ fn lower_native_use(path: &syn::Path, lowering: &Lowering) -> syn::Result<String
 /// the field type is `Optional<T>` or `OptionalNullable<T>`); a
 /// field-level `#[default]` attribute overrides this baseline
 /// separately, in [`field_state_override`].
-fn lower_field_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<(String, TokenStream)> {
+fn lower_field_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<(String, FieldBaseline)> {
     match bare_generic_path(ty) {
         Some((ident, args)) if ident == "Optional" => {
             let type_args = generic_type_args(args);
             let inner = expect_one_arg(&type_args, ty)?;
             let id = lower_type(inner, lowering)?;
-            Ok((
-                id,
-                quote! { ::typespace::build::StructPropertyState::Optional },
-            ))
+            Ok((id, FieldBaseline::Optional))
         }
         Some((ident, args)) if ident == "OptionalNullable" => {
             let type_args = generic_type_args(args);
             let inner = expect_one_arg(&type_args, ty)?;
             let id = ensure_nullable(inner, lowering)?;
-            Ok((
-                id,
-                quote! { ::typespace::build::StructPropertyState::Optional },
-            ))
+            Ok((id, FieldBaseline::OptionalNullable))
         }
         _ => {
             let id = lower_type(ty, lowering)?;
-            Ok((
-                id,
-                quote! { ::typespace::build::StructPropertyState::Required },
-            ))
+            Ok((id, FieldBaseline::Required))
         }
     }
 }

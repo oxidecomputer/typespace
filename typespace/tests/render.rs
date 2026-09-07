@@ -3424,6 +3424,36 @@ fn test_default_value_property_kinds() {
     }
 }
 
+/// A `Nullable<T>` property (no `Optional` half) whose default value is
+/// `null`: the generated default function returns `None`, the other
+/// half of the pairing `test_default_value_property_kinds` covers with
+/// a present value.
+#[test]
+fn test_default_null_value_nullable_property() {
+    let builder = typespace_builder!(default_settings(), {
+        struct NullDefault {
+            #[default = null]
+            maybe: Nullable<u32>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_null_value_nullable_property.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::NullDefault::default(),
+            import::NullDefault { maybe: None }
+        );
+        assert_eq!(
+            serde_json::from_str::<import::NullDefault>("{}").unwrap(),
+            import::NullDefault::default()
+        );
+    }
+}
+
 /// A property whose default value is itself a struct-shaped literal.
 ///
 /// The generated `defaults::` function body constructs `Inner` by name;

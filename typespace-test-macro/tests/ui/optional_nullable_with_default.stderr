@@ -1,0 +1,5 @@
+error: `OptionalNullable<T>` is redundant here: #[default] already makes the field able to be omitted, and its value wins; write `Nullable<T>` instead
+ --> tests/ui/optional_nullable_with_default.rs:9:20
+  |
+9 |             count: OptionalNullable<u32>,
+  |                    ^^^^^^^^^^^^^^^^^^^^^

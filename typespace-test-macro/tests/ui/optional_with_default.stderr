@@ -1,0 +1,5 @@
+error: `Optional<T>` is redundant here: #[default] already makes the field able to be omitted, and its value wins; write the bare type `T` instead
+ --> tests/ui/optional_with_default.rs:8:20
+  |
+8 |             count: Optional<u32>,
+  |                    ^^^^^^^^^^^^^
