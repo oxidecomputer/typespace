@@ -5,6 +5,7 @@ use std::{
     str::FromStr,
 };
 
+use log::debug;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -30,6 +31,7 @@ pub(crate) fn check_default<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    debug!("checking default for {id}");
     let imp = DefaultImpl {
         types,
         settings,
@@ -49,7 +51,7 @@ pub(crate) fn generate_default<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
-    println!("generating default");
+    debug!("generating default for {id}");
     let imp = DefaultImpl {
         types,
         settings,
@@ -138,7 +140,6 @@ where
         id: Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        println!("expansion set {:#?}", expansion_set);
         let ty = self.types.get(&id).unwrap();
         match ty {
             Type::Enum(enum_info) => self.default_impl_enum(expansion_set, enum_info, value, id),
@@ -154,16 +155,26 @@ where
                 // if mode = validate we need to check the value against
                 // constraints for the newtype
 
-                let inner =
-                    self.default_impl(expansion_set, newtype_struct.inner.clone(), value)?;
+                // A newtype struct may contain itself (directly or
+                // indirectly), so we need to take care not to recur without
+                // narrowing the JSON value.
+                let inner = self.expansion_guard_default_impl(
+                    expansion_set,
+                    newtype_struct.inner.clone(),
+                    value,
+                )?;
                 Ok(inner.map(|inner| {
                     let ident = self.render_ident(&id);
                     quote! { #ident(#inner) }
                 }))
             }
             Type::TypeAlias(type_alias) => {
-                self.default_impl(expansion_set, type_alias.target.clone(), value)
+                // A type alias may refer to itself (directly or indirectly),
+                // so we need to take care not to recur without narrowing the
+                // JSON value.
+                self.expansion_guard_default_impl(expansion_set, type_alias.target.clone(), value)
             }
+
             Type::Native(_) => {
                 // A native type's value is whatever its own Deserialize
                 // accepts, which we have no way to check here; a value that
@@ -186,7 +197,12 @@ where
                 if value.is_null() {
                     Ok(self.generate(|| self.render_option_variant(&id, "None")))
                 } else {
-                    let inner = self.default_impl(expansion_set, type_id.clone(), value)?;
+                    // We're not narrowing the value so check for cycles. This
+                    // really could only happen if someone were attempting
+                    // self-harm: an anonymous Option that contained itself.
+                    // But people are weird and terrible.
+                    let inner =
+                        self.expansion_guard_default_impl(expansion_set, type_id.clone(), value)?;
                     Ok(inner.map(|inner| {
                         let some = self.render_option_variant(&id, "Some");
                         quote! { #some(#inner) }
@@ -194,7 +210,11 @@ where
                 }
             }
             Type::Box(type_id) => {
-                let inner = self.default_impl(expansion_set, type_id.clone(), value)?;
+                // As above with Option, a deliberately self-harming
+                // construction could cause infinite recursion without the
+                // guard.
+                let inner =
+                    self.expansion_guard_default_impl(expansion_set, type_id.clone(), value)?;
                 // TODO 9/4/2026
                 // We need Settings to know what to render here...
                 Ok(inner.map(|inner| quote! { Box::new(#inner) }))
@@ -559,28 +579,27 @@ where
                         // JSON value--both are required. The Id would be
                         // insufficient in a case like this:
                         //
-                        // struct A {
-                        //     #[]
+                        // struct C {
+                        //     #[default = { x: 1, c: { x: 2, c: null } }]
+                        //     c: OptionalNullable<C>,
+                        //     x: u32,
+                        // }
+                        //
+                        // struct D {
+                        //     #[default = { x: 100 }]
+                        //     c: OptionalNullable<C>,
+                        // }
+                        //
+                        // struct E {
+                        //     #[default = {}]
+                        //     d: D,
                         // }
                         StructPropertyState::DefaultValue(prop_default_value) => {
-                            let key = (prop_info.type_id.clone(), prop_default_value.0.clone());
-                            // let key = (prop_info.type_id.clone(), serde_json::json!(null));
-                            if expansion_set.contains(&key) {
-                                let (id, value) = key;
-                                return Err(Error::InvalidDefault {
-                                    value,
-                                    id,
-                                    reason: "property default value is recursive".to_string(),
-                                });
-                            }
-                            println!("pushing {:#?}", key);
-                            expansion_set.push(key);
-                            let try_rendered_prop_value = self.default_impl(
+                            let try_rendered_prop_value = self.expansion_guard_default_impl(
                                 expansion_set,
                                 prop_info.type_id.clone(),
                                 &prop_default_value.0,
                             );
-                            expansion_set.pop();
                             if let Some(rendered_prop_value) = try_rendered_prop_value? {
                                 let prop_ident = format_ident!("{}", prop_info.rust_name);
                                 rendered_properties.push(quote! {
@@ -967,11 +986,18 @@ where
             .find_map(|variant| {
                 let var_ident = format_ident!("{}", variant.rust_name);
                 match &variant.details {
+                    // TODO 9/6/2026
+                    // Need to consider unit variants with non-null
+                    // serializations.
                     VariantDetails::Unit => value
                         .is_null()
                         .then(|| self.generate(|| quote! { #type_ident::#var_ident })),
+
+                    // Note that in this case we don't reduce the size of the
+                    // value so this opens the door for infinite recursion if
+                    // we don't add the guard.
                     VariantDetails::Item(item_id) => self
-                        .default_impl(expansion_set, item_id.clone(), value)
+                        .expansion_guard_default_impl(expansion_set, item_id.clone(), value)
                         .ok()
                         .map(|item| item.map(|item| quote! { #type_ident::#var_ident(#item) })),
                     VariantDetails::Tuple(items) => self
@@ -1102,6 +1128,34 @@ where
                     }
                 }))
         }
+    }
+
+    /// Guard against cycles for situations where default generation may
+    /// expand--or insufficiently narrow--the input value.
+    fn expansion_guard_default_impl(
+        &self,
+        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        id: Id,
+        value: &serde_json::Value,
+    ) -> Result<Option<TokenStream>, Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        // let value = serde_json::json!(null);
+        let key = (id.clone(), value.clone());
+        if expansion_set.contains(&key) {
+            let (id, value) = key;
+            return Err(Error::InvalidDefault {
+                value,
+                id,
+                reason: "property default value is recursive".to_string(),
+            });
+        }
+        expansion_set.push(key);
+        let result = self.default_impl(expansion_set, id, &value);
+        expansion_set.pop();
+
+        result
     }
 }
 

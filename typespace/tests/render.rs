@@ -4320,6 +4320,8 @@ fn test_default_simple_struct_cycle() {
         struct A {
             #[default = {}]
             a: OptionalNullable<A>,
+            #[default = 1]
+            z: u32,
         }
     });
 
@@ -4327,11 +4329,27 @@ fn test_default_simple_struct_cycle() {
         format!("boxed {}", id)
     }
 
-    let Err(err) = builder.finalize(make_box_id) else {
+    let Err(Error::InvalidDefault { reason, .. }) = builder.finalize(make_box_id) else {
         panic!("expected finalize to reject cyclic default value");
     };
 
-    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+    assert_eq!(reason, "property default value is recursive");
+
+    // Try in the other order--we've messed this up before...
+    let builder = typespace_builder!(default_settings(), {
+        struct A {
+            #[default = 1]
+            a: u32,
+            #[default = {}]
+            z: OptionalNullable<A>,
+        }
+    });
+
+    let Err(Error::InvalidDefault { reason, .. }) = builder.finalize(make_box_id) else {
+        panic!("expected finalize to reject cyclic default value");
+    };
+
+    assert_eq!(reason, "property default value is recursive");
 }
 
 #[test]
@@ -4350,11 +4368,11 @@ fn test_default_simple_enum_cycle() {
         format!("boxed {}", id)
     }
 
-    let Err(err) = builder.finalize(make_box_id) else {
+    let Err(Error::InvalidDefault { reason, .. }) = builder.finalize(make_box_id) else {
         panic!("expected finalize to reject cyclic default value");
     };
 
-    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+    assert_eq!(reason, "property default value is recursive");
 }
 
 // These structures seem like they might have cylic defaults, but they
@@ -4488,9 +4506,51 @@ fn object_default_takes_the_properties_own_defaults() {
     fn inner() {
         let holder = import::Holder::default();
 
-        println!("{:#?}", holder);
-
         assert_eq!(holder.separator.line_thickness, 1);
         assert_eq!(holder.separator.line_color, "#B2000000");
     }
+}
+
+#[test]
+fn self_referential_newtype_default_is_rejected() {
+    let settings = Settings::minimal();
+    let builder = typespace_test_macro::typespace_builder!(settings, {
+        struct N(N);
+
+        struct Holder {
+            #[default = 0]
+            v: N,
+        }
+    });
+
+    let result = builder.finalize(no_cycles);
+    assert!(
+        result.is_err(),
+        "a self-referential newtype's recursive default should be \
+             rejected with an error, not accepted"
+    );
+}
+
+#[test]
+fn test_cycle_through_item_variant() {
+    let settings = Settings::minimal();
+    let builder = typespace_test_macro::typespace_builder!(settings, {
+        #[untagged]
+        enum E {
+            E(E),
+            X(u32),
+        }
+
+        struct Holder {
+            #[default = "potato"]
+            e: E,
+        }
+    });
+
+    let result = builder.finalize(no_cycles);
+    assert!(
+        result.is_err(),
+        "a self-referential newtype's recursive default should be \
+             rejected with an error, not accepted"
+    );
 }

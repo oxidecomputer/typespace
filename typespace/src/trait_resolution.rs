@@ -177,18 +177,34 @@ where
                         // as the configured optional-nullable type),
                         // which is Default whatever the property's own
                         // type is.
-                        let named = default.as_object();
+                        let map = default.as_object();
                         let obligations = struct_info
                             .properties
                             .iter()
                             .filter(|prop| {
-                                !matches!(prop.state, StructPropertyState::Optional)
-                                    && match (named, prop.wire_name()) {
-                                        (Some(named), Some(wire_name)) => {
-                                            !named.contains_key(wire_name)
-                                        }
-                                        _ => true,
-                                    }
+                                // Does the default value specify a value for
+                                // this property?
+                                let default_has_prop = matches!(
+                                    (map, prop.wire_name()),
+                                    (Some(named), Some(wire_name)) if named.contains_key(wire_name)
+                                );
+                                // Does the property have a given default value
+                                // either by virtual of being Optional or by
+                                // having a DefaultValue attached to the
+                                // property?
+                                let prop_has_default = matches!(
+                                    &prop.state,
+                                    StructPropertyState::Optional
+                                        | StructPropertyState::DefaultValue(_)
+                                );
+
+                                // If both are false (i.e. the provided default
+                                // value doesn't specify a value for this
+                                // property AND the property doesn't provide a
+                                // value), then we need the type of the
+                                // property to provide an implementation for
+                                // default.
+                                !default_has_prop && !prop_has_default
                             })
                             .map(|prop| {
                                 (
@@ -4157,7 +4173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xxx() {
+    fn test_optional_and_default_result_in_default_trait() {
         let builder = typespace_builder!(
             minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
             {
@@ -4165,6 +4181,8 @@ mod tests {
                     a: Optional<String>,
                     #[default = 12]
                     b: u32,
+                    #[default]
+                    c: String,
                 }
             }
         );
@@ -4172,6 +4190,33 @@ mod tests {
         assert_eq!(
             built_traits(&ts, "Foo"),
             trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+    }
+
+    #[test]
+    fn test_no_obligation_with_default_value() {
+        let builder = typespace_builder!(
+            minimal_with_desired([TypespaceTrait::Clone, TypespaceTrait::Default]),
+            {
+                #[default = {}]
+                struct Outer {
+                    #[default = { a: "x"}]
+                    inner: Inner,
+                }
+
+                struct Inner {
+                    a: String,
+                }
+            }
+        );
+        let ts = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&ts, "Outer"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Default])
+        );
+        assert_eq!(
+            built_traits(&ts, "Inner"),
+            trait_set([TypespaceTrait::Clone])
         );
     }
 }
