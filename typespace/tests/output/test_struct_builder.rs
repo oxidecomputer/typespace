@@ -3,12 +3,12 @@
     ::serde::Serialize,
     Clone,
     Debug,
-    ::schemars::JsonSchema,
     Eq,
     Hash,
     Ord,
     PartialEq,
-    PartialOrd
+    PartialOrd,
+    schemars::JsonSchema
 )]
 pub struct MyStruct {
     pub a: ::std::string::String,
@@ -28,6 +28,7 @@ impl MyStruct {
         Default::default()
     }
 }
+/// Types for composing complex structures.
 pub mod builder {
     #[derive(Clone, Debug)]
     pub struct MyStruct {

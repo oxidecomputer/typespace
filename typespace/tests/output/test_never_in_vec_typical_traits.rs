@@ -7,6 +7,7 @@ impl TypicalVecHolder {
         Default::default()
     }
 }
+/// Types for composing complex structures.
 pub mod builder {
     #[derive(Clone, Debug)]
     pub struct TypicalVecHolder {

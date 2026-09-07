@@ -220,7 +220,7 @@ impl<Id> Enum<Id> {
     /// Such enums are value-like: they can derive `Copy`, `Eq`, `Ord`,
     /// and `Hash`, and admit bespoke `Display` and `FromStr` impls that
     /// map variants to and from their serialized names.
-    pub fn all_unit_variants(&self) -> bool {
+    pub fn all_tagged_unit_variants(&self) -> bool {
         self.tag_type
             .as_ref()
             .is_some_and(|tag_type| *tag_type != EnumTagType::Untagged)
@@ -239,7 +239,7 @@ impl<Id> Enum<Id> {
     /// impls that forward to the payload types. A variant carrying no
     /// payload, several payloads, or named fields has no single form
     /// to forward to.
-    pub fn all_item_variants(&self) -> bool {
+    pub fn all_untagged_item_variants(&self) -> bool {
         self.tag_type
             .as_ref()
             .is_some_and(|tag_type| *tag_type == EnumTagType::Untagged)
@@ -310,10 +310,25 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         // the trait set as it is rendered so that render_derives, which
         // rejects both, sees only derivable traits.
         let mut derived_traits = traits.clone();
-        let all_unit_variants = self.all_unit_variants();
-        let unit_variant_impls = all_unit_variants.then(|| {
-            self.render_unit_variant_impls(typespace, cs, &name_ident, &mut derived_traits)
-        });
+        let all_unit_variants = self.all_tagged_unit_variants();
+        let all_item_variants = self.all_untagged_item_variants();
+
+        let special_impls = match (all_unit_variants, all_item_variants) {
+            (true, true) => unreachable!(),
+            (true, false) => self.render_tagged_unit_variant_impls(
+                typespace,
+                cs,
+                &name_ident,
+                &mut derived_traits,
+            ),
+            (false, true) => self.render_untagged_item_variant_impls(
+                typespace,
+                cs,
+                &name_ident,
+                &mut derived_traits,
+            ),
+            (false, false) => TokenStream::new(),
+        };
 
         // typify's comparison-derive exception checks only that every
         // variant is a unit variant, which an empty variant list
@@ -415,7 +430,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 #( #rendered_variants, )*
             }
 
-            #unit_variant_impls
+            #special_impls
             #( #variant_from )*
         }
     }
@@ -423,7 +438,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     /// Render an all-unit-variant enum's `Display` and `FromStr`.
     ///
     /// These traits **must** be manually implemented.
-    fn render_unit_variant_impls(
+    fn render_tagged_unit_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
         cs: &mut codespace::Codespace,
@@ -434,7 +449,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         // every variant has to be payload-free for them to be writable
         // at all.
         assert!(
-            self.all_unit_variants(),
+            self.all_tagged_unit_variants(),
             "{} is not an all-unit-variant enum",
             self.common.built_name(),
         );
@@ -445,7 +460,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .map(|variant| (format_ident!("{}", variant.rust_name), variant.json_name()))
             .unzip();
 
-        let display = derived_traits.remove(TypespaceTrait::Display).then(|| {
+        let display_impl = derived_traits.remove(TypespaceTrait::Display).then(|| {
             // Display each variant as its serialized name.
             quote! {
                 impl ::std::fmt::Display for #name_ident {
@@ -460,7 +475,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             }
         });
 
-        let from_str = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
+        let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
             // Parse each variant from its serialized name.
             typespace.add_error_mod(cs);
             let string_type = typespace.render_std_string();
@@ -499,8 +514,79 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         });
 
         quote! {
-            #display
-            #from_str
+            #display_impl
+            #from_str_impl
+        }
+    }
+
+    fn render_untagged_item_variant_impls(
+        &self,
+        typespace: &TypespaceRenderer<'_, Id>,
+        cs: &mut codespace::Codespace,
+        name_ident: &Ident,
+        derived_traits: &mut TypespaceTraitSet,
+    ) -> TokenStream {
+        let variant_idents = self
+            .variants
+            .iter()
+            .map(|variant| format_ident!("{}", variant.rust_name))
+            .collect::<Vec<_>>();
+
+        let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
+            typespace.add_error_mod(cs);
+            quote! {
+                impl ::std::str::FromStr for #name_ident {
+                    type Err = self::error::ConversionError;
+
+                    fn from_str(value: &str) ->
+                        ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        #(
+                            // Try to parse() into each variant.
+                            if let Ok(v) = value.parse() {
+                                Ok(Self::#variant_idents(v))
+                            } else
+                        )*
+                        {
+                            Err("string conversion failed for all variants".into())
+                        }
+                    }
+                }
+                impl ::std::convert::TryFrom<&str> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: &str) ->
+                        ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        value.parse()
+                    }
+                }
+                impl ::std::convert::TryFrom<::std::string::String> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: ::std::string::String) ->
+                        ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        value.parse()
+                    }
+                }
+            }
+        });
+        let display_impl = derived_traits.remove(TypespaceTrait::Display).then(|| {
+            quote! {
+                impl ::std::fmt::Display for #name_ident {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        match self {
+                            #(Self::#variant_idents(x) => x.fmt(f),)*
+                        }
+                    }
+                }
+            }
+        });
+
+        quote! {
+            #display_impl
+            #from_str_impl
         }
     }
 

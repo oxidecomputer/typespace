@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
-use crate::default::check_default;
+use crate::default::{check_default, generate_default};
 use crate::error::{Error, NameAxis};
 use crate::serde_attrs::SerdeDerives;
 use crate::settings::Settings;
@@ -1265,6 +1265,11 @@ pub enum NewtypeConstraints {
         // max_contains: Option<usize>,
         // contains: (),
     },
+
+    /// Fallback constraint
+    ///
+    /// Verify data against the given JSON schema (using the crate
+    /// `jsonschema` for runtime validation).
     JsonSchema(JsonValue),
 }
 
@@ -1307,154 +1312,25 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let inner_ident = typespace.render_ident(inner);
 
-        let vis = matches!(constraints, NewtypeConstraints::None).then(|| quote! { pub });
-
-        let constraint_impl = match constraints {
-            NewtypeConstraints::None => quote! {
-                impl ::std::convert::From<#name_ident> for #inner_ident {
-                    fn from(value: #name_ident) -> Self {
-                        value.0
-                    }
-                }
-
-                impl ::std::convert::From<#inner_ident> for #name_ident {
-                    fn from(value: #inner_ident) -> Self {
-                        Self(value)
-                    }
-                }
-            },
-
-            NewtypeConstraints::AllowList(json_values) => todo!(),
-            NewtypeConstraints::DenyList(json_values) => todo!(),
-            NewtypeConstraints::String { min, max, patterns } => {
-                typespace.add_error_mod(cs);
-                let max = max.map(|v| {
-                    let v = v as usize;
-                    let err = format!("longer than {} characters", v);
-                    quote! {
-                        if value.chars().count() > #v {
-                            return Err(#err.into());
-                        }
-                    }
-                });
-                let min = min.map(|v| {
-                    let v = v as usize;
-                    let err = format!("shorter than {} characters", v);
-                    quote! {
-                        if value.chars().count() < #v {
-                            return Err(#err.into());
-                        }
-                    }
-                });
-
-                let pat = patterns.iter().map(|p| {
-                    let err = format!("doesn't match pattern \"{}\"", p);
-                    quote! {
-                        static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(|| {
-                            ::regress::Regex::new(#p).unwrap()
-                        });
-                        if PATTERN.find(value).is_none() {
-                            return Err(#err.into());
-                        }
-                    }
-                }).collect::<Vec<_>>();
-                // TYPIFY 1 COMPAT
-                let pat = match &pat[..] {
-                    [] => TokenStream::new(),
-                    [solo] => solo.clone(),
-                    many => quote! {
-                        #(
-                            {
-                                #many
-                            }
-                        )*
-                    },
-                };
-
-                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
-                    quote! {
-                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
-                            fn deserialize<D>(
-                                deserializer: D,
-                            ) -> ::std::result::Result<Self, D::Error>
-                            where
-                                D: ::serde::Deserializer<'de>,
-                            {
-                                ::std::convert::TryFrom::try_from(
-                                    ::std::string::String::deserialize(
-                                        deserializer
-                                    )?
-                                )
-                                .map_err(|e: self::error::ConversionError| {
-                                    <D::Error as ::serde::de::Error>::custom(
-                                        e.to_string(),
-                                    )
-                                })
-                            }
-                        }
-                    }
-                });
-
-                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
-                    quote! {
-                        impl ::std::str::FromStr for #name_ident {
-                            type Err = self::error::ConversionError;
-
-                            fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-                                ::std::convert::TryFrom::try_from(value)
-                            }
-                        }
-
-                    }
-                });
-                let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
-                    quote! {
-                        impl ::std::fmt::Display for #name_ident {
-                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                                self.0.fmt(f)
-                            }
-                        }
-                    }
-                });
-
-                // TODO: if a user were to derive schemars::JsonSchema, it
-                // wouldn't be accurate.
-                quote! {
-                    impl ::std::convert::TryFrom<&str> for #name_ident {
-                        type Error = self::error::ConversionError;
-
-                        fn try_from(value: &str) ->
-                            ::std::result::Result<Self, self::error::ConversionError>
-                        {
-                            #max
-                            #min
-                            #pat
-                            Ok(Self(value.to_string()))
-                        }
-                    }
-                    impl ::std::convert::TryFrom<::std::string::String> for #name_ident {
-                        type Error = self::error::ConversionError;
-
-                        fn try_from(value: ::std::string::String) ->
-                            ::std::result::Result<Self, self::error::ConversionError>
-                        {
-                            ::std::convert::TryFrom::try_from(value.as_str())
-                        }
-                    }
-
-                    #deserialize_impl
-                    #from_str_impl
-                    #display_impl
-                }
-            }
-            NewtypeConstraints::Array { min, max } => todo!(),
-            NewtypeConstraints::JsonSchema(json_value) => todo!(),
-        };
-
         // A newtype wrapping `String` directly is typify's other
         // comparison-derive exception.
-        // TYPIFY COMPAT: read only by render_derives' exemption.
+        // TYPIFY COMPAT: read by render_derives' exemption and by the
+        // unconstrained newtype's FromStr just below.
         let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
+
+        let vis = matches!(constraints, NewtypeConstraints::None).then(|| quote! { pub });
+
+        let constraint_impl = render_constraint_impl(
+            typespace,
+            cs,
+            constraints,
+            &mut traits,
+            name,
+            &name_ident,
+            inner,
+            &inner_ident,
+        );
+
         let derive_attr = typespace.render_derives(&traits, extra_derives, wraps_string);
         let attrs = typespace.render_attrs(extra_attrs);
 
@@ -1478,8 +1354,332 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
 
+            impl ::std::convert::From<#name_ident> for #inner_ident {
+                fn from(value: #name_ident) -> Self {
+                    value.0
+                }
+            }
 
             #constraint_impl
         }
+    }
+}
+
+fn render_constraint_impl<Id>(
+    typespace: &TypespaceRenderer<'_, Id>,
+    cs: &mut codespace::Codespace,
+    constraints: &NewtypeConstraints,
+    traits: &mut crate::TypespaceTraitSet,
+    name: &str,
+    name_ident: &syn::Ident,
+    inner: &Id,
+    inner_ident: &TokenStream,
+) -> TokenStream
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    match constraints {
+        NewtypeConstraints::None => {
+            // An unconstrained newtype parses and prints according to its inner
+            // value.
+
+            // does: `feasibility` grants both traits with an obligation on
+            // the inner type, so both impls forward to it. A constrained
+            // newtype takes both traits out of the set inside
+            // `render_constraint_impl`, so `remove` answers false here and
+            // neither impl is written twice.
+            //
+            // TYPIFY COMPAT: a newtype directly over `String` takes the
+            // value verbatim, so its FromStr cannot fail and it gets no
+            // TryFrom impls. Every other inner type parses, so FromStr
+            // forwards to the inner type's and the two TryFrom impls
+            // forward to that.
+            let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
+                if wraps_string {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = ::std::convert::Infallible;
+                            fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+                                Ok(Self(value.to_string()))
+                            }
+                        }
+                    }
+                } else {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = <#inner_ident as ::std::str::FromStr>::Err;
+                            fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
+                                Ok(Self(value.parse()?))
+                            }
+                        }
+
+                    }
+                }
+            });
+            let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
+                quote! {
+                    impl ::std::fmt::Display for #name_ident {
+                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                            self.0.fmt(f)
+                        }
+                    }
+                }
+            });
+
+            quote! {
+                impl ::std::convert::From<#inner_ident> for #name_ident {
+                    fn from(value: #inner_ident) -> Self {
+                        Self(value)
+                    }
+                }
+
+                #from_str_impl
+                #display_impl
+            }
+        }
+
+        NewtypeConstraints::AllowList(values) | NewtypeConstraints::DenyList(values) => {
+            let value_output = values.iter().map(|value| {
+                generate_default(typespace.types, typespace.settings, &value.0, inner.clone())
+            });
+
+            let value_string = values
+                .iter()
+                .map(|value| serde_json::to_string(&value.0).unwrap());
+
+            let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                quote! {
+                    impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                        fn deserialize<D>(
+                            deserializer: D,
+                        ) -> ::std::result::Result<Self, D::Error>
+                        where
+                            D: ::serde::Deserializer<'de>,
+                        {
+                            Self::try_from(
+                                <#inner_ident>::deserialize(deserializer)?,
+                            )
+                            .map_err(|e| {
+                                <D::Error as ::serde::de::Error>::custom(
+                                    e.to_string(),
+                                )
+                            })
+                        }
+                    }
+                }
+            });
+
+            // As with Deserialize, serde::JsonSchema requires a custom
+            // impl. If it's present in the set of derives, remove it and
+            // generate something that accurately models the type.
+            let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                // TODO 9/7/2026
+                // I'm really not sure why typify 1 did this `from_str` stuff
+                // when we--I think--already have serde_json::Value tokens
+                // ready to go... but we can look into that later.
+                let enum_values = quote! {
+                    ::std::option::Option::Some([
+                        #( ::serde_json::from_str(#value_string).unwrap(), )*
+                    ].into_iter().collect())
+                };
+
+                let body = match constraints {
+                    NewtypeConstraints::AllowList(_) => quote! {
+                        schema.enum_values = #enum_values;
+                    },
+                    NewtypeConstraints::DenyList(_) => quote! {
+                        let not = ::schemars::schema::SchemaObject {
+                            enum_values: #enum_values,
+                            ..::std::default::Default::default()
+                        };
+                        schema.subschemas().not = Some(
+                            ::std::boxed::Box::new(not.into())
+                        );
+                    },
+                    _ => unreachable!(),
+                };
+                quote! {
+                    impl ::schemars::JsonSchema for #name_ident {
+                        fn schema_name() -> ::std::string::String {
+                            #name.to_string()
+                        }
+
+                        fn json_schema(
+                            gen: &mut ::schemars::gen::SchemaGenerator
+                        ) -> ::schemars::schema::Schema {
+                            let mut schema =
+                                <#inner_ident as ::schemars::JsonSchema>
+                                    ::json_schema(gen)
+                                    .into_object();
+                            #body
+                            schema.into()
+                        }
+                    }
+                }
+            });
+
+            // TODO if the sub_type is a string we could probably impl
+            // TryFrom<&str> as well and FromStr.
+
+            let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| quote! {});
+            let display_impl = traits.remove(TypespaceTrait::Display).then(|| quote! {});
+
+            let not = matches!(constraints, NewtypeConstraints::AllowList(_)).then(|| quote! { ! });
+            typespace.add_error_mod(cs);
+
+            quote! {
+                    // This is effectively the constructor for this type.
+                    impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
+                        type Error = self::error::ConversionError;
+
+                        fn try_from(
+                            value: #inner_ident
+                        ) -> ::std::result::Result<Self, self::error::ConversionError>
+                        {
+                            if #not [
+                                #(#value_output,)*
+                            ].contains(&value) {
+                                Err("invalid value".into())
+                            } else {
+                                Ok(Self(value))
+                            }
+                        }
+                    }
+
+
+                    #from_str_impl
+                    #display_impl
+                    #deserialize_impl
+                    #json_schema_impl
+
+            }
+        }
+
+        NewtypeConstraints::String { min, max, patterns } => {
+            typespace.add_error_mod(cs);
+            let max = max.map(|v| {
+                let err = format!("longer than {} characters", v);
+                quote! {
+                    if value.chars().count() > #v {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let min = min.map(|v| {
+                let err = format!("shorter than {} characters", v);
+                quote! {
+                    if value.chars().count() < #v {
+                        return Err(#err.into());
+                    }
+                }
+            });
+
+            let pat = patterns.iter().map(|p| {
+                let err = format!("doesn't match pattern \"{}\"", p);
+                quote! {
+                    static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(|| {
+                        ::regress::Regex::new(#p).unwrap()
+                    });
+                    if PATTERN.find(value).is_none() {
+                        return Err(#err.into());
+                    }
+                }
+            }).collect::<Vec<_>>();
+
+            // TYPIFY 1 COMPAT: pull out a lone pat
+            let pat = match &pat[..] {
+                [] => TokenStream::new(),
+                [solo] => solo.clone(),
+                many => quote! {
+                    #(
+                        {
+                            #many
+                        }
+                    )*
+                },
+            };
+
+            let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                quote! {
+                    impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                        fn deserialize<D>(
+                            deserializer: D,
+                        ) -> ::std::result::Result<Self, D::Error>
+                        where
+                            D: ::serde::Deserializer<'de>,
+                        {
+                            ::std::convert::TryFrom::try_from(
+                                ::std::string::String::deserialize(
+                                    deserializer
+                                )?
+                            )
+                            .map_err(|e: self::error::ConversionError| {
+                                <D::Error as ::serde::de::Error>::custom(
+                                    e.to_string(),
+                                )
+                            })
+                        }
+                    }
+                }
+            });
+
+            let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                quote! {
+                    impl ::std::str::FromStr for #name_ident {
+                        type Err = self::error::ConversionError;
+
+                        fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
+                            ::std::convert::TryFrom::try_from(value)
+                        }
+                    }
+
+                }
+            });
+            // TYPIFY COMPAT: typify 1 writes no Display for a
+            // constrained string newtype.
+            let display_impl = (traits.remove(TypespaceTrait::Display)
+                && !typespace.settings.typify_compat)
+                .then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
+            quote! {
+                #from_str_impl
+
+                impl ::std::convert::TryFrom<&str> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: &str) ->
+                        ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        #max
+                        #min
+                        #pat
+                        Ok(Self(value.to_string()))
+                    }
+                }
+                impl ::std::convert::TryFrom<::std::string::String> for #name_ident {
+                    type Error = self::error::ConversionError;
+
+                    fn try_from(value: ::std::string::String) ->
+                        ::std::result::Result<Self, self::error::ConversionError>
+                    {
+                        ::std::convert::TryFrom::try_from(value.as_str())
+                    }
+                }
+
+                #deserialize_impl
+                #display_impl
+            }
+        }
+        NewtypeConstraints::Array { .. } => todo!(),
+        NewtypeConstraints::JsonSchema(_json_value) => todo!(),
     }
 }

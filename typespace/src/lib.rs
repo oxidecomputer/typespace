@@ -153,13 +153,6 @@ pub enum TypespaceTrait {
     /// desiring it brings `Clone` along.
     Copy,
     Debug,
-    /// A map's key is treated as bound by this trait, which schemars 1.x
-    /// requires and schemars 0.8 does not: 0.8 renders a map key as a
-    /// schema string whatever the key type is, so its map impls bound
-    /// only the value. typespace tracks one JsonSchema across both, and
-    /// states the stronger form, so a 0.8 consumer whose map key lacks
-    /// the trait is refused a typespace that would have compiled.
-    JsonSchema,
     Display,
     FromStr,
     Eq,
@@ -168,6 +161,13 @@ pub enum TypespaceTrait {
     PartialEq,
     PartialOrd,
     Default,
+    /// A map's key is treated as bound by this trait, which schemars 1.x
+    /// requires and schemars 0.8 does not: 0.8 renders a map key as a
+    /// schema string whatever the key type is, so its map impls bound
+    /// only the value. typespace tracks one JsonSchema across both, and
+    /// states the stronger form, so a 0.8 consumer whose map key lacks
+    /// the trait is refused a typespace that would have compiled.
+    JsonSchema,
 }
 
 impl TypespaceTrait {
@@ -182,7 +182,7 @@ impl TypespaceTrait {
                 TypespaceTrait::Debug => quote! { Debug },
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
-                TypespaceTrait::JsonSchema => quote! { ::schemars::JsonSchema },
+                TypespaceTrait::JsonSchema => quote! { schemars::JsonSchema },
                 // TypespaceTrait::Eq => quote! { ::std::cmp::Eq },
                 // TypespaceTrait::PartialEq => quote! { ::std::cmp::PartialEq },
                 // TypespaceTrait::Hash => quote! { ::std::hash::Hash },
@@ -300,20 +300,20 @@ impl TypespaceTraitSet {
 // REVIEW: this seems like it's likely going to fall out of date when we add a new variants.
 /// Every trait typespace tracks, in declaration order.
 pub(crate) const ALL_TRAITS: [TypespaceTrait; 14] = [
+    TypespaceTrait::Deserialize,
+    TypespaceTrait::Serialize,
     TypespaceTrait::Clone,
     TypespaceTrait::Copy,
     TypespaceTrait::Debug,
-    TypespaceTrait::Serialize,
-    TypespaceTrait::Deserialize,
-    TypespaceTrait::JsonSchema,
     TypespaceTrait::Display,
     TypespaceTrait::FromStr,
     TypespaceTrait::Eq,
-    TypespaceTrait::PartialEq,
-    TypespaceTrait::Ord,
-    TypespaceTrait::PartialOrd,
     TypespaceTrait::Hash,
+    TypespaceTrait::Ord,
+    TypespaceTrait::PartialEq,
+    TypespaceTrait::PartialOrd,
     TypespaceTrait::Default,
+    TypespaceTrait::JsonSchema,
 ];
 
 /// What a [`build::Native`] says about one trait.
@@ -897,6 +897,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 _ => {}
             }
+        }
+
+        if cs.get_root_mod().has_mod("builder") {
+            cs.get_root_mod()
+                .get_mod("builder")
+                .add_docs(" Types for composing complex structures.");
         }
 
         cs

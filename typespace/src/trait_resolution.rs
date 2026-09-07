@@ -321,12 +321,12 @@ where
 
         Type::Enum(e) => match trait_name {
             TypespaceTrait::Display | TypespaceTrait::FromStr => {
-                if e.all_unit_variants() {
+                if e.all_tagged_unit_variants() {
                     // A hand-written impl maps variants to and from
                     // their serialized names; no variant has payload
                     // types to forward to.
                     Feasibility::ManuallyRealizable(Vec::new())
-                } else if e.all_item_variants() {
+                } else if e.all_untagged_item_variants() {
                     // An untagged enum's serialized form is exactly
                     // one variant's payload's serialized form, so
                     // Display/FromStr forward to whichever payload
@@ -885,14 +885,22 @@ where
                 // Eq, PartialEq, and Hash, has no ordering impls, and owns
                 // a String and a Vec, which rule out Copy.
                 Type::JsonValue => {
-                    let (bad, _) = split(
-                        &traits,
-                        &[
+                    let unsupported = if settings.typify_compat {
+                        vec![
                             TypespaceTrait::Ord,
                             TypespaceTrait::PartialOrd,
                             TypespaceTrait::Copy,
-                        ],
-                    );
+                            TypespaceTrait::Display,
+                            TypespaceTrait::FromStr,
+                        ]
+                    } else {
+                        vec![
+                            TypespaceTrait::Ord,
+                            TypespaceTrait::PartialOrd,
+                            TypespaceTrait::Copy,
+                        ]
+                    };
+                    let (bad, _) = split(&traits, &unsupported);
                     conflict(
                         bad,
                         OffenderReason::Primitive {

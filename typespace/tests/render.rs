@@ -3199,6 +3199,69 @@ fn test_copy_required_brings_clone() {
     assert_eq!(derives, ["Clone", "Copy"]);
 }
 
+// A newtype over an integer and an all-unit-variant enum both earn
+// Copy, and `Settings::maximal` desires it. The snapshot puts the
+// emitted `derive(Copy)` through the compiler, which an assertion on
+// the derive list alone cannot do.
+#[test]
+fn test_copy_desired_renders_and_compiles() {
+    let builder = typespace_builder!(Settings::maximal(), {
+        struct Port(u32);
+
+        enum Color {
+            Red,
+            Green,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    assert!(
+        common::derives_of(&file, "Port").contains(&"Copy".to_string()),
+        "Port did not earn Copy"
+    );
+    assert!(
+        common::derives_of(&file, "Color").contains(&"Copy".to_string()),
+        "Color did not earn Copy"
+    );
+
+    #[check_and_include(
+        "tests/output/test_copy_desired_renders_and_compiles.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        fn assert_copy<T: Copy>(_value: T) {}
+
+        assert_copy(import::Port(8080));
+        assert_copy(import::Color::Red);
+    }
+}
+
+// Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
+// a desired Copy drops at a type holding either. Clone is required
+// directly, as in the String case above, so a surviving derive
+// distinguishes "Copy dropped" from "nothing was granted at all".
+#[test]
+fn test_copy_desired_box_and_json_value_drop_copy() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Clone)
+            .with_desired_trait(TypespaceTrait::Copy),
+        {
+            struct Boxed(Box<u32>);
+
+            struct Blob {
+                data: JsonValue,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    assert_eq!(common::derives_of(&file, "Boxed"), ["Clone"]);
+    assert_eq!(common::derives_of(&file, "Blob"), ["Clone"]);
+}
+
 #[test]
 fn test_struct_builder() {
     let builder = typespace_builder!(Settings::maximal(), {
@@ -4624,7 +4687,7 @@ fn test_default_untagged_backtracks_to_a_later_variant() {
 }
 
 #[test]
-fn test_render_constrained_newtypes() {
+fn test_render_constrained_newtype_string() {
     let mut builder = TypespaceBuilder::new(Settings::maximal());
 
     builder.insert("string".to_string(), Type::String).unwrap();
@@ -4647,17 +4710,293 @@ fn test_render_constrained_newtypes() {
     let ts = builder.finalize(no_cycles).unwrap();
     let out = ts.to_codespace().into_stream();
 
-    #[check_and_include("tests/output/test_render_constrained_newtypes.rs", out)]
+    #[check_and_include("tests/output/test_render_constrained_newtype_string.rs", out)]
     fn inner() {
         use import::*;
 
         let _x = ConstrainedString::try_from("ask").unwrap();
         let _x = ConstrainedString::try_from("").expect_err("nope");
+        // Longer than the 64-character max.
+        let _x = ConstrainedString::try_from("a".repeat(65) + "k").expect_err("nope");
+        // Matches "k$" but not "^a".
+        let _x = ConstrainedString::try_from("tick").expect_err("nope");
 
-        let _x: ConstrainedString = "alack".parse().unwrap();
-
-        let xxx = schemars::schema_for!(ConstrainedString);
-        println!("{}", serde_json::to_string_pretty(&xxx).unwrap());
-        panic!()
+        let x: ConstrainedString = "alack".parse().unwrap();
+        assert_eq!(x.to_string(), "alack");
     }
+}
+
+// Builds an allow-list newtype under `settings` and returns the
+// finalized typespace, so the two tests below can render the same type
+// with and without JsonSchema.
+fn allow_list_typespace(settings: Settings) -> typespace::Typespace<String> {
+    let mut builder = TypespaceBuilder::new(settings);
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    builder
+        .insert(
+            "constrained string".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("ConstrainedString")
+                    .constraints(typespace::build::NewtypeConstraints::AllowList(vec![
+                        JsonValue(serde_json::json! { "tomax" }),
+                        JsonValue(serde_json::json! { "xamot" }),
+                    ])),
+            ),
+        )
+        .unwrap();
+
+    builder.finalize(no_cycles).unwrap()
+}
+
+// The settings here stop short of `Settings::maximal` because they omit
+// JsonSchema: the impl rendered for it names its parameter `gen`, which
+// this crate's edition reserves, so a snapshot containing it cannot be
+// compiled here. `test_render_constrained_newtype_allow_list_json_schema`
+// below checks that impl without compiling it.
+#[test]
+fn test_render_constrained_newtype_allow_list() {
+    let settings = Settings::typical().with_desired_trait(TypespaceTrait::PartialEq);
+    let ts = allow_list_typespace(settings);
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_allow_list.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let tomax = ConstrainedString::try_from("tomax".to_string()).unwrap();
+        let _xamot = ConstrainedString::try_from("xamot".to_string()).unwrap();
+        ConstrainedString::try_from("zartan".to_string()).expect_err("not on the list");
+
+        // The hand-written Deserialize runs the same check.
+        assert_eq!(
+            serde_json::from_str::<ConstrainedString>("\"tomax\"").unwrap(),
+            tomax
+        );
+        serde_json::from_str::<ConstrainedString>("\"zartan\"").expect_err("not on the list");
+    }
+}
+
+// TYPIFY COMPAT: typify 1 names the `json_schema` parameter `gen` and
+// reaches the generator through `::schemars::gen`. Edition 2024 reserves
+// `gen`, so this output cannot be spliced into this crate and compiled;
+// the rendered tokens are checked directly instead.
+#[test]
+fn test_render_constrained_newtype_allow_list_json_schema() {
+    let ts = allow_list_typespace(Settings::maximal());
+    let rendered = ts.to_codespace().into_stream().to_string();
+
+    let expected = quote! {
+        fn json_schema(
+            gen: &mut ::schemars::gen::SchemaGenerator
+        ) -> ::schemars::schema::Schema
+    }
+    .to_string();
+
+    assert!(
+        rendered.contains(&expected),
+        "no typify 1 `json_schema` signature in:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(&quote! { ::json_schema(gen) }.to_string()),
+        "the JsonSchema impl does not forward the generator:\n{rendered}"
+    );
+}
+
+// `feasibility` in `trait_resolution.rs` answers `ManuallyRealizable`
+// for Display and FromStr on two kinds of type, and the renderer writes
+// the impls that answer stands for:
+//
+// - a newtype struct ("A newtype's Display is always the inner value's
+//   Display"); `NewtypeStruct::render` in `build/structs.rs` forwards
+//   both traits to the inner type;
+// - an untagged all-item-variant enum ("Display/FromStr forward to
+//   whichever payload types the variants carry"); `Enum::render` in
+//   `build/enums.rs` writes both from the variants' payloads.
+//
+// A trait granted this way must never reach `render_derives`
+// (`lib.rs`), whose guard panics: "trying to derive Display which
+// requires a manual implementation; this is a bug". The tests below
+// pin the impls, so a renderer that dropped one would panic rather
+// than emit a type missing the trait it was granted.
+
+// `feasibility` answers `ManuallyRealizable(inner)` for both traits,
+// and required resolution grants them: the `String` inner satisfies the
+// forwarded obligations.
+#[test]
+fn newtype_display_and_from_str_render() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Display)
+            .with_required_trait(TypespaceTrait::FromStr),
+        {
+            struct Wrapper(String);
+        }
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("a newtype forwards Display and FromStr to its inner type");
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "Wrapper"),
+        "no Display impl for Wrapper"
+    );
+    assert!(
+        common::has_impl(&file, "FromStr", "Wrapper"),
+        "no FromStr impl for Wrapper"
+    );
+}
+
+// An unconstrained newtype's FromStr forwards to the inner type's,
+// which is exactly the obligation `feasibility` hands back. The inner
+// type here is `u32`, so a body that assumed a `String` inner would not
+// compile; the snapshot puts it through the compiler.
+#[test]
+fn test_newtype_from_str_forwards_to_a_non_string_inner() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
+            .with_required_trait(TypespaceTrait::PartialEq)
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+        {
+            struct Port(u32);
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "Port"),
+        "no Display impl for Port"
+    );
+    assert!(
+        common::has_impl(&file, "FromStr", "Port"),
+        "no FromStr impl for Port"
+    );
+
+    #[check_and_include(
+        "tests/output/test_newtype_from_str_forwards_to_a_non_string_inner.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        assert_eq!("8080".parse::<Port>().unwrap(), Port(8080));
+        assert!("not a port".parse::<Port>().is_err());
+        assert_eq!(Port(8080).to_string(), "8080");
+    }
+}
+
+// TYPIFY COMPAT: an unconstrained newtype directly over `String` takes
+// the value verbatim, so its `FromStr` cannot fail and typify 1 writes
+// no `TryFrom` impls beside it. The pinned form is `StringVersion` in
+// typify 1's `various-enums.rs`.
+#[test]
+fn test_newtype_from_str_wraps_a_string_inner() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
+            .with_required_trait(TypespaceTrait::PartialEq)
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+        {
+            struct Wrapper(String);
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    let rendered = ts.to_codespace().into_stream().to_string();
+
+    assert!(
+        !rendered.contains(&quote! { ::std::convert::TryFrom }.to_string()),
+        "a String newtype carries no TryFrom impls:\n{rendered}"
+    );
+
+    #[check_and_include(
+        "tests/output/test_newtype_from_str_wraps_a_string_inner.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        // The error type is `Infallible`, so every input parses.
+        assert_eq!(
+            "not a number".parse::<Wrapper>().unwrap(),
+            Wrapper("not a number".to_string())
+        );
+        assert_eq!(Wrapper("hi".to_string()).to_string(), "hi");
+    }
+}
+
+// `Settings::maximal` desires Display and FromStr, so the desired phase
+// reads the same feasibility table and grants both to any newtype whose
+// inner type has them. The preset that asks for the most renders the
+// most ordinary wrapper type.
+#[test]
+fn maximal_settings_newtype_renders() {
+    let builder = typespace_builder!(Settings::maximal(), {
+        struct Wrapper(String);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        file.items
+            .iter()
+            .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == "Wrapper")),
+        "Wrapper missing from output"
+    );
+}
+
+// `feasibility` answers `ManuallyRealizable` with the payload types as
+// obligations, and both payloads (`String`, `u32`) satisfy them, so
+// finalization grants the trait and `Enum::render` writes the impl.
+#[test]
+fn untagged_enum_display_renders() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::Display),
+        {
+            #[untagged]
+            enum U {
+                Text(String),
+                Count(u32),
+            }
+        }
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("an untagged item enum forwards Display to its payloads");
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "U"),
+        "no Display impl for U"
+    );
+}
+
+// The FromStr half of the same pair, on a single-variant enum so the
+// intended parse is unambiguous.
+#[test]
+fn untagged_enum_from_str_renders() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::FromStr),
+        {
+            #[untagged]
+            enum Parsed {
+                Count(u32),
+            }
+        }
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("an untagged item enum forwards FromStr to its payloads");
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "FromStr", "Parsed"),
+        "no FromStr impl for Parsed"
+    );
 }

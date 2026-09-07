@@ -2,13 +2,13 @@
     ::serde::Serialize,
     Clone,
     Debug,
-    ::schemars::JsonSchema,
     Eq,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
-    Default
+    Default,
+    schemars::JsonSchema
 )]
 #[serde(transparent)]
 pub struct ConstrainedString(::std::string::String);
@@ -16,6 +16,19 @@ impl ::std::ops::Deref for ConstrainedString {
     type Target = ::std::string::String;
     fn deref(&self) -> &::std::string::String {
         &self.0
+    }
+}
+impl ::std::convert::From<ConstrainedString> for ::std::string::String {
+    fn from(value: ConstrainedString) -> Self {
+        value.0
+    }
+}
+impl ::std::str::FromStr for ConstrainedString {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        ::std::convert::TryFrom::try_from(value)
     }
 }
 impl ::std::convert::TryFrom<&str> for ConstrainedString {
@@ -65,14 +78,6 @@ impl<'de> ::serde::Deserialize<'de> for ConstrainedString {
             .map_err(|e: self::error::ConversionError| {
                 <D::Error as ::serde::de::Error>::custom(e.to_string())
             })
-    }
-}
-impl ::std::str::FromStr for ConstrainedString {
-    type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        ::std::convert::TryFrom::try_from(value)
     }
 }
 impl ::std::fmt::Display for ConstrainedString {

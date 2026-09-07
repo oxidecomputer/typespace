@@ -9,7 +9,7 @@
 
 use typespace::{
     TypespaceBuilder, TypespaceTrait,
-    build::{Native, Struct, StructProperty, Type},
+    build::{JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct, StructProperty, Type},
     no_cycles,
     settings::{ContainerType, Settings},
 };
@@ -128,136 +128,6 @@ fn box_provides_display() {
     );
 }
 
-// `feasibility` in `trait_resolution.rs` grants Display and FromStr to
-// two kinds of type whose renderer has no emit path for either trait:
-//
-// - a newtype struct ("A newtype's Display is always the inner value's
-//   Display"); `NewtypeStruct::render` in `build/structs.rs` writes
-//   Deref and From impls only, and passes the full trait set to
-//   `render_derives`;
-// - an untagged all-item-variant enum ("Display/FromStr forward to
-//   whichever payload types the variants carry"); `Enum::render` in
-//   `build/enums.rs` strips and emits the two traits only through
-//   `render_unit_variant_impls`, which runs for all-unit-variant enums
-//   alone.
-//
-// In both cases the granted trait reaches `render_derives` (`lib.rs`),
-// whose guard panics: "trying to derive Display which requires a
-// manual implementation; this is a bug". So a graph that finalizes
-// successfully cannot be rendered at all.
-//
-// The fix is to write the impls, not to narrow feasibility: a newtype
-// really can implement Display when its inner type does, and an
-// untagged enum when its variants can. That work lands with
-// constrained newtypes, which rewrites `NewtypeStruct::render`.
-
-// `feasibility` answers `ManuallyRealizable(inner)` for both traits,
-// and required resolution grants them (the `String` inner satisfies
-// the forwarded obligations). Rendering must then emit the impls the
-// grant stands for; instead `NewtypeStruct::render` leaves both traits
-// in the derive set and `render_derives` panics.
-#[test]
-#[ignore = "constrained newtypes rewrites NewtypeStruct::render to emit these impls"]
-fn newtype_display_and_from_str_render() {
-    let builder = typespace_builder!(
-        Settings::minimal()
-            .with_required_trait(TypespaceTrait::Display)
-            .with_required_trait(TypespaceTrait::FromStr),
-        {
-            struct Wrapper(String);
-        }
-    );
-    let ts = builder
-        .finalize(no_cycles)
-        .expect("a newtype forwards Display and FromStr to its inner type");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
-
-    assert!(
-        common::has_impl(&file, "Display", "Wrapper"),
-        "no Display impl for Wrapper"
-    );
-    assert!(
-        common::has_impl(&file, "FromStr", "Wrapper"),
-        "no FromStr impl for Wrapper"
-    );
-}
-
-// `Settings::maximal` desires Display and FromStr, so the desired phase
-// reads the same feasibility table and grants both to any newtype
-// whose inner type has them; rendering the typespace then panics. The
-// preset that asks for the most is unusable with the most ordinary
-// wrapper type.
-#[test]
-#[ignore = "constrained newtypes rewrites NewtypeStruct::render to emit these impls"]
-fn maximal_settings_newtype_renders() {
-    let builder = typespace_builder!(Settings::maximal(), {
-        struct Wrapper(String);
-    });
-    let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
-
-    assert!(
-        file.items
-            .iter()
-            .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == "Wrapper")),
-        "Wrapper missing from output"
-    );
-}
-
-// `feasibility` answers `ManuallyRealizable` with the payload types as
-// obligations, and both payloads (`String`, `u32`) satisfy them, so
-// finalization grants the trait. `Enum::render` has no emit path for
-// an untagged enum's Display, so the trait lands in the derive set and
-// `render_derives` panics.
-#[test]
-#[ignore = "constrained newtypes rewrites Enum::render to emit this impl"]
-fn untagged_enum_display_renders() {
-    let builder = typespace_builder!(
-        Settings::minimal().with_required_trait(TypespaceTrait::Display),
-        {
-            #[untagged]
-            enum U {
-                Text(String),
-                Count(u32),
-            }
-        }
-    );
-    let ts = builder
-        .finalize(no_cycles)
-        .expect("an untagged item enum forwards Display to its payloads");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
-
-    assert!(
-        common::has_impl(&file, "Display", "U"),
-        "no Display impl for U"
-    );
-}
-
-// The FromStr half of the same gap, on a single-variant enum so the
-// intended parse is unambiguous.
-#[test]
-#[ignore = "constrained newtypes rewrites Enum::render to emit this impl"]
-fn untagged_enum_from_str_renders() {
-    let builder = typespace_builder!(
-        Settings::minimal().with_required_trait(TypespaceTrait::FromStr),
-        {
-            #[untagged]
-            enum Parsed {
-                Count(u32),
-            }
-        }
-    );
-    let ts = builder
-        .finalize(no_cycles)
-        .expect("an untagged item enum forwards FromStr to its payloads");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
-
-    assert!(
-        common::has_impl(&file, "FromStr", "Parsed"),
-        "no FromStr impl for Parsed"
-    );
-}
-
 // `feasibility` documents the contract for a struct with an attached
 // default value: "The hand-written impl takes each property the
 // default value names from that value and fills the rest with
@@ -350,5 +220,61 @@ fn json_value_property_in_default_state_renders() {
             .iter()
             .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == "Blob")),
         "Blob missing from output"
+    );
+}
+
+// An allow-list or deny-list newtype is granted FromStr and Display but
+// gets neither impl.
+//
+// `feasibility` in `trait_resolution.rs` answers
+// `ManuallyRealizable(vec![])` for both traits on any constrained
+// newtype: a constrained newtype's FromStr parses the inner value and
+// then validates it, so the inner type owes nothing. The allow/deny arm
+// of `render_constraint_impl` in `build/structs.rs` then writes
+// `traits.remove(FromStr).then(|| quote! {})` and the same for Display,
+// consuming each trait and rendering an empty token stream for it.
+//
+// The result is silent: the trait never reaches `render_derives`, so
+// nothing panics and the output still compiles. It turns into a compile
+// error as soon as such a newtype is an untagged enum's payload, since
+// the enum's forwarding impls call the payload's FromStr and Display.
+//
+// The fix is to write the two impls, the way the String arm of the same
+// function already does.
+#[test]
+#[ignore = "the allow/deny arm of render_constraint_impl writes neither impl"]
+fn allow_list_newtype_renders_from_str_and_display() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Display)
+        .with_required_trait(TypespaceTrait::FromStr);
+    let mut builder = TypespaceBuilder::new(settings);
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "constrained string".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("ConstrainedString")
+                    .constraints(NewtypeConstraints::AllowList(vec![
+                        JsonValue(serde_json::json! { "tomax" }),
+                        JsonValue(serde_json::json! { "xamot" }),
+                    ])),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("a constrained newtype realizes both traits itself");
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "FromStr", "ConstrainedString"),
+        "no FromStr impl for an allow-list newtype granted the trait"
+    );
+    assert!(
+        common::has_impl(&file, "Display", "ConstrainedString"),
+        "no Display impl for an allow-list newtype granted the trait"
     );
 }

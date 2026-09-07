@@ -2,13 +2,14 @@
 
 use quote::quote;
 use typespace::{
+    TypeSpaceImpl, TypespaceBuilder,
     build::{
         Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, StructPropertyState,
         TupleStruct, Type, TypeAlias, UnitStruct, VariantDetails,
     },
     no_cycles,
     settings::Settings,
-    view, TypeSpaceImpl, TypespaceBuilder,
+    view,
 };
 use typespace_test_macro::typespace_builder;
 
@@ -258,18 +259,18 @@ fn build_side_queries() {
             EnumVariant::new("A", VariantDetails::Unit),
             EnumVariant::new("B", VariantDetails::Unit),
         ]);
-    assert!(simple.all_unit_variants());
+    assert!(simple.all_tagged_unit_variants());
 
     let untagged = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::Untagged)
         .variants(vec![EnumVariant::new("A", VariantDetails::Unit)]);
-    assert!(!untagged.all_unit_variants());
+    assert!(!untagged.all_tagged_unit_variants());
 
     let empty = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::External);
-    assert!(!empty.all_unit_variants());
+    assert!(!empty.all_tagged_unit_variants());
 
     let data = Enum::new()
         .name("E")
@@ -278,7 +279,7 @@ fn build_side_queries() {
             "A",
             VariantDetails::Item("a".to_string()),
         )]);
-    assert!(!data.all_unit_variants());
+    assert!(!data.all_tagged_unit_variants());
 }
 
 // Scoped identifier rendering on the view side, and the pre-finalize
