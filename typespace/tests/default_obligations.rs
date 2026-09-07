@@ -1,15 +1,12 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Tests pinning two `Default`-obligation bugs in `feasibility` for
+//! Tests pinning which properties a `Default` impl obligates, for
 //! `Type::Struct` in `typespace/src/trait_resolution.rs`.
 //!
-//! An obligation should exist exactly where the rendered `Default`
-//! impl calls `Default::default()` on a property's type. Each test
-//! below asserts the outcome that follows from that rule; today
-//! `feasibility` computes the wrong obligation set, so finalization
-//! fails where it should succeed. These tests are expected to fail
-//! until the obligation computation is fixed; do not update them to
-//! match the current (wrong) behavior.
+//! An obligation exists exactly where the rendered `Default` impl
+//! calls `Default::default()` on a property's type. Each test below
+//! asserts the outcome that follows from that rule, so a change that
+//! widens or narrows the obligation set fails here.
 
 use typespace::{no_cycles, settings::Settings, TypespaceTrait};
 use typespace_test_macro::typespace_builder;

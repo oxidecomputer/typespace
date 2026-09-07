@@ -4375,7 +4375,7 @@ fn test_default_simple_enum_cycle() {
     assert_eq!(reason, "property default value is recursive");
 }
 
-// These structures seem like they might have cylic defaults, but they
+// These structures seem like they might have cyclic defaults, but they
 // actually don't.
 #[test]
 fn test_default_not_actually_a_cycle() {
@@ -4440,7 +4440,7 @@ fn test_default_not_actually_a_cycle() {
                 d: D {
                     // TODO 9/6/2026
                     // I don't think we need this box here; agents working on
-                    // why that's happening and if it's reaonsable to avoid
+                    // why that's happening and if it's reasonable to avoid
                     // (which it may not be).
                     c: Some(Box::new(C {
                         x: 100,
@@ -4523,13 +4523,13 @@ fn self_referential_newtype_default_is_rejected() {
         }
     });
 
-    let result = builder.finalize(no_cycles);
-    assert!(
-        result.is_err(),
-        "a self-referential newtype's recursive default should be \
-             rejected with an error, not accepted"
-    );
+    let Err(Error::InvalidDefault { reason, .. }) = builder.finalize(no_cycles) else {
+        panic!("a self-referential newtype's recursive default should be rejected, not accepted");
+    };
+
+    assert_eq!(reason, "property default value is recursive");
 }
+
 
 #[test]
 fn test_cycle_through_item_variant() {
@@ -4547,10 +4547,50 @@ fn test_cycle_through_item_variant() {
         }
     });
 
-    let result = builder.finalize(no_cycles);
-    assert!(
-        result.is_err(),
-        "a self-referential newtype's recursive default should be \
-             rejected with an error, not accepted"
-    );
+    let Err(Error::InvalidDefault { reason, .. }) = builder.finalize(no_cycles) else {
+        panic!("a cycle through an untagged Item variant should be rejected, not accepted");
+    };
+
+    // The guard fires on the `E(E)` variant, but `default_impl_enum_untagged`
+    // discards a failed variant with `.ok()` and moves on, so what surfaces is
+    // the exhausted-variants error rather than the recursion that caused it.
+    assert_eq!(reason, "no variant of the untagged enum accepts this value");
+}
+
+
+// An untagged enum whose first variant fails partway through: the walk
+// must discard that attempt and succeed on a later variant. This is the
+// behavior `default_impl_enum_untagged`'s `.ok()` exists to provide, and
+// it is what the guard's pop-on-error discipline has to survive.
+#[test]
+fn test_default_untagged_backtracks_to_a_later_variant() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Wrap(u32);
+
+        #[untagged]
+        enum U {
+            // `a` walks fine, then `b` is required and absent, so the
+            // whole variant is rejected after Wrap's guarded frame has
+            // already pushed and popped.
+            First { a: Wrap, b: u32 },
+            Second { a: Wrap },
+        }
+
+        struct Holder {
+            #[default = { a: 7 }]
+            u: U,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_default_untagged_backtracks.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        assert_eq!(Holder::default().u, U::Second { a: Wrap(7) });
+    }
 }

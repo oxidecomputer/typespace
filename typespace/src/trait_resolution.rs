@@ -165,9 +165,13 @@ where
                 TypespaceTrait::Default => {
                     if let Some(default) = struct_info.common.default() {
                         // The hand-written impl takes each property the
-                        // default value names from that value and fills
-                        // the rest with Default::default(), so the
-                        // properties the value does not name are the
+                        // default value names from that value, and
+                        // takes the rest from whatever that property
+                        // itself supplies: its own attached default
+                        // value where it has one, and
+                        // Default::default() otherwise. Only the
+                        // second of those calls the property type's
+                        // Default, so only those properties are
                         // obligations. A flattened property has no wire
                         // name to look for, and a default value that is
                         // not a JSON object names nothing at all;
@@ -189,7 +193,7 @@ where
                                     (Some(named), Some(wire_name)) if named.contains_key(wire_name)
                                 );
                                 // Does the property have a given default value
-                                // either by virtual of being Optional or by
+                                // either by virtue of being Optional or by
                                 // having a DefaultValue attached to the
                                 // property?
                                 let prop_has_default = matches!(

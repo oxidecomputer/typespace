@@ -575,7 +575,7 @@ where
                         // `default::a_a`), but that would move the infinite
                         // recursion to runtime which we'd rather not do.
                         //
-                        // To detect the recusion, we save both the Id *and*
+                        // To detect the recursion, we save both the Id *and*
                         // JSON value--both are required. The Id would be
                         // insufficient in a case like this:
                         //
@@ -1141,7 +1141,6 @@ where
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
-        // let value = serde_json::json!(null);
         let key = (id.clone(), value.clone());
         if expansion_set.contains(&key) {
             let (id, value) = key;
