@@ -4560,7 +4560,6 @@ fn self_referential_newtype_default_is_rejected() {
     assert_eq!(reason, "property default value is recursive");
 }
 
-
 #[test]
 fn test_cycle_through_item_variant() {
     let settings = Settings::minimal();
@@ -4586,7 +4585,6 @@ fn test_cycle_through_item_variant() {
     // the exhausted-variants error rather than the recursion that caused it.
     assert_eq!(reason, "no variant of the untagged enum accepts this value");
 }
-
 
 // An untagged enum whose first variant fails partway through: the walk
 // must discard that attempt and succeed on a later variant. This is the
@@ -4622,5 +4620,44 @@ fn test_default_untagged_backtracks_to_a_later_variant() {
         use import::*;
 
         assert_eq!(Holder::default().u, U::Second { a: Wrap(7) });
+    }
+}
+
+#[test]
+fn test_render_constrained_newtypes() {
+    let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    builder
+        .insert(
+            "constrained string".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("ConstrainedString")
+                    .constraints(typespace::build::NewtypeConstraints::String {
+                        min: Some(1),
+                        max: Some(64),
+                        patterns: vec!["^a".to_string(), "k$".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtypes.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let _x = ConstrainedString::try_from("ask").unwrap();
+        let _x = ConstrainedString::try_from("").expect_err("nope");
+
+        let _x: ConstrainedString = "alack".parse().unwrap();
+
+        let xxx = schemars::schema_for!(ConstrainedString);
+        println!("{}", serde_json::to_string_pretty(&xxx).unwrap());
+        panic!()
     }
 }

@@ -888,7 +888,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::NewtypeStruct(n) => {
                     let name = n.common.built_name().to_string();
-                    cs.add_item(name, n.render(self));
+                    let tokens = n.render(self, &mut cs);
+                    cs.add_item(name, tokens);
                 }
                 Type::TypeAlias(a) => {
                     let name = a.common.built_name().to_string();

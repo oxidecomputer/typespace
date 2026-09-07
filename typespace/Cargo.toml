@@ -26,6 +26,7 @@ expectorate = { workspace = true }
 json-serde = { workspace = true }
 newline-converter = { workspace = true }
 prettyplease = { workspace = true }
+regress = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
