@@ -1,0 +1,5 @@
+error: snapshot path "tests/output/.rs" has no file name before ".rs"; a snapshot path looks like "tests/output/my_test.rs"
+ --> tests/ui/check_and_include_empty_file_stem.rs:4:43
+  |
+4 | #[typespace_test_macro::check_and_include("tests/output/.rs", ())]
+  |                                           ^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: snapshot path "/tmp/output/my_test.rs" must be a relative path with no leading "/" and no ".." component; a snapshot path looks like "tests/output/my_test.rs"
+ --> tests/ui/check_and_include_absolute_path.rs:4:43
+  |
+4 | #[typespace_test_macro::check_and_include("/tmp/output/my_test.rs", ())]
+  |                                           ^^^^^^^^^^^^^^^^^^^^^^^^

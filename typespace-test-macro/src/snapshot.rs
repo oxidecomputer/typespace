@@ -16,6 +16,20 @@ use syn::{
 /// and the macro wrote a fresh one.
 const MISSING_FILE_MESSAGE: &str = "snapshot file created, run tests again";
 
+/// Text rust-analyzer splices into the source at the cursor position
+/// when it computes completions: it reparses the edited source with
+/// the marker inserted and re-expands proc macros so it can see what
+/// is available at that point. While someone is typing the filename
+/// argument of `check_and_include`, this fires on every keystroke,
+/// so `filename_str` momentarily contains a nonsense partial path with
+/// this marker embedded in it. A real `cargo build` never inserts this
+/// text anywhere, so seeing it here means we are being asked for
+/// completions, not compiling for real.
+const RA_COMPLETION_MARKER: &str = "raCompletionMarker";
+
+/// Example snapshot path used in guard error messages below.
+const EXAMPLE_SNAPSHOT_PATH: &str = "tests/output/my_test.rs";
+
 struct MacroArgs {
     filename: LitStr,
     output_expr: Expr,
@@ -71,6 +85,66 @@ fn expand_missing_file(
             panic!(#panic_fmt, __snapshot_path.display());
         }
     }
+}
+
+/// Expansion used when `filename_str` contains [`RA_COMPLETION_MARKER`]:
+/// a stub that only needs to parse and compile. It must not touch the
+/// filesystem or reference the (garbage) path in any way, since the
+/// path is a nonsense partial string mid-edit, not a real snapshot
+/// path.
+fn expand_ra_completion_stub() -> proc_macro2::TokenStream {
+    quote! {
+        {
+            unimplemented!(
+                "check_and_include: stub expansion for a rust-analyzer \
+                 completion request"
+            )
+        }
+    }
+}
+
+/// Checks that `filename_str` is a well-formed relative snapshot path,
+/// before it is turned into a filesystem path anywhere in `expand`.
+/// Returns `Err` describing what is wrong and what a valid snapshot
+/// path looks like.
+fn validate_snapshot_path(filename_str: &str) -> Result<(), String> {
+    if !filename_str.ends_with(".rs") {
+        return Err(format!(
+            "snapshot path {filename_str:?} must end in \".rs\"; a \
+             snapshot path looks like {EXAMPLE_SNAPSHOT_PATH:?}"
+        ));
+    }
+
+    let file_name = filename_str.rsplit('/').next().unwrap_or(filename_str);
+    let stem = &file_name[..file_name.len() - ".rs".len()];
+    if stem.is_empty() {
+        return Err(format!(
+            "snapshot path {filename_str:?} has no file name before \
+             \".rs\"; a snapshot path looks like {EXAMPLE_SNAPSHOT_PATH:?}"
+        ));
+    }
+
+    let parent = filename_str
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("");
+    if parent.is_empty() {
+        return Err(format!(
+            "snapshot path {filename_str:?} has no parent directory; a \
+             snapshot path looks like {EXAMPLE_SNAPSHOT_PATH:?}, not a bare \
+             file name at the crate root"
+        ));
+    }
+
+    if filename_str.starts_with('/') || filename_str.split('/').any(|c| c == "..") {
+        return Err(format!(
+            "snapshot path {filename_str:?} must be a relative path with \
+             no leading \"/\" and no \"..\" component; a snapshot path \
+             looks like {EXAMPLE_SNAPSHOT_PATH:?}"
+        ));
+    }
+
+    Ok(())
 }
 
 fn expand_inner(
@@ -133,6 +207,24 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_expr = &args.output_expr;
     let body_stmts = &func.block.stmts;
 
+    // See `RA_COMPLETION_MARKER`: rust-analyzer re-expands this macro on
+    // every keystroke while the filename argument is being typed, with
+    // the marker embedded in `filename_str` at the cursor position. We
+    // skip silently -- no `compile_error!` -- rather than flooding the
+    // editor with an error on every keystroke; this can never occur in
+    // a real cargo build, so nothing is lost. Checked first, before any
+    // of the path guards below, so a marker-bearing path never reaches
+    // (and never fails) those checks.
+    if filename_str.contains(RA_COMPLETION_MARKER) {
+        return expand_ra_completion_stub().into();
+    }
+
+    if let Err(message) = validate_snapshot_path(&filename_str) {
+        return syn::Error::new_spanned(&args.filename, message)
+            .to_compile_error()
+            .into();
+    }
+
     // `std::env::var` here is not tracked by cargo the way `env!` is; the
     // `build.rs` rerun-if-env-changed directive is what makes toggling this
     // variable re-run the macro.
@@ -162,6 +254,15 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let file_tokens: proc_macro2::TokenStream = match std::fs::read_to_string(&snapshot_path) {
         Err(_) => {
+            // `validate_snapshot_path` only checks that the path has a
+            // parent directory component syntactically; it does not
+            // check that the directory exists on disk. If it does not,
+            // `std::fs::write` below returns an error, which we already
+            // discard, so this is already a silent no-op: no file gets
+            // created and expansion falls through to
+            // `expand_missing_file` below as it would for any other
+            // missing snapshot file.
+            //
             // We create a file so that our later use of `include_str!` will
             // succeed.
             let _ = std::fs::write(&snapshot_path, "");
@@ -235,5 +336,56 @@ mod tests {
         let wrapped: syn::File = parse_quote! { fn wrapper() { #expanded } };
         let out = prettyplease::unparse(&wrapped);
         expectorate::assert_contents("tests/output/test_expansion.rs", &out);
+    }
+
+    #[test]
+    fn test_expansion_ra_completion_stub() {
+        // Not an expectorate golden: this pins the invariants that
+        // matter (it parses, and it never mentions the snapshot path
+        // or `include_str!`) rather than the exact rendered text, so
+        // there is no fixture file for this test to write.
+        let expanded = expand_ra_completion_stub();
+        let wrapped: syn::File = parse_quote! { fn wrapper() { #expanded } };
+        let out = prettyplease::unparse(&wrapped);
+        assert!(!out.contains("include_str"), "{out}");
+        assert!(!out.contains("raCompletionMarker"), "{out}");
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_accepts_call_site_shape() {
+        assert!(validate_snapshot_path("tests/output/my_test.rs").is_ok());
+        assert!(validate_snapshot_path("tests/output/nested/dir/my_test.rs").is_ok());
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_rejects_non_rs_extension() {
+        let err = validate_snapshot_path("tests/output/my_test.txt").unwrap_err();
+        assert!(err.contains("must end in \".rs\""), "{err}");
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_rejects_empty_stem() {
+        // This is the shape that a mid-edit path like
+        // `tests/output/.rs` produces: a directory but no file name.
+        let err = validate_snapshot_path("tests/output/.rs").unwrap_err();
+        assert!(err.contains("no file name before"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_rejects_missing_parent() {
+        let err = validate_snapshot_path("my_test.rs").unwrap_err();
+        assert!(err.contains("no parent directory"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_rejects_absolute_path() {
+        let err = validate_snapshot_path("/tmp/output/my_test.rs").unwrap_err();
+        assert!(err.contains("must be a relative path"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_snapshot_path_rejects_parent_dir_component() {
+        let err = validate_snapshot_path("tests/../output/my_test.rs").unwrap_err();
+        assert!(err.contains("must be a relative path"), "{err}");
     }
 }
