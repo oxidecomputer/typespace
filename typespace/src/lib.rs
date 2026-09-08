@@ -1544,7 +1544,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // I don't love that the door is open to name collisions here,
                 // but this is what typify 1 does so we'll hold the line for
                 // now.
-                let fn_name_str = format!("{}_{}", context, rust_name);
+                //
+                // The context is the containing type's path, which for an
+                // enum's struct variant is the enum name followed by the
+                // variant name and so is CamelCase. Snake-casing the joined
+                // name gives the function a name `non_snake_case` accepts and
+                // folds any run of separators down to one underscore.
+                let fn_name_str = heck::AsSnakeCase(format!("{context}_{rust_name}")).to_string();
                 let fn_name_ident = format_ident!("{}", fn_name_str);
 
                 let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));

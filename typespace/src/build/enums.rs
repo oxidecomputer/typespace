@@ -411,7 +411,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 description,
                 details,
             } = variant;
-            let name = format_ident!("{}", rust_name);
+            let variant_ident = format_ident!("{}", rust_name);
             let mut variant_serde = serde_derives.attrs();
             variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
             let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
@@ -436,7 +436,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                             prop,
                             serde_derives,
                             false,
-                            &format!("{}{}", name, rust_name),
+                            &format!("{name}{rust_name}"),
                             out,
                         )
                     });
@@ -448,7 +448,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 #description
                 #variant_serde
                 #default_attr
-                #name #data
+                #variant_ident #data
             }
         });
 

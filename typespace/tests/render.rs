@@ -3486,6 +3486,67 @@ fn test_tuple_marker_extras() {
 // type that can implement it, plus the traits the assertions need.
 // `Display` and `FromStr` stay out because a newtype that has either in
 // its trait set panics in render.
+// A generated default function is named for its containing type path
+// and the property, snake-cased: the enum name, then the variant name,
+// then the property for a struct variant, and the struct name then the
+// property for a struct. Snake-casing the joined name is what keeps
+// `non_snake_case` quiet over a CamelCase type path.
+#[test]
+fn test_default_fn_names_are_snake_case() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        enum DensityDistribution {
+            NormalDist {
+                #[default = 1.5]
+                stdev: f64,
+            },
+            UniformDist {
+                #[default = 2.5]
+                max_value: f64,
+            },
+        }
+
+        struct ForceTransform {
+            #[default = 0.5]
+            alpha_min: f64,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    // The name carries the enum once, not twice, and the variant name
+    // and property arrive snake-cased.
+    let rendered = ts.to_codespace().into_stream().to_string();
+    for name in [
+        "density_distribution_normal_dist_stdev",
+        "density_distribution_uniform_dist_max_value",
+        "force_transform_alpha_min",
+    ] {
+        assert!(rendered.contains(name), "missing {name} in:\n{rendered}");
+    }
+
+    #[check_and_include(
+        "tests/output/test_default_fn_names_are_snake_case.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        let value =
+            serde_json::from_str::<import::DensityDistribution>(r#"{"NormalDist":{}}"#).unwrap();
+        assert_eq!(
+            value,
+            import::DensityDistribution::NormalDist { stdev: 1.5 }
+        );
+
+        let value = serde_json::from_str::<import::ForceTransform>("{}").unwrap();
+        assert_eq!(value, import::ForceTransform { alpha_min: 0.5 });
+    }
+}
+
 fn default_settings() -> Settings {
     Settings::minimal()
         .with_required_trait(TypespaceTrait::Debug)
