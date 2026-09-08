@@ -252,6 +252,21 @@ impl<Id> Enum<Id> {
                 .all(|variant| matches!(variant.details, VariantDetails::Item(_)))
     }
 
+    /// Whether every variant is a unit variant, asking nothing about a
+    /// tag type and nothing about the enum being nonempty.
+    ///
+    /// This is broader than [`Enum::all_tagged_unit_variants`], which
+    /// excludes an empty or untagged enum--exclusions that serve the
+    /// bespoke `Display` and `FromStr` impls. typify's
+    /// comparison-derive exception and its by-value parameter rule both
+    /// check only that every variant is a unit variant, which an empty
+    /// variant list satisfies vacuously, so both read this predicate.
+    pub(crate) fn every_variant_is_unit(&self) -> bool {
+        self.variants
+            .iter()
+            .all(|variant| matches!(variant.details, VariantDetails::Unit))
+    }
+
     pub(crate) fn check_field_defaults(
         &self,
         types: &BTreeMap<Id, Type<Id>>,
@@ -349,16 +364,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             (false, false) => EnumSpecialImpls::default(),
         };
 
-        // typify's comparison-derive exception checks only that every
-        // variant is a unit variant, which an empty variant list
-        // satisfies vacuously; it asks nothing about a tag type. That
-        // is broader than all_unit_variants, which excludes an empty
-        // or untagged enum--exclusions that serve the Display/FromStr
-        // impls above, not the derive list.
-        // TYPIFY COMPAT: read only by render_derives' exemption.
-        let every_variant_is_unit = variants
-            .iter()
-            .all(|variant| matches!(variant.details, VariantDetails::Unit));
+        // TYPIFY COMPAT: read by render_derives' exemption. The
+        // predicate is broader than all_unit_variants, which excludes
+        // an empty or untagged enum--exclusions that serve the
+        // Display/FromStr impls above, not the derive list.
+        let every_variant_is_unit = self.every_variant_is_unit();
 
         let serde_derives = SerdeDerives::new(&derived_traits);
         let mut serde = serde_derives.attrs();

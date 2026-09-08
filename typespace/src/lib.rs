@@ -450,14 +450,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Render the identifier of an inserted type as a function
     /// parameter type, before finalization.
     ///
-    /// Complex owned types are prefixed with `&`; simple types
-    /// (primitives and options) are unchanged.
+    /// Types the caller owns cheaply pass by value and the rest are
+    /// borrowed; see
+    /// [`Type::parameter_ident`](crate::view::Type::parameter_ident)
+    /// for the rule.
     ///
     /// # Panics
     ///
     /// Panics under the same conditions as [`TypespaceBuilder::ident`].
     pub fn parameter_ident(&self, id: &Id) -> TokenStream {
-        self.parameter(id, self.ident(id))
+        self.renderer().render_parameter_ident(id, None, None)
     }
 
     /// Like [`TypespaceBuilder::parameter_ident`], with named types
@@ -467,16 +469,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// Panics under the same conditions as [`TypespaceBuilder::ident`].
     pub fn parameter_ident_in(&self, id: &Id, scope: &str) -> TokenStream {
-        self.parameter(id, self.ident_in(id, scope))
-    }
-
-    fn parameter(&self, id: &Id, ident: TokenStream) -> TokenStream {
-        let typ = self.types.get(id).expect("invalid type id");
-        if typ.is_simple() {
-            ident
-        } else {
-            quote! { &#ident }
-        }
+        self.renderer()
+            .render_parameter_ident(id, Some(scope), None)
     }
 
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {
@@ -1017,6 +1011,90 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     pub(crate) fn render_raw_type(&self, id: &Id) -> TokenStream {
         self.render_ident_impl(id, None, true)
+    }
+
+    /// Render the identifier of a type as it reads in parameter
+    /// position, optionally scoped to a module and optionally carrying
+    /// an explicit lifetime on each reference it introduces.
+    ///
+    /// A caller passes what it owns cheaply and borrows the rest:
+    /// primitives, the unit type, and an enum whose variants are all
+    /// unit variants go by value, a `String` becomes a `&str`, and
+    /// every other owned type is prefixed with `&`. An `Option` and a
+    /// tuple keep their own syntax and apply the rule to what they
+    /// hold, so an `Option<String>` reads as `Option<&str>`.
+    pub(crate) fn render_parameter_ident(
+        &self,
+        id: &Id,
+        scope: Option<&str>,
+        lifetime: Option<&str>,
+    ) -> TokenStream {
+        let lifetime_tok = lifetime
+            .map(|name| syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site()));
+
+        match self.types.get(id).expect("invalid type id") {
+            // An all-unit-variant enum is value-like, so it passes by
+            // value rather than by reference.
+            Type::Enum(type_enum) if type_enum.every_variant_is_unit() => {
+                self.render_ident_with_scope(id, scope)
+            }
+
+            Type::Enum(_)
+            | Type::Struct(_)
+            | Type::UnitStruct(_)
+            | Type::TupleStruct(_)
+            | Type::NewtypeStruct(_)
+            | Type::TypeAlias(_)
+            | Type::Native(_)
+            | Type::Box(_)
+            | Type::Vec(_)
+            | Type::Map(..)
+            | Type::Set(_)
+            | Type::Array(..)
+            | Type::JsonValue => {
+                let ident = self.render_ident_with_scope(id, scope);
+                quote! { & #lifetime_tok #ident }
+            }
+
+            // The borrowed form of a String is a &str, not a &String.
+            Type::String => quote! { & #lifetime_tok str },
+
+            // An Option holds a borrow of its content. Nested Options
+            // collapse to one level, since the inner one says nothing
+            // the outer one has not already said.
+            Type::Option(inner_id) => {
+                let inner = self.render_parameter_ident(inner_id, scope, lifetime);
+                match self.types.get(inner_id).expect("invalid type id") {
+                    Type::Option(_) => inner,
+                    _ => {
+                        let option_type = match &self.settings.std {
+                            Std::FullyQualified => quote! { ::std::option::Option },
+                            Std::Unqualified => quote! { Option },
+                        };
+                        quote! { #option_type<#inner> }
+                    }
+                }
+            }
+
+            // A tuple borrows element by element.
+            Type::Tuple(inner_ids) => {
+                let inner = inner_ids
+                    .iter()
+                    .map(|inner_id| self.render_parameter_ident(inner_id, scope, lifetime))
+                    .collect::<Vec<_>>();
+                // A one-element tuple needs its trailing comma, which
+                // is what separates it from a parenthesized type.
+                if inner.len() == 1 {
+                    quote! { ( #( #inner, )* ) }
+                } else {
+                    quote! { ( #( #inner ),* ) }
+                }
+            }
+
+            Type::Unit | Type::Boolean | Type::Integer(_) | Type::Float(_) | Type::Never => {
+                self.render_ident_with_scope(id, scope)
+            }
+        }
     }
 
     /// Render `String` per the configured [`Std`] syntax.

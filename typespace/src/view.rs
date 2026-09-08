@@ -10,7 +10,6 @@
 //! and [`EnumVariant`] the finalized-view form of the same concept.
 
 use proc_macro2::TokenStream;
-use quote::quote;
 
 use crate::{TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait, build};
 
@@ -56,43 +55,33 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
     /// The Rust identifier suitable for use as a function parameter type.
     ///
-    /// Complex owned types (structs, enums, Vec, Map, etc.) are prefixed with
-    /// `&`; simple types (Option, primitives) are returned unchanged.
+    /// A caller passes what it owns cheaply and borrows the rest: a
+    /// primitive, the unit type, and an enum whose variants are all
+    /// unit variants go by value; a `String` becomes a `&str`; and
+    /// every other owned type (a struct, a newtype, a `Vec`, a `Map`,
+    /// a JSON value) is prefixed with `&`. An `Option` and a tuple
+    /// keep their own syntax and apply the rule to what they hold, so
+    /// an `Option<String>` reads as `Option<&str>`.
     pub fn parameter_ident(&self) -> TokenStream {
-        if self.is_simple() {
-            self.ident()
-        } else {
-            let ident = self.ident();
-            quote! { &#ident }
-        }
+        self.renderer().render_parameter_ident(self.id, None, None)
     }
 
     /// Like [`Type::parameter_ident`], with named types qualified by
     /// the module `scope`.
     pub fn parameter_ident_in(&self, scope: &str) -> TokenStream {
-        if self.is_simple() {
-            self.ident_in(scope)
-        } else {
-            let ident = self.ident_in(scope);
-            quote! { &#ident }
-        }
+        self.renderer()
+            .render_parameter_ident(self.id, Some(scope), None)
     }
 
-    /// The Rust identifier suitable for use as a function parameter type with
-    /// an explicit lifetime.
+    /// Like [`Type::parameter_ident`], with `lifetime` named on every
+    /// reference the parameter introduces.
     pub fn parameter_ident_with_lifetime(&self, lifetime: &str) -> TokenStream {
-        if self.is_simple() {
-            self.ident()
-        } else {
-            let lifetime_tok =
-                syn::Lifetime::new(&format!("'{lifetime}"), proc_macro2::Span::call_site());
-            let ident = self.ident();
-            quote! { &#lifetime_tok #ident }
-        }
+        self.renderer()
+            .render_parameter_ident(self.id, None, Some(lifetime))
     }
 
-    fn is_simple(&self) -> bool {
-        self.typ.is_simple()
+    fn renderer(&self) -> TypespaceRenderer<'_, Id> {
+        TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
     }
 
     /// The description (doc comment source) for this type, if any.

@@ -162,6 +162,182 @@ fn ident_produces_expected_tokens() {
     assert_eq!(bool_param.to_string(), quote! { bool }.to_string());
 }
 
+// Parameter position borrows what a caller cannot hand over cheaply
+// and passes the rest by value. A String becomes a &str rather than a
+// &String; an enum whose variants are all unit variants goes by value
+// while one carrying a payload is borrowed; and an Option and a tuple
+// keep their own syntax and apply the rule to what they hold.
+#[test]
+fn parameter_idents_borrow_by_rule() {
+    let mut builder =
+        TypespaceBuilder::new(Settings::minimal().with_std(typespace::settings::Std::Unqualified));
+
+    let str_id = "str".to_string();
+    builder.insert(str_id.clone(), Type::String).unwrap();
+
+    let u32_id = "u32".to_string();
+    builder
+        .insert(u32_id.clone(), Type::Integer("u32".to_string()))
+        .unwrap();
+
+    let bool_id = "bool".to_string();
+    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
+
+    let unit_enum_id = "UnitEnum".to_string();
+    builder
+        .insert(
+            unit_enum_id.clone(),
+            Enum::new()
+                .name("UnitEnum")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new("One", VariantDetails::Unit),
+                    EnumVariant::new("Two", VariantDetails::Unit),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let payload_enum_id = "PayloadEnum".to_string();
+    builder
+        .insert(
+            payload_enum_id.clone(),
+            Enum::new()
+                .name("PayloadEnum")
+                .tag_type(EnumTagType::External)
+                .variants(vec![
+                    EnumVariant::new("Bare", VariantDetails::Unit),
+                    EnumVariant::new("Wrapped", VariantDetails::Item(u32_id.clone())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let struct_id = "MyStruct".to_string();
+    builder
+        .insert(
+            struct_id.clone(),
+            Struct::new()
+                .name("MyStruct")
+                .properties(vec![StructProperty::new("name", str_id.clone())])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let vec_id = "vec".to_string();
+    builder
+        .insert(vec_id.clone(), Type::Vec(struct_id.clone()))
+        .unwrap();
+
+    let opt_u32_id = "opt_u32".to_string();
+    builder
+        .insert(opt_u32_id.clone(), Type::Option(u32_id.clone()))
+        .unwrap();
+
+    let opt_str_id = "opt_str".to_string();
+    builder
+        .insert(opt_str_id.clone(), Type::Option(str_id.clone()))
+        .unwrap();
+
+    let opt_struct_id = "opt_struct".to_string();
+    builder
+        .insert(opt_struct_id.clone(), Type::Option(struct_id.clone()))
+        .unwrap();
+
+    let tuple_id = "tuple".to_string();
+    builder
+        .insert(
+            tuple_id.clone(),
+            Type::Tuple(vec![u32_id.clone(), str_id.clone(), struct_id.clone()]),
+        )
+        .unwrap();
+
+    let cases = [
+        ("u32", quote! { u32 }),
+        ("bool", quote! { bool }),
+        ("str", quote! { &str }),
+        ("UnitEnum", quote! { UnitEnum }),
+        ("PayloadEnum", quote! { &PayloadEnum }),
+        ("MyStruct", quote! { &MyStruct }),
+        ("vec", quote! { &Vec<MyStruct> }),
+        ("opt_u32", quote! { Option<u32> }),
+        ("opt_str", quote! { Option<&str> }),
+        ("opt_struct", quote! { Option<&MyStruct> }),
+        ("tuple", quote! { (u32, &str, &MyStruct) }),
+    ];
+
+    // The builder answers the same question before finalization.
+    for (id, expected) in &cases {
+        let id = id.to_string();
+        assert_eq!(
+            builder.parameter_ident(&id).to_string(),
+            expected.to_string(),
+            "pre-finalize parameter_ident for {id}"
+        );
+    }
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    for (id, expected) in &cases {
+        let id = id.to_string();
+        assert_eq!(
+            ts.get_type(&id).parameter_ident().to_string(),
+            expected.to_string(),
+            "parameter_ident for {id}"
+        );
+    }
+
+    // A named type picks up the scope; the borrow sits outside it.
+    assert_eq!(
+        ts.get_type(&struct_id)
+            .parameter_ident_in("types")
+            .to_string(),
+        quote! { &types::MyStruct }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&opt_struct_id)
+            .parameter_ident_in("types")
+            .to_string(),
+        quote! { Option<&types::MyStruct> }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&unit_enum_id)
+            .parameter_ident_in("types")
+            .to_string(),
+        quote! { types::UnitEnum }.to_string()
+    );
+
+    // A lifetime names every reference the parameter introduces, and
+    // only the references: a by-value parameter gains nothing.
+    assert_eq!(
+        ts.get_type(&struct_id)
+            .parameter_ident_with_lifetime("a")
+            .to_string(),
+        quote! { &'a MyStruct }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&str_id)
+            .parameter_ident_with_lifetime("a")
+            .to_string(),
+        quote! { &'a str }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&opt_str_id)
+            .parameter_ident_with_lifetime("a")
+            .to_string(),
+        quote! { Option<&'a str> }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&unit_enum_id)
+            .parameter_ident_with_lifetime("a")
+            .to_string(),
+        quote! { UnitEnum }.to_string()
+    );
+}
+
 #[test]
 fn has_impl_false_for_plain_types() {
     let ts = make_typespace();
@@ -332,7 +508,7 @@ fn scoped_and_prefinalize_idents() {
     );
     assert_eq!(
         builder.parameter_ident(&str_id).to_string(),
-        quote! { String }.to_string()
+        quote! { &str }.to_string()
     );
 
     // The same queries after finalization, on the view.

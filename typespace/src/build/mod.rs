@@ -555,21 +555,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         )
     }
 
-    /// Whether the type is cheap enough to pass by value as a function
-    /// parameter (primitives and options); complex owned types take a
-    /// reference instead.
-    pub(crate) fn is_simple(&self) -> bool {
-        matches!(
-            self,
-            Type::Boolean
-                | Type::Integer(_)
-                | Type::Float(_)
-                | Type::Unit
-                | Type::String
-                | Type::Option(_)
-        )
-    }
-
     /// Re-run the shape checks that `build()` applies.
     ///
     /// The shapes' `build()` methods are the intended construction door,
