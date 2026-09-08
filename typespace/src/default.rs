@@ -820,28 +820,64 @@ where
                     !deny_unknown_fields,
                     "per type validation should have caught deny_unknown_fields + flatten"
                 );
+
                 // We're flattening; take the full value and see if the
                 // property's type can make something of it.
+
+                let prop_keys = properties
+                    .iter()
+                    .filter_map(
+                        |StructProperty {
+                             rust_name,
+                             json_name,
+                             ..
+                         }| match json_name {
+                            StructPropertySerde::None => Some(rust_name),
+                            StructPropertySerde::Rename(rename) => Some(rename),
+                            StructPropertySerde::Flatten => None,
+                        },
+                    )
+                    .collect::<BTreeSet<_>>();
+                let new_value = serde_json::Value::Object(
+                    map.clone()
+                        .into_iter()
+                        .filter(|(key, _)| !prop_keys.contains(key))
+                        .collect(),
+                );
+
                 let prop_id = &prop_info.type_id;
 
                 if prop_info.state == StructPropertyState::Optional {
-                    if let Ok(Some(prop_default)) =
-                        self.default_impl(expansion_set, prop_id.clone(), value)
+                    // Note that we ignore errors for Optional flattened fields
+                    // intentionally.
+                    let prop_default = if let Some(prop_default) = self
+                        .default_impl(expansion_set, prop_id.clone(), &new_value)
+                        .ok()
+                        .flatten()
                     {
-                        let prop_ident = format_ident!("{}", prop_info.rust_name);
                         let some = self.render_option_variant2("Some");
-                        let xxx = quote! {
-                            #prop_ident: #some(#prop_default)
-                        };
-                        rendered_properties.push(xxx);
+                        quote! {
+                            #some(#prop_default)
+                        }
+                    } else {
+                        // TODO 9/8/2026
+                        // qualify Default
+                        quote! { Default::default }
+                    };
+                    if self.mode == Mode::Generate {
+                        let prop_ident = format_ident!("{}", prop_info.rust_name);
+                        rendered_properties.push(quote! {
+                            #prop_ident: #prop_default
+                        });
                     }
                 } else {
                     if let Some(prop_default) =
-                        self.default_impl(expansion_set, prop_id.clone(), value)?
+                        self.default_impl(expansion_set, prop_id.clone(), &new_value)?
                     {
                         let prop_ident = format_ident!("{}", prop_info.rust_name);
-                        let xxx = quote! { #prop_ident: #prop_default };
-                        rendered_properties.push(xxx);
+                        rendered_properties.push(quote! {
+                            #prop_ident: #prop_default
+                        });
                     }
                 }
             }
