@@ -211,7 +211,9 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   property's wire name.
 /// - Field `#[flatten]`: `StructPropertySerde::Flatten`, splicing the
 ///   property's own fields into this one's wire form.
-/// - Type-level `#[default = V]`: the type's `.default(V)`.
+/// - Type-level `#[default = V]`: the type's `.default(V)`. Not valid
+///   on a unit struct, which has one possible value and carries no
+///   such builder method.
 /// - Struct (with named fields) or enum `#[deny_unknown_fields]`:
 ///   `.deny_unknown_fields()`, rejecting an unrecognized field at
 ///   deserialization.

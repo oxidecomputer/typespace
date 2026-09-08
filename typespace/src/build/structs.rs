@@ -650,12 +650,6 @@ impl UnitStruct {
         self
     }
 
-    /// Set the default value.
-    pub fn default(mut self, default: impl Into<JsonValue>) -> Self {
-        self.common.default = Some(default.into());
-        self
-    }
-
     /// Add opaque derive paths applied to this type alone.
     ///
     /// These are additional to the crate-wide paths from
@@ -708,11 +702,6 @@ impl UnitStruct {
     /// The description (doc comment source), if any.
     pub fn get_description(&self) -> Option<&str> {
         self.common.description()
-    }
-
-    /// The default value, if any.
-    pub fn get_default(&self) -> Option<&serde_json::Value> {
-        self.common.default()
     }
 
     /// The opaque derive paths applied to this type alone, additional

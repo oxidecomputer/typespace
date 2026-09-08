@@ -4053,7 +4053,10 @@ fn test_default_whole_type_value_with_required_property() {
 /// A default value that fits its type survives `finalize`.
 ///
 /// One type per shape the walk handles: a newtype struct over an alias,
-/// a native type, a JSON value, a float, and a unit struct.
+/// a native type, a JSON value, and a float. A unit struct's value
+/// expression is covered separately by `test_unit_struct` in
+/// `default.rs`, since a unit struct has no builder method to carry a
+/// default value.
 #[test]
 fn test_default_value_shapes_accepted() {
     let builder = typespace_builder!(default_settings(), {
@@ -4074,7 +4077,6 @@ fn test_default_value_shapes_accepted() {
         struct Weight(f64);
 
         #[json = "marker"]
-        #[default = "marker"]
         struct Marker;
     });
     let ts = builder.finalize(no_cycles).unwrap();
@@ -4132,20 +4134,6 @@ fn test_default_value_newtype_rejects_inner_mismatch() {
 
         #[default = "3"]
         struct Counted(Count);
-    });
-    let Err(err) = builder.finalize(no_cycles) else {
-        panic!("expected finalize to reject the default value");
-    };
-    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
-}
-
-/// A unit struct accepts only the value it serializes as.
-#[test]
-fn test_default_value_unit_struct_rejects_other_value() {
-    let builder = typespace_builder!(default_settings(), {
-        #[json = "marker"]
-        #[default = "other"]
-        struct Marker;
     });
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject the default value");

@@ -349,7 +349,10 @@ struct AttrEntry {
 /// [`claim_attrs`] draws between an unknown attribute (a typo) and one
 /// that exists but is used in the wrong place.
 const KNOWN_ATTRS: &[(&str, &str)] = &[
-    ("default", "a struct, an enum, or a field"),
+    (
+        "default",
+        "a struct with fields, a tuple struct, an enum, or a field",
+    ),
     ("deny_unknown_fields", "a struct or an enum"),
     ("derive", "a struct or an enum"),
     ("attr", "a struct, an enum, or a type alias"),
@@ -1027,7 +1030,10 @@ fn lower_struct_properties(
 fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
     let allowed: &'static [&'static str] = match &item.body {
-        StructBody::Unit => &["default", "derive", "attr", "json"],
+        // `default` is not valid here: a unit struct has one possible
+        // value, so a default carries no information, and
+        // `typespace::build::UnitStruct` has no such builder method.
+        StructBody::Unit => &["derive", "attr", "json"],
         // `deny_unknown_fields` is only valid on the fields form:
         // `typespace::build::TupleStruct`/`NewtypeStruct`/`UnitStruct`
         // have no such builder method.
@@ -1153,7 +1159,6 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                     #name.to_string(),
                     ::typespace::build::UnitStruct::new(#repr_tokens)
                         .name(#name)
-                        #default_tokens
                         #extras_tokens
                         .build::<String>()
                         .unwrap(),

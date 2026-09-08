@@ -1,0 +1,5 @@
+error: `#[default]` is only valid on a struct with fields, a tuple struct, an enum, or a field
+ --> tests/ui/unit_struct_default.rs:7:11
+  |
+7 |         #[default = "marker"]
+  |           ^^^^^^^
