@@ -885,7 +885,8 @@ impl<Id> TupleStruct<Id> {
 
     /// Validate the tuple struct and produce it as a [`Type`] value.
     ///
-    /// Fails if the name is missing or not a valid identifier.
+    /// Fails if the name is missing or not a valid identifier, or if no
+    /// fields were added (see [`Error::FieldlessTupleStruct`]).
     pub fn build(self) -> Result<Type<Id>, Error<Id>>
     where
         Id: std::fmt::Debug + std::fmt::Display,
@@ -900,7 +901,18 @@ impl<Id> TupleStruct<Id> {
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        self.common.validate_name("tuple struct")
+        self.common.validate_name("tuple struct")?;
+        if self.fields.is_empty() {
+            let alternative = match self.rest {
+                Some(_) => "`NewtypeStruct` over the sequence type",
+                None => "`UnitStruct`",
+            };
+            return Err(Error::FieldlessTupleStruct {
+                name: self.common.built_name().to_string(),
+                alternative,
+            });
+        }
+        Ok(())
     }
 
     /// The tuple struct's name, if one has been set.

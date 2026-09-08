@@ -60,6 +60,32 @@ where
         name: String,
     },
 
+    /// A tuple struct was built with no fixed fields.
+    ///
+    /// With no rest, a `TupleStruct` with zero fields is a second way to
+    /// write `UnitStruct`: both hold nothing and serialize the same
+    /// way. With a rest, it is a second way to write `NewtypeStruct`
+    /// over the rest type: flattening the rest through
+    /// `FlattenedSequenceSerializer` behind an empty prefix produces the
+    /// same bytes as serializing the rest type directly. Requiring at
+    /// least one fixed field also keeps the default-value walk's
+    /// recursion into the rest narrowing: with a field present, the
+    /// tail handed to the next step is always a strict suffix of the
+    /// input array, so it cannot recur forever on a self-referential or
+    /// mutually referential rest.
+    #[error(
+        "cannot build the tuple struct `{name}`: it has no fixed fields, \
+         which makes it redundant with {alternative}"
+    )]
+    FieldlessTupleStruct {
+        /// The name of the tuple struct being built.
+        name: String,
+        /// What a fieldless tuple struct is redundant with: `UnitStruct` when
+        /// there is no rest, or `NewtypeStruct` over the sequence type
+        /// when there is.
+        alternative: &'static str,
+    },
+
     /// Two properties or two variants of one type share a name.
     ///
     /// Names must be unique on both axes: the Rust name (the identifier

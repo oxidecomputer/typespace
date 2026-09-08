@@ -1324,6 +1324,73 @@ fn test_insert_unbuilt_shape() {
     ));
 }
 
+// A tuple struct with no fixed fields is a second way to write a type
+// that already exists: `UnitStruct` if there is no rest, `NewtypeStruct`
+// over the sequence type if there is. `build()` rejects both, naming the
+// alternative.
+#[test]
+fn test_fieldless_tuple_struct() {
+    let err = TupleStruct::<String>::new().name("T").build().unwrap_err();
+    assert!(matches!(
+        err,
+        Error::FieldlessTupleStruct { ref name, alternative }
+            if name == "T" && alternative == "`UnitStruct`"
+    ));
+
+    let err = TupleStruct::new()
+        .name("T")
+        .rest("seq".to_string())
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::FieldlessTupleStruct { ref name, alternative }
+            if name == "T" && alternative == "`NewtypeStruct` over the sequence type"
+    ));
+}
+
+// Before `TupleStruct::validate` rejected zero fields, a fieldless tuple
+// struct whose rest referred back to itself (directly, or mutually
+// through a pair) could be inserted into a `TypespaceBuilder` and would
+// overflow the stack at `finalize()`: `default_impl_tuple_struct` walks
+// the rest as the whole input array when there are no fixed fields to
+// split off, so the recursion never narrows, and unlike the other
+// self-referential kinds (newtype struct, type alias, Option, Box) it
+// is not covered by the expansion guard.
+//
+// `build()` rejects a fieldless tuple struct before it can be
+// inserted at all, regardless of what its rest resolves to, so this
+// path can no longer be constructed through the builder API well
+// enough to reach `finalize()`, let alone overflow.
+#[test]
+fn test_fieldless_tuple_struct_self_reference_would_have_overflowed() {
+    // A tuple struct whose rest is itself.
+    let err = TupleStruct::new()
+        .name("T1")
+        .rest("t1".to_string())
+        .build()
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::FieldlessTupleStruct { ref name, alternative }
+            if name == "T1" && alternative == "`NewtypeStruct` over the sequence type"
+    ));
+
+    // A mutual pair: T1's rest is T2, T2's rest is T1.
+    let err = TupleStruct::new()
+        .name("T1")
+        .rest("t2".to_string())
+        .build()
+        .unwrap_err();
+    assert!(matches!(err, Error::FieldlessTupleStruct { ref name, .. } if name == "T1"));
+    let err = TupleStruct::new()
+        .name("T2")
+        .rest("t1".to_string())
+        .build()
+        .unwrap_err();
+    assert!(matches!(err, Error::FieldlessTupleStruct { ref name, .. } if name == "T2"));
+}
+
 // A configured map type carries its own key-trait demands: a hash map
 // requires Hash and Eq of its keys--not Ord--and conflicts name exactly
 // the configured traits.
