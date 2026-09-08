@@ -15,15 +15,15 @@ impl ::std::convert::From<::std::string::String> for Literal {
         Self(value)
     }
 }
+impl ::std::fmt::Display for Literal {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl ::std::str::FromStr for Literal {
     type Err = ::std::convert::Infallible;
     fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
         Ok(Self(value.to_string()))
-    }
-}
-impl ::std::fmt::Display for Literal {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 pub struct Reference(pub ::std::string::String);
@@ -43,15 +43,15 @@ impl ::std::convert::From<::std::string::String> for Reference {
         Self(value)
     }
 }
+impl ::std::fmt::Display for Reference {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl ::std::str::FromStr for Reference {
     type Err = ::std::convert::Infallible;
     fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
         Ok(Self(value.to_string()))
-    }
-}
-impl ::std::fmt::Display for Reference {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 pub enum ReferenceOrLiteral {

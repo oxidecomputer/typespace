@@ -23,6 +23,11 @@ impl ::std::convert::From<ConstrainedString> for ::std::string::String {
         value.0
     }
 }
+impl ::std::fmt::Display for ConstrainedString {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl ::std::str::FromStr for ConstrainedString {
     type Err = self::error::ConversionError;
     fn from_str(
@@ -78,11 +83,6 @@ impl<'de> ::serde::Deserialize<'de> for ConstrainedString {
             .map_err(|e: self::error::ConversionError| {
                 <D::Error as ::serde::de::Error>::custom(e.to_string())
             })
-    }
-}
-impl ::std::fmt::Display for ConstrainedString {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 /// Error types.

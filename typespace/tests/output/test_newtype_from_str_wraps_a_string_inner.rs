@@ -16,14 +16,14 @@ impl ::std::convert::From<::std::string::String> for Wrapper {
         Self(value)
     }
 }
+impl ::std::fmt::Display for Wrapper {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl ::std::str::FromStr for Wrapper {
     type Err = ::std::convert::Infallible;
     fn from_str(value: &str) -> ::std::result::Result<Self, Self::Err> {
         Ok(Self(value.to_string()))
-    }
-}
-impl ::std::fmt::Display for Wrapper {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
     }
 }

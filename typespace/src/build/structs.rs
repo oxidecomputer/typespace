@@ -307,6 +307,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 },
             );
 
+            // The builder mod is a separate application of the canonical
+            // item order (see build::mod) under its own item key: decl,
+            // Default, setters, TryFrom<Builder> for Type, From<Type>
+            // for Builder.
             let builder = quote! {
                 #[derive(Clone, Debug)]
                 pub struct #name_ident {
@@ -465,6 +469,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             serde.push(quote! { deny_unknown_fields });
         }
 
+        // Canonical item order: see build::mod.
         quote! {
             #description
             #( #attrs )*
@@ -795,10 +800,11 @@ impl UnitStruct {
         let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
+        // Canonical item order: see build::mod.
         quote! {
             #description
-            #derive_attr
             #( #attrs )*
+            #derive_attr
             pub struct #name_ident;
 
             #serde_serialize
@@ -1102,6 +1108,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
+        // Canonical item order: see build::mod.
         quote! {
             #description
             #( #attrs )*
@@ -1400,6 +1407,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let mut serde_attr = SerdeDerives::new(&traits).attrs();
         serde_attr.push(quote! { transparent });
 
+        // Canonical item order: see build::mod.
         quote! {
             #description
             #( #attrs )*
@@ -1427,6 +1435,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
     }
 }
 
+// Canonical item order: see build::mod.
 fn render_constraint_impl<Id>(
     typespace: &TypespaceRenderer<'_, Id>,
     out: &mut Outputspace,
@@ -1496,8 +1505,8 @@ where
                     }
                 }
 
-                #from_str_impl
                 #display_impl
+                #from_str_impl
             }
         }
 
@@ -1610,8 +1619,8 @@ where
                     }
 
 
-                    #from_str_impl
                     #display_impl
+                    #from_str_impl
                     #deserialize_impl
                     #json_schema_impl
 
@@ -1713,6 +1722,7 @@ where
                 });
 
             quote! {
+                #display_impl
                 #from_str_impl
 
                 impl ::std::convert::TryFrom<&str> for #name_ident {
@@ -1738,7 +1748,6 @@ where
                 }
 
                 #deserialize_impl
-                #display_impl
             }
         }
         NewtypeConstraints::Array { .. } => todo!(),

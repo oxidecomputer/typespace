@@ -271,6 +271,18 @@ impl<Id> Enum<Id> {
     }
 }
 
+/// The bespoke impls an all-unit-variant or all-untagged-item-variant
+/// enum carries: `Display`, `FromStr`, and the `TryFrom<&str>`/
+/// `TryFrom<String>` impls `FromStr` implies. Kept apart so the caller
+/// can place each piece per the canonical item order (see build::mod)
+/// instead of emitting them as one block.
+#[derive(Default)]
+struct EnumSpecialImpls {
+    display: TokenStream,
+    from_str: TokenStream,
+    try_from: TokenStream,
+}
+
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     pub(crate) fn children(&self) -> Vec<Id> {
         self.variants
@@ -334,7 +346,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 &name_ident,
                 &mut derived_traits,
             ),
-            (false, false) => TokenStream::new(),
+            (false, false) => EnumSpecialImpls::default(),
         };
 
         // typify's comparison-derive exception checks only that every
@@ -450,6 +462,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit);
         let attrs = typespace.render_attrs(extra_attrs);
 
+        let EnumSpecialImpls {
+            display: display_impl,
+            from_str: from_str_impl,
+            try_from: try_from_impl,
+        } = special_impls;
+
+        // Canonical item order: see build::mod.
         quote! {
             // TODO I want to have the original Id available
             #description
@@ -460,23 +479,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 #( #rendered_variants, )*
             }
 
-            #default_impl
+            #display_impl
+            #from_str_impl
+            #try_from_impl
 
-            #special_impls
             #( #variant_from )*
+
+            #default_impl
         }
     }
 
-    /// Render an all-unit-variant enum's `Display` and `FromStr`.
+    /// Render an all-unit-variant enum's `Display` and `FromStr`, plus
+    /// the `TryFrom<&str>`/`TryFrom<String>` impls `FromStr` implies.
     ///
-    /// These traits **must** be manually implemented.
+    /// These traits **must** be manually implemented. Canonical item
+    /// order: see build::mod; the caller places the returned pieces.
     fn render_tagged_unit_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
         name_ident: &Ident,
         derived_traits: &mut TypespaceTraitSet,
-    ) -> TokenStream {
+    ) -> EnumSpecialImpls {
         // Both impls map the whole enum to and from a bare string, so
         // every variant has to be payload-free for them to be writable
         // at all.
@@ -492,26 +516,29 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .map(|variant| (format_ident!("{}", variant.rust_name), variant.json_name()))
             .unzip();
 
-        let display_impl = derived_traits.remove(TypespaceTrait::Display).then(|| {
-            // Display each variant as its serialized name.
-            quote! {
-                impl ::std::fmt::Display for #name_ident {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
-                        -> ::std::fmt::Result
-                    {
-                        match *self {
-                            #( Self::#variant_idents => f.write_str(#variant_names), )*
+        let display = derived_traits
+            .remove(TypespaceTrait::Display)
+            .then(|| {
+                // Display each variant as its serialized name.
+                quote! {
+                    impl ::std::fmt::Display for #name_ident {
+                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                            -> ::std::fmt::Result
+                        {
+                            match *self {
+                                #( Self::#variant_idents => f.write_str(#variant_names), )*
+                            }
                         }
                     }
                 }
-            }
-        });
+            })
+            .unwrap_or_default();
 
-        let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
+        let (from_str, try_from) = if derived_traits.remove(TypespaceTrait::FromStr) {
             // Parse each variant from its serialized name.
             typespace.add_error_mod(out);
             let string_type = typespace.render_std_string();
-            quote! {
+            let from_str = quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;
 
@@ -524,6 +551,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         }
                     }
                 }
+            };
+            let try_from = quote! {
                 impl ::std::convert::TryFrom<&str> for #name_ident {
                     type Error = self::error::ConversionError;
 
@@ -542,31 +571,41 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         value.parse()
                     }
                 }
-            }
-        });
+            };
+            (from_str, try_from)
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
 
-        quote! {
-            #display_impl
-            #from_str_impl
+        EnumSpecialImpls {
+            display,
+            from_str,
+            try_from,
         }
     }
 
+    /// Render an all-untagged-item-variant enum's `Display` and
+    /// `FromStr`, plus the `TryFrom<&str>`/`TryFrom<String>` impls
+    /// `FromStr` implies.
+    ///
+    /// Canonical item order: see build::mod; the caller places the
+    /// returned pieces.
     fn render_untagged_item_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
         name_ident: &Ident,
         derived_traits: &mut TypespaceTraitSet,
-    ) -> TokenStream {
+    ) -> EnumSpecialImpls {
         let variant_idents = self
             .variants
             .iter()
             .map(|variant| format_ident!("{}", variant.rust_name))
             .collect::<Vec<_>>();
 
-        let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
+        let (from_str, try_from) = if derived_traits.remove(TypespaceTrait::FromStr) {
             typespace.add_error_mod(out);
-            quote! {
+            let from_str = quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;
 
@@ -584,6 +623,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         }
                     }
                 }
+            };
+            let try_from = quote! {
                 impl ::std::convert::TryFrom<&str> for #name_ident {
                     type Error = self::error::ConversionError;
 
@@ -602,23 +643,30 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         value.parse()
                     }
                 }
-            }
-        });
-        let display_impl = derived_traits.remove(TypespaceTrait::Display).then(|| {
-            quote! {
-                impl ::std::fmt::Display for #name_ident {
-                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                        match self {
-                            #(Self::#variant_idents(x) => x.fmt(f),)*
+            };
+            (from_str, try_from)
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
+        let display = derived_traits
+            .remove(TypespaceTrait::Display)
+            .then(|| {
+                quote! {
+                    impl ::std::fmt::Display for #name_ident {
+                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                            match self {
+                                #(Self::#variant_idents(x) => x.fmt(f),)*
+                            }
                         }
                     }
                 }
-            }
-        });
+            })
+            .unwrap_or_default();
 
-        quote! {
-            #display_impl
-            #from_str_impl
+        EnumSpecialImpls {
+            display,
+            from_str,
+            try_from,
         }
     }
 
