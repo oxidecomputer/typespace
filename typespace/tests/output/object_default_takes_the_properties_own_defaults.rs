@@ -35,8 +35,8 @@ pub mod defaults {
     }
     pub(super) fn holder_separator() -> super::SeparatorConfig {
         super::SeparatorConfig {
-            line_color: "#B2000000".to_string(),
             line_thickness: 1_u32,
+            line_color: "#B2000000".to_string(),
         }
     }
     pub(super) fn separator_config_line_color() -> ::std::string::String {

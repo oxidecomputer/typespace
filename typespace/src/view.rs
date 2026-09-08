@@ -12,7 +12,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::{build, TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait};
+use crate::{TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait, build};
 
 /// A view of a type in a finalized [`Typespace`].
 pub struct Type<'a, Id> {

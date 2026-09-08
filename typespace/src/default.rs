@@ -669,6 +669,7 @@ where
         &self,
         expansion_set: &mut Vec<(Id, serde_json::Value)>,
         properties: &[StructProperty<Id>],
+        deny_unknown_fields: bool,
         value: &serde_json::Value,
         id: Id,
     ) -> Result<Vec<TokenStream>, Error<Id>> {
@@ -678,135 +679,73 @@ where
             reason: "expected JSON object".to_string(),
         })?;
 
-        // Examine local (non-flattened) properties first, then descend into
-        // flattened properties with the value. If deny_unknown_fields is set,
-        // things may be weird.
-
-        let (local_properties, flattened_properties): (Vec<_>, Vec<_>) = properties
-            .iter()
-            .partition(|prop| !matches!(prop.json_name, StructPropertySerde::Flatten));
-
-        let local_properties = local_properties
-            .into_iter()
-            .map(|prop| {
-                let name = match &prop.json_name {
-                    StructPropertySerde::None => prop.rust_name.as_str(),
-                    StructPropertySerde::Rename(rename) => rename.as_str(),
-                    StructPropertySerde::Flatten => unreachable!(),
-                };
-                (name, prop)
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        let keys = local_properties
-            .keys()
-            .map(|k| *k)
-            .chain(map.keys().map(|k| k.as_str()))
-            .collect::<BTreeSet<_>>();
-
-        let mut extra_keys = Vec::new();
         let mut rendered_properties = Vec::new();
+        let mut fields = BTreeSet::new();
 
-        for key in keys {
-            let prop_info = local_properties.get(key);
-            let prop_value = map.get(key);
+        for prop_info in properties {
+            let named = match &prop_info.json_name {
+                StructPropertySerde::None => Some(&prop_info.rust_name),
+                StructPropertySerde::Rename(rename) => Some(rename),
+                StructPropertySerde::Flatten => None,
+            };
 
-            match (prop_info, prop_value) {
-                (None, None) => unreachable!(),
-                (None, Some(_)) => extra_keys.push(key),
-                (Some(prop_info), None) => {
-                    match &prop_info.state {
-                        // A required property with a missing value is an
-                        // error.
-                        StructPropertyState::Required => {
-                            return Err(Error::InvalidDefault {
-                                value: value.clone(),
-                                id: id.clone(),
-                                reason: format!("property {} is required", prop_info.rust_name),
+            if let Some(prop_name) = named {
+                fields.insert(prop_name);
+                let prop_value = map.get(prop_name);
+                match (&prop_info.state, prop_value) {
+                    // Required property; no value.
+                    (StructPropertyState::Required, None) => {
+                        return Err(Error::InvalidDefault {
+                            value: value.clone(),
+                            id: id.clone(),
+                            reason: format!("property {} is required", prop_info.rust_name),
+                        });
+                    }
+
+                    // Optional or default; no value.
+                    //
+                    // Both produce Default::default(). For Optional, it means
+                    // that the field is absent (this applies for all
+                    // optional-nullable settings).
+                    (StructPropertyState::Optional, None)
+                    | (StructPropertyState::Default, None) => {
+                        if self.mode == Mode::Generate {
+                            // TODO 9/4/2026
+                            // Qualify default Default
+                            let prop_ident = format_ident!("{}", prop_info.rust_name);
+                            rendered_properties.push(quote! {
+                                #prop_ident: Default::default()
                             });
                         }
+                    }
 
-                        // Both an optional and default value rely on
-                        // Default::default(). For the latter, it's explicit
-                        // (and trait resolution will ensure that it exists).
-                        // For the former, it means "absent" regardless of
-                        // whether the field is optional or optional and
-                        // nullable (and regardless of how that combination is
-                        // modeled).
-                        StructPropertyState::Optional | StructPropertyState::Default => {
-                            if self.mode == Mode::Generate {
-                                // TODO 9/4/2026
-                                // Qualify default
-                                let prop_ident = format_ident!("{}", prop_info.rust_name);
-                                rendered_properties.push(quote! {
-                                    #prop_ident: Default::default()
-                                });
-                            }
-                        }
-
-                        // If there's a default value, we use that value. Note this
-                        // is the only place in this recursive descent where
-                        // we're **expanding** the input. This leaves open the
-                        // possibility of an infinitely recursive pattern for
-                        // example with a type like:
-                        //
-                        // struct A {
-                        //     #[default = {}]
-                        //     a: Optional<A>,
-                        // }
-                        //
-                        // Note that that's a useless, but totally fine
-                        // structure; the issue is with its default which
-                        // expands without bound.
-                        //
-                        // We could avoid the recursion here by using the
-                        // function we generate for serde (here,
-                        // `default::a_a`), but that would move the infinite
-                        // recursion to runtime which we'd rather not do.
-                        //
-                        // To detect the recursion, we save both the Id *and*
-                        // JSON value--both are required. The Id would be
-                        // insufficient in a case like this:
-                        //
-                        // struct C {
-                        //     #[default = { x: 1, c: { x: 2, c: null } }]
-                        //     c: OptionalNullable<C>,
-                        //     x: u32,
-                        // }
-                        //
-                        // struct D {
-                        //     #[default = { x: 100 }]
-                        //     c: OptionalNullable<C>,
-                        // }
-                        //
-                        // struct E {
-                        //     #[default = {}]
-                        //     d: D,
-                        // }
-                        StructPropertyState::DefaultValue(prop_default_value) => {
-                            let try_rendered_prop_value = self.expansion_guard_default_impl(
-                                expansion_set,
-                                prop_info.type_id.clone(),
-                                &prop_default_value.0,
-                            );
-                            if let Some(rendered_prop_value) = try_rendered_prop_value? {
-                                let prop_ident = format_ident!("{}", prop_info.rust_name);
-                                rendered_properties.push(quote! {
-                                    #prop_ident: #rendered_prop_value
-                                })
-                            }
+                    // Default with value; no value.
+                    //
+                    // Note that this is the only place in our recursive
+                    // descent where we're *expanding* the input. This is
+                    // particularly where we need to use the expansion guard.
+                    (StructPropertyState::DefaultValue(prop_default_value), None) => {
+                        let try_rendered_prop_value = self.expansion_guard_default_impl(
+                            expansion_set,
+                            prop_info.type_id.clone(),
+                            &prop_default_value.0,
+                        );
+                        if let Some(rendered_prop_value) = try_rendered_prop_value? {
+                            let prop_ident = format_ident!("{}", prop_info.rust_name);
+                            rendered_properties.push(quote! {
+                                #prop_ident: #rendered_prop_value
+                            })
                         }
                     }
-                }
-                (Some(prop_info), Some(prop_value)) => {
-                    let prop_id = &prop_info.type_id;
 
-                    let prop_ty = self.types.get(prop_id).unwrap();
-                    let is_option = matches!(prop_ty, Type::Option(_));
+                    // Optional field; value present.
+                    (StructPropertyState::Optional, Some(prop_value)) => {
+                        let prop_id = &prop_info.type_id;
 
-                    let prop_default_value = match (&prop_info.state, is_option) {
-                        // Optional field with an Option type.
-                        (StructPropertyState::Optional, true) => {
+                        let prop_ty = self.types.get(prop_id).unwrap();
+                        let is_option = matches!(prop_ty, Type::Option(_));
+
+                        let prop_default_value = if is_option {
                             match &self.settings.optional_nullable {
                                 // A simple Option<T> is sufficient.
                                 OptionalNullable::ConflateAsAbsent
@@ -830,39 +769,100 @@ where
                                         type_name,
                                     )?,
                             }
+                        } else {
+                            self.default_impl(expansion_set, prop_id.clone(), prop_value)?
+                                .map(|prop_value| {
+                                    let some = self.render_option_variant2("Some");
+                                    quote! { #some(#prop_value) }
+                                })
+                        };
+
+                        let prop_default = prop_default_value.map(|value| {
+                            let prop_ident = format_ident!("{}", prop_info.rust_name);
+                            quote! { #prop_ident: #value}
+                        });
+
+                        if self.mode == Mode::Generate {
+                            rendered_properties.push(
+                                prop_default
+                                    .expect("a value should be generated with Mode::Generate"),
+                            );
                         }
+                    }
 
-                        // Optional field with a non-Option type.
-                        (StructPropertyState::Optional, false) => self
-                            .default_impl(expansion_set, prop_id.clone(), prop_value)?
-                            .map(|prop_value| {
-                                let some = self.render_option_variant2("Some");
-                                quote! { #some(#prop_value) }
-                            }),
+                    // All other fields; value present.
+                    (
+                        StructPropertyState::Required
+                        | StructPropertyState::Default
+                        | StructPropertyState::DefaultValue(_),
+                        Some(prop_value),
+                    ) => {
+                        let prop_id = &prop_info.type_id;
 
-                        // Non-optional field, and we don't care about the
-                        // type.
-                        _ => self.default_impl(expansion_set, prop_id.clone(), prop_value)?,
-                    };
+                        let prop_default_value =
+                            self.default_impl(expansion_set, prop_id.clone(), prop_value)?;
 
-                    let prop_default = prop_default_value.map(|value| {
+                        let prop_default = prop_default_value.map(|value| {
+                            let prop_ident = format_ident!("{}", prop_info.rust_name);
+                            quote! { #prop_ident: #value}
+                        });
+
+                        if self.mode == Mode::Generate {
+                            rendered_properties.push(
+                                prop_default
+                                    .expect("a value should be generated with Mode::Generate"),
+                            );
+                        }
+                    }
+                }
+            } else {
+                assert!(
+                    !deny_unknown_fields,
+                    "per type validation should have caught deny_unknown_fields + flatten"
+                );
+                // We're flattening; take the full value and see if the
+                // property's type can make something of it.
+                let prop_id = &prop_info.type_id;
+
+                if prop_info.state == StructPropertyState::Optional {
+                    if let Ok(Some(prop_default)) =
+                        self.default_impl(expansion_set, prop_id.clone(), value)
+                    {
                         let prop_ident = format_ident!("{}", prop_info.rust_name);
-                        quote! { #prop_ident: #value}
-                    });
-
-                    if self.mode == Mode::Generate {
-                        rendered_properties.push(
-                            prop_default.expect("a value should be generated with Mode::Generate"),
-                        );
+                        let some = self.render_option_variant2("Some");
+                        let xxx = quote! {
+                            #prop_ident: #some(#prop_default)
+                        };
+                        rendered_properties.push(xxx);
+                    }
+                } else {
+                    if let Some(prop_default) =
+                        self.default_impl(expansion_set, prop_id.clone(), value)?
+                    {
+                        let prop_ident = format_ident!("{}", prop_info.rust_name);
+                        let xxx = quote! { #prop_ident: #prop_default };
+                        rendered_properties.push(xxx);
                     }
                 }
             }
         }
 
-        // TODO 9/5/2026
-        // Obviously we'll need to fix these....
-        assert!(extra_keys.is_empty());
-        assert!(flattened_properties.is_empty());
+        if deny_unknown_fields {
+            let extra_keys = map
+                .keys()
+                .collect::<BTreeSet<_>>()
+                .difference(&fields)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+
+            if !extra_keys.is_empty() {
+                return Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id,
+                    reason: format!("extra properties in default: {}", extra_keys.join(",")),
+                });
+            }
+        }
 
         Ok(rendered_properties)
     }
@@ -877,6 +877,7 @@ where
         let rendered_properties = self.default_impl_struct_props(
             expansion_set,
             &struct_info.properties,
+            struct_info.deny_unknown_fields,
             value,
             id.clone(),
         )?;
@@ -1002,6 +1003,7 @@ where
                     let rendered = self.default_impl_struct_props(
                         expansion_set,
                         props,
+                        enum_info.deny_unknown_fields,
                         var_value,
                         id.clone(),
                     )?;
@@ -1087,8 +1089,13 @@ where
                 Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             VariantDetails::Struct(props) => {
-                let rendered =
-                    self.default_impl_struct_props(expansion_set, props, &inner_value, id.clone())?;
+                let rendered = self.default_impl_struct_props(
+                    expansion_set,
+                    props,
+                    enum_info.deny_unknown_fields,
+                    &inner_value,
+                    id.clone(),
+                )?;
                 Ok(self.generate(|| {
                     (
                         quote! { #type_ident::#var_ident { #( #rendered, )* } },
@@ -1175,6 +1182,7 @@ where
                 let rendered = self.default_impl_struct_props(
                     expansion_set,
                     props,
+                    enum_info.deny_unknown_fields,
                     content_value,
                     id.clone(),
                 )?;
@@ -1245,7 +1253,13 @@ where
                             })
                         }),
                     VariantDetails::Struct(props) => self
-                        .default_impl_struct_props(expansion_set, props, value, id.clone())
+                        .default_impl_struct_props(
+                            expansion_set,
+                            props,
+                            enum_info.deny_unknown_fields,
+                            value,
+                            id.clone(),
+                        )
                         .ok()
                         .map(|rendered| {
                             self.generate(|| {
