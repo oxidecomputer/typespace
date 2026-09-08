@@ -14,7 +14,7 @@ pub enum U {
     First { a: Wrap, b: u32 },
     Second { a: Wrap },
 }
-#[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq, Default)]
+#[derive(::serde::Deserialize, ::serde::Serialize, Debug, Default, PartialEq)]
 #[serde(transparent)]
 pub struct Wrap(pub u32);
 impl ::std::ops::Deref for Wrap {

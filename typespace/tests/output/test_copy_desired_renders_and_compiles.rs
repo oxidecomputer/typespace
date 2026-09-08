@@ -57,12 +57,12 @@ impl ::std::convert::TryFrom<::std::string::String> for Color {
     Clone,
     Copy,
     Debug,
+    Default,
     Eq,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
-    Default,
     schemars::JsonSchema
 )]
 #[serde(transparent)]

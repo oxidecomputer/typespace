@@ -2,11 +2,11 @@
     ::serde::Deserialize,
     ::serde::Serialize,
     Debug,
+    Default,
     Eq,
     Ord,
     PartialEq,
-    PartialOrd,
-    Default
+    PartialOrd
 )]
 #[serde(transparent)]
 pub struct Key(pub ::std::string::String);

@@ -56,7 +56,7 @@ impl ::std::convert::From<Count> for Counted {
         Self(value)
     }
 }
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Marker;
 impl ::serde::Serialize for Marker {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

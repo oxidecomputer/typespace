@@ -2,12 +2,12 @@
     ::serde::Serialize,
     Clone,
     Debug,
+    Default,
     Eq,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
-    Default,
     schemars::JsonSchema
 )]
 #[serde(transparent)]

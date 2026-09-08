@@ -33,7 +33,7 @@ pub mod defaults {
         [1_u32, 2_u32, 3_u32]
     }
     pub(super) fn container_defaults_numbers() -> ::std::vec::Vec<u32> {
-        [8_u32, 6_u32, 7_u32].into_iter().collect()
+        vec![8_u32, 6_u32, 7_u32]
     }
     pub(super) fn container_defaults_pair() -> (::std::string::String, u32) {
         ("x".to_string(), 1_u32)

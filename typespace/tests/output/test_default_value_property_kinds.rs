@@ -29,7 +29,7 @@ impl ::std::default::Default for PropertyDefaults {
         }
     }
 }
-#[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq, Default)]
+#[derive(::serde::Deserialize, ::serde::Serialize, Debug, Default, PartialEq)]
 #[serde(transparent)]
 pub struct Wrapped(pub u32);
 impl ::std::ops::Deref for Wrapped {

@@ -1048,29 +1048,39 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             TypespaceTrait::PartialOrd,
             TypespaceTrait::Hash,
         ];
-        let mut derives = traits
+        // typify collects every derive, its own and the caller's alike,
+        // into one `BTreeSet<&str>`, so the attribute it writes is sorted
+        // by rendered path and carries each derive once. Keying a
+        // `BTreeMap` on the rendered path does the same here: the trait
+        // derives and the extra derives sort together rather than the
+        // extras trailing the rest, and a path named both ways appears
+        // once.
+        let derives = traits
             .iter()
             .filter(|tt| {
                 comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
             })
             .map(|tt| tt.render(self.settings))
-            .collect::<Vec<_>>();
-        // TODO 8/20/2026
-        // I think that we should validate (and maybe render) these extra
-        // derives from settings during finalization and store them in the
-        // TypespaceRenderer.
-        derives.extend(
-            self.settings
-                .extra_derives
-                .iter()
-                .chain(extra_derives.iter())
-                .map(|derive| {
-                    syn::parse_str::<syn::Path>(derive)
-                        .expect("invalid derive path")
-                        .to_token_stream()
-                }),
-        );
+            // TODO 8/20/2026
+            // I think that we should validate (and maybe render) these extra
+            // derives from settings during finalization and store them in the
+            // TypespaceRenderer.
+            .chain(
+                self.settings
+                    .extra_derives
+                    .iter()
+                    .chain(extra_derives.iter())
+                    .map(|derive| {
+                        syn::parse_str::<syn::Path>(derive)
+                            .expect("invalid derive path")
+                            .to_token_stream()
+                    }),
+            )
+            .map(|tokens| (tokens.to_string(), tokens))
+            .collect::<BTreeMap<_, _>>();
+
         (!derives.is_empty()).then(|| {
+            let derives = derives.values();
             quote! {
                 #[derive( #( #derives ),* )]
             }

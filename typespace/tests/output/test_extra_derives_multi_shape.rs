@@ -1,10 +1,10 @@
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     PartialEq,
-    ::std::hash::Hash,
     PartialOrd
 )]
 pub enum ShapeEnum {
@@ -18,10 +18,10 @@ impl ::std::convert::From<u32> for ShapeEnum {
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     PartialEq,
-    ::std::hash::Hash,
     PartialOrd
 )]
 #[serde(transparent)]
@@ -45,16 +45,16 @@ impl ::std::convert::From<u32> for ShapeNewtype {
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     PartialEq,
-    ::std::hash::Hash,
     PartialOrd
 )]
 pub struct ShapeStruct {
     pub x: u32,
 }
-#[derive(Clone, Debug, PartialEq, ::std::hash::Hash, PartialOrd)]
+#[derive(::std::hash::Hash, Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShapeTuple(pub u32, pub u32);
 impl ::serde::Serialize for ShapeTuple {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -104,7 +104,7 @@ impl<'de> ::serde::Deserialize<'de> for ShapeTuple {
         deserializer.deserialize_seq(Visitor)
     }
 }
-#[derive(Clone, Debug, PartialEq, ::std::hash::Hash, PartialOrd)]
+#[derive(::std::hash::Hash, Clone, Debug, PartialEq, PartialOrd)]
 pub struct ShapeUnit;
 impl ::serde::Serialize for ShapeUnit {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

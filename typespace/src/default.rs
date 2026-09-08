@@ -416,7 +416,20 @@ where
                     id: id.clone(),
                     reason: "expected array".to_string(),
                 })?;
-                self.default_impl_collected(expansion_set, elem_id, arr)
+
+                let elems = arr
+                    .iter()
+                    .map(|elem_value| self.default_impl(expansion_set, elem_id.clone(), elem_value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.generate(|| {
+                    let elems = elems
+                        .into_iter()
+                        .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
+
+                    // TODO 9/8/2026
+                    // TYPIFY COMPAT: could rationalize this and Set below
+                    quote! { vec![ #( #elems ),* ] }
+                }))
             }
             Type::Map(key_id, value_id) => {
                 let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
@@ -473,7 +486,16 @@ where
                     }
                 }
 
-                self.default_impl_collected(expansion_set, elem_id, arr)
+                let elems = arr
+                    .iter()
+                    .map(|elem_value| self.default_impl(expansion_set, elem_id.clone(), elem_value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(self.generate(|| {
+                    let elems = elems
+                        .into_iter()
+                        .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
+                    quote! { [ #( #elems ),* ].into_iter().collect() }
+                }))
             }
             Type::Array(elem_id, len) => {
                 let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
@@ -593,30 +615,6 @@ where
                 reason: "a never type may not have a value".to_string(),
             }),
         }
-    }
-
-    /// Validate and (in `Mode::Generate`) render a homogeneous array of
-    /// elements as `[elem, ..].into_iter().collect()`.
-    ///
-    /// This expression works for all containers since we require them (by
-    /// fiat) to implement `FromIterator`. It's the same construction the
-    /// `Type::Map` arm above uses for its entries.
-    fn default_impl_collected(
-        &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
-        elem_id: &Id,
-        elements: &[serde_json::Value],
-    ) -> Result<Option<TokenStream>, Error<Id>> {
-        let elems = elements
-            .iter()
-            .map(|elem_value| self.default_impl(expansion_set, elem_id.clone(), elem_value))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(self.generate(|| {
-            let elems = elems
-                .into_iter()
-                .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
-            quote! { [ #( #elems ),* ].into_iter().collect() }
-        }))
     }
 
     /// Validate and (in `Mode::Generate`) render a tuple-shaped value's

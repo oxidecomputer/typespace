@@ -311,6 +311,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             // item order (see build::mod) under its own item key: decl,
             // Default, setters, TryFrom<Builder> for Type, From<Type>
             // for Builder.
+            let value_ident = if prop_ident.is_empty() {
+                quote! { _value }
+            } else {
+                quote! { value }
+            };
+
             let builder = quote! {
                 #[derive(Clone, Debug)]
                 pub struct #name_ident {
@@ -351,7 +357,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 {
                     type Error = super::error::ConversionError;
 
-                    fn try_from(value: #name_ident)
+                    fn try_from(#value_ident: #name_ident)
                         -> ::std::result::Result<Self, super::error::ConversionError>
                     {
                         Ok(Self {
@@ -363,7 +369,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 }
 
                 impl ::std::convert::From<super::#name_ident> for #name_ident {
-                    fn from(value: super::#name_ident) -> Self {
+                    fn from(#value_ident: super::#name_ident) -> Self {
                         Self {
                             #(
                                 #prop_ident: Ok(value.#prop_ident),

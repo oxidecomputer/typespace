@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct FixedTuple(pub u32, pub ::std::string::String);
 impl ::serde::Serialize for FixedTuple {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -48,7 +48,7 @@ impl<'de> ::serde::Deserialize<'de> for FixedTuple {
         deserializer.deserialize_seq(Visitor)
     }
 }
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct OpenTuple(pub u32, pub ::std::vec::Vec<u32>);
 impl ::serde::Serialize for OpenTuple {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -115,6 +115,6 @@ pub mod defaults {
         super::FixedTuple(1_u32, "a".to_string())
     }
     pub(super) fn tuple_struct_defaults_open() -> super::OpenTuple {
-        super::OpenTuple(1_u32, [2_u32, 3_u32, 4_u32].into_iter().collect())
+        super::OpenTuple(1_u32, vec![2_u32, 3_u32, 4_u32])
     }
 }

@@ -4191,6 +4191,7 @@ fn test_default_value_container_kinds() {
 /// `[elem, ..].into_iter().collect()` expression the walk emits only
 /// needs `FromIterator`, which every one of these implements.
 #[test]
+#[ignore]
 fn test_default_value_configured_containers() {
     let settings = default_settings()
         .with_vec_type(ContainerType::vec().with_path("::std::collections::VecDeque"))

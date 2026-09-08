@@ -1,11 +1,11 @@
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     Eq,
-    PartialEq,
-    ::std::hash::Hash
+    PartialEq
 )]
 pub enum Gadget {
     Off,
@@ -16,7 +16,7 @@ impl ::std::convert::From<u32> for Gadget {
         Self::On(value)
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
+#[derive(::std::hash::Hash, Clone, Debug, Eq, PartialEq)]
 pub struct Marker;
 impl ::serde::Serialize for Marker {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -47,7 +47,7 @@ impl<'de> ::serde::Deserialize<'de> for Marker {
     }
 }
 pub type Named = String;
-#[derive(Clone, Debug, Eq, PartialEq, ::std::hash::Hash)]
+#[derive(::std::hash::Hash, Clone, Debug, Eq, PartialEq)]
 pub struct Pair(pub String, pub u32);
 impl ::serde::Serialize for Pair {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -100,11 +100,11 @@ impl<'de> ::serde::Deserialize<'de> for Pair {
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     Eq,
-    PartialEq,
-    ::std::hash::Hash
+    PartialEq
 )]
 pub struct Widget {
     pub name: String,
@@ -113,11 +113,11 @@ pub struct Widget {
 #[derive(
     ::serde::Deserialize,
     ::serde::Serialize,
+    ::std::hash::Hash,
     Clone,
     Debug,
     Eq,
-    PartialEq,
-    ::std::hash::Hash
+    PartialEq
 )]
 #[serde(transparent)]
 pub struct Wrapper(pub String);
