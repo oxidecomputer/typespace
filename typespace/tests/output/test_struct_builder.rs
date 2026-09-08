@@ -20,7 +20,7 @@ pub struct MyStruct {
     pub b: ::std::option::Option<u32>,
     #[serde(deserialize_with = "::std::option::Option::deserialize")]
     pub c: ::std::option::Option<::std::string::String>,
-    #[serde(default = "defaults::my_struct_d")]
+    #[serde(default = "defaults::default_u64::<u32, 42>")]
     pub d: u32,
 }
 impl MyStruct {
@@ -46,7 +46,7 @@ pub mod builder {
                 a: Err("no value supplied for a".to_string()),
                 b: Ok(Default::default()),
                 c: Err("no value supplied for c".to_string()),
-                d: Ok(super::defaults::my_struct_d()),
+                d: Ok(super::defaults::default_u64::<u32, 42>()),
             }
         }
     }
@@ -117,8 +117,12 @@ pub mod builder {
     }
 }
 pub mod defaults {
-    pub(super) fn my_struct_d() -> u32 {
-        42_u32
+    pub(super) fn default_u64<T, const V: u64>() -> T
+    where
+        T: ::std::convert::TryFrom<u64>,
+        <T as ::std::convert::TryFrom<u64>>::Error: ::std::fmt::Debug,
+    {
+        T::try_from(V).unwrap()
     }
 }
 /// Error types.

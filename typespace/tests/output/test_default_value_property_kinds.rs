@@ -11,7 +11,7 @@ pub struct PropertyDefaults {
     pub wrapped: Wrapped,
     #[serde(default = "defaults::property_defaults_count")]
     pub count: Count,
-    #[serde(default = "defaults::property_defaults_nz")]
+    #[serde(default = "defaults::default_nzu64::<::std::num::NonZeroU64, 1>")]
     pub nz: ::std::num::NonZeroU64,
     #[serde(default = "defaults::property_defaults_maybe")]
     pub maybe: ::std::option::Option<u32>,
@@ -24,7 +24,7 @@ impl ::std::default::Default for PropertyDefaults {
             weight: defaults::property_defaults_weight(),
             wrapped: defaults::property_defaults_wrapped(),
             count: defaults::property_defaults_count(),
-            nz: defaults::property_defaults_nz(),
+            nz: defaults::default_nzu64::<::std::num::NonZeroU64, 1>(),
             maybe: defaults::property_defaults_maybe(),
         }
     }
@@ -49,6 +49,13 @@ impl ::std::convert::From<u32> for Wrapped {
     }
 }
 pub mod defaults {
+    pub(super) fn default_nzu64<T, const V: u64>() -> T
+    where
+        T: ::std::convert::TryFrom<::std::num::NonZeroU64>,
+        <T as ::std::convert::TryFrom<::std::num::NonZeroU64>>::Error: ::std::fmt::Debug,
+    {
+        T::try_from(::std::num::NonZeroU64::try_from(V).unwrap()).unwrap()
+    }
     pub(super) fn property_defaults_address() -> ::std::net::IpAddr {
         ::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"").unwrap()
     }
@@ -60,9 +67,6 @@ pub mod defaults {
     }
     pub(super) fn property_defaults_maybe() -> ::std::option::Option<u32> {
         ::std::option::Option::Some(5_u32)
-    }
-    pub(super) fn property_defaults_nz() -> ::std::num::NonZeroU64 {
-        ::std::num::NonZeroU64::new(1).unwrap()
     }
     pub(super) fn property_defaults_weight() -> f64 {
         1.5_f64

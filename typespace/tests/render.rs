@@ -3586,6 +3586,107 @@ fn test_default_value_property_kinds() {
     }
 }
 
+/// One property whose default value a shared function produces: the
+/// `defaults` module holds the generic `default_bool` and nothing else.
+#[test]
+fn test_default_value_shared_fn_alone() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Switch {
+            #[default = true]
+            on: bool,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_shared_fn_alone.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(import::Switch::default(), import::Switch { on: true });
+        assert_eq!(
+            serde_json::from_str::<import::Switch>("{}").unwrap(),
+            import::Switch { on: true }
+        );
+    }
+}
+
+/// Boolean and integer default values, which shared functions produce,
+/// alongside default values that need a function of their own.
+///
+/// Every property of `Alpha` and `Beta` defaults, so between them the
+/// pair covers each shared function, a type that mixes shared and
+/// per-property functions, and two properties in different types that
+/// name the same instantiation (`count`, in both). That the snapshot
+/// holds one definition of each shared function is what compiling it
+/// proves: a second definition of any of them is a duplicate name.
+#[test]
+fn test_default_value_shared_fns_across_types() {
+    let builder = typespace_builder!(default_settings(), {
+        struct Alpha {
+            #[default = 7]
+            count: u32,
+            #[default = -3]
+            offset: i32,
+            #[default = true]
+            flag: bool,
+            #[default = 2]
+            little: NonZeroU8,
+            #[default = -3]
+            dip: NonZeroI32,
+            #[default = "hi"]
+            label: String,
+        }
+
+        struct Beta {
+            #[default = 7]
+            count: u32,
+            #[default = 9]
+            other: u32,
+            #[default = false]
+            flag: bool,
+            #[default = 1.5]
+            weight: f64,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_default_value_shared_fns_across_types.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            serde_json::from_str::<import::Alpha>("{}").unwrap(),
+            import::Alpha {
+                count: 7,
+                offset: -3,
+                flag: true,
+                little: ::std::num::NonZeroU8::new(2).unwrap(),
+                dip: ::std::num::NonZeroI32::new(-3).unwrap(),
+                label: "hi".to_string(),
+            }
+        );
+        assert_eq!(
+            import::Alpha::default(),
+            serde_json::from_str::<import::Alpha>("{}").unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<import::Beta>("{}").unwrap(),
+            import::Beta {
+                count: 7,
+                other: 9,
+                flag: false,
+                weight: 1.5,
+            }
+        );
+        assert_eq!(
+            import::Beta::default(),
+            serde_json::from_str::<import::Beta>("{}").unwrap()
+        );
+    }
+}
+
 /// A `Nullable<T>` property (no `Optional` half) whose default value is
 /// `null`: the generated default function returns `None`, the other
 /// half of the pairing `test_default_value_property_kinds` covers with

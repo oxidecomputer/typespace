@@ -22,6 +22,137 @@ use crate::{
 /// than written as a literal, since there is no literal form for them.
 const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
+/// A function in the generated `defaults` module that properties share.
+///
+/// A boolean or integer default value needs no code of its own: one
+/// generic function, parameterized by the value, produces the default
+/// for every property whose default is a value of that kind. Rendering
+/// records which of these it wants and emits one definition of each, so
+/// that the module holds a single `default_u64` rather than one
+/// function per property, all effectively identical.
+///
+/// The declaration order here is the order the definitions appear in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DefaultHelper {
+    /// `default_bool::<V>() -> bool`
+    Boolean,
+    /// `default_i64::<T, V>() -> T`
+    I64,
+    /// `default_u64::<T, V>() -> T`
+    U64,
+    /// `default_nzu64::<T, V>() -> T`
+    NZU64,
+}
+
+impl DefaultHelper {
+    /// The helper's definition, for the `defaults` module.
+    pub(crate) fn definition(&self) -> TokenStream {
+        match self {
+            DefaultHelper::Boolean => quote! {
+                pub(super) fn default_bool<const V: bool>() -> bool {
+                    V
+                }
+            },
+            DefaultHelper::I64 => quote! {
+                pub(super) fn default_i64<T, const V: i64>() -> T
+                where
+                    T: ::std::convert::TryFrom<i64>,
+                    <T as ::std::convert::TryFrom<i64>>::Error: ::std::fmt::Debug,
+                {
+                    T::try_from(V).unwrap()
+                }
+            },
+            DefaultHelper::U64 => quote! {
+                pub(super) fn default_u64<T, const V: u64>() -> T
+                where
+                    T: ::std::convert::TryFrom<u64>,
+                    <T as ::std::convert::TryFrom<u64>>::Error: ::std::fmt::Debug,
+                {
+                    T::try_from(V).unwrap()
+                }
+            },
+            DefaultHelper::NZU64 => quote! {
+                pub(super) fn default_nzu64<T, const V: u64>() -> T
+                where
+                    T: ::std::convert::TryFrom<::std::num::NonZeroU64>,
+                    <T as ::std::convert::TryFrom<::std::num::NonZeroU64>>::Error:
+                        ::std::fmt::Debug,
+                {
+                    T::try_from(::std::num::NonZeroU64::try_from(V).unwrap())
+                        .unwrap()
+                }
+            },
+        }
+    }
+}
+
+/// A shared helper together with the path that instantiates it.
+pub(crate) struct SharedDefaultFn {
+    pub helper: DefaultHelper,
+    /// How a property names the helper, as `defaults::name::<args>`.
+    pub path: String,
+}
+
+/// Match a property's type and default value to a shared helper.
+///
+/// `None` means no helper produces this value, and the property needs a
+/// function minted for it. Only the type's own node is considered: a
+/// named type whose definition is an integer, or an `Option` of one,
+/// takes a function of its own, since a helper would have to name the
+/// value's type as well as produce it.
+pub(crate) fn shared_default_fn<Id: Ord>(
+    types: &BTreeMap<Id, Type<Id>>,
+    id: &Id,
+    value: &serde_json::Value,
+) -> Option<SharedDefaultFn> {
+    let (helper, path) = match types.get(id).expect("invalid type id") {
+        Type::Boolean => {
+            let value = value.as_bool()?;
+            (
+                DefaultHelper::Boolean,
+                format!("defaults::default_bool::<{}>", value),
+            )
+        }
+
+        // An unsigned value is produced from a u64 (or, for the
+        // ::std::num::NonZero* types, from a NonZeroU64, which is what
+        // they convert from); anything else that fits in an i64 is
+        // produced from an i64.
+        Type::Integer(itype) => match (value.as_u64(), value.as_i64()) {
+            (Some(value), _) if itype.starts_with(STD_NUM_NONZERO_PREFIX) => (
+                DefaultHelper::NZU64,
+                format!("defaults::default_nzu64::<{}, {}>", itype, value),
+            ),
+            (Some(value), _) => (
+                DefaultHelper::U64,
+                format!("defaults::default_u64::<{}, {}>", itype, value),
+            ),
+            // ATTN REVIEWER: typify 1 checks for a NonZero type only
+            // in the unsigned branch, so it routes a negative default
+            // on a signed NonZero type to default_i64, which does not
+            // compile: NonZeroI32 converts from NonZeroU64 and from
+            // i32, but not from i64. No typify 1 golden covers it. The
+            // per-property function builds the value with
+            // `NonZeroI32::new(-5).unwrap()`, which compiles, so send
+            // it there.
+            (_, Some(_)) if itype.starts_with(STD_NUM_NONZERO_PREFIX) => return None,
+            (_, Some(value)) => (
+                DefaultHelper::I64,
+                format!("defaults::default_i64::<{}, {}>", itype, value),
+            ),
+            // A value that is a number but neither a u64 nor an i64 is
+            // a float, which no helper produces. Validation admits one
+            // for an integer type, so this is reachable; the
+            // per-property path reports it.
+            (None, None) => return None,
+        },
+
+        _ => return None,
+    };
+
+    Some(SharedDefaultFn { helper, path })
+}
+
 pub(crate) fn check_default<Id>(
     types: &BTreeMap<Id, Type<Id>>,
     settings: &Settings,
@@ -1267,6 +1398,12 @@ mod tests {
             .to_string()
     }
 
+    /// Unparse a helper definition the way the snapshots render it.
+    fn unparse(helper: DefaultHelper) -> String {
+        let file = syn::parse2::<syn::File>(helper.definition()).unwrap();
+        prettyplease::unparse(&file)
+    }
+
     /// Run both halves of the walk, returning the generated tokens.
     fn walk(
         types: &BTreeMap<String, Type<String>>,
@@ -1613,6 +1750,156 @@ mod tests {
                 }
                 .to_string()
             )
+        );
+    }
+
+    /// Types to route default values against, one per node kind that
+    /// the routing distinguishes.
+    fn routing_types() -> BTreeMap<String, Type<String>> {
+        [
+            ("bool".to_string(), Type::Boolean),
+            ("u32".to_string(), Type::Integer("u32".to_string())),
+            ("i32".to_string(), Type::Integer("i32".to_string())),
+            (
+                "nzu8".to_string(),
+                Type::Integer("::std::num::NonZeroU8".to_string()),
+            ),
+            (
+                "nzi32".to_string(),
+                Type::Integer("::std::num::NonZeroI32".to_string()),
+            ),
+            ("f64".to_string(), Type::Float("f64".to_string())),
+            ("String".to_string(), Type::String),
+            ("json".to_string(), Type::JsonValue),
+            ("unit".to_string(), Type::Unit),
+            ("opt".to_string(), Type::Option("u32".to_string())),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// The path that instantiates the shared function for `value` at
+    /// `id`, or `None` where the property needs a function of its own.
+    fn shared_path(
+        types: &BTreeMap<String, Type<String>>,
+        id: &str,
+        value: serde_json::Value,
+    ) -> Option<String> {
+        shared_default_fn(types, &id.to_string(), &value).map(|shared| shared.path)
+    }
+
+    /// Which default values a shared function produces, matching what
+    /// typify 1's `default_fn` (typify-impl/src/defaults.rs) selects.
+    ///
+    /// Only the property type's own node is consulted, so a named type
+    /// over an integer takes a function of its own; the `count: Count`
+    /// property of the `test_default_value_property_kinds` render test
+    /// covers that.
+    #[test]
+    fn test_shared_default_fn_routing() {
+        let types = routing_types();
+
+        // A boolean is produced by default_bool, whichever value it is.
+        // typify 1 reaches the helper only for `true`, since it treats
+        // a `false` default as the intrinsic Default; typespace leaves
+        // that choice to its consumer and renders whatever state the
+        // property carries.
+        assert_eq!(
+            shared_path(&types, "bool", serde_json::json!(true)).as_deref(),
+            Some("defaults::default_bool::<true>"),
+        );
+        assert_eq!(
+            shared_path(&types, "bool", serde_json::json!(false)).as_deref(),
+            Some("defaults::default_bool::<false>"),
+        );
+
+        // An integer is produced from a u64 when the value is one, and
+        // from an i64 otherwise. Zero is no exception here: typify 1
+        // treats a zero default as the intrinsic Default before it gets
+        // this far.
+        assert_eq!(
+            shared_path(&types, "u32", serde_json::json!(7)).as_deref(),
+            Some("defaults::default_u64::<u32, 7>"),
+        );
+        assert_eq!(
+            shared_path(&types, "u32", serde_json::json!(0)).as_deref(),
+            Some("defaults::default_u64::<u32, 0>"),
+        );
+        assert_eq!(
+            shared_path(&types, "i32", serde_json::json!(-3)).as_deref(),
+            Some("defaults::default_i64::<i32, -3>"),
+        );
+
+        // A NonZero type converts from a NonZeroU64.
+        assert_eq!(
+            shared_path(&types, "nzu8", serde_json::json!(2)).as_deref(),
+            Some("defaults::default_nzu64::<::std::num::NonZeroU8, 2>"),
+        );
+
+        // A negative value for a signed NonZero type has no shared
+        // function: nothing converts a NonZero from an i64.
+        assert_eq!(shared_path(&types, "nzi32", serde_json::json!(-3)), None);
+
+        // A number that is neither a u64 nor an i64 has none either,
+        // even for an integer type, which the walk admits.
+        assert_eq!(shared_path(&types, "u32", serde_json::json!(1.5)), None);
+
+        // No other type has one.
+        assert_eq!(shared_path(&types, "f64", serde_json::json!(1.5)), None);
+        assert_eq!(shared_path(&types, "String", serde_json::json!("hi")), None);
+        assert_eq!(shared_path(&types, "json", serde_json::json!({})), None);
+        assert_eq!(shared_path(&types, "unit", serde_json::json!(null)), None);
+        assert_eq!(shared_path(&types, "opt", serde_json::json!(5)), None);
+    }
+
+    /// The shared helpers reproduce typify 1's, whose output they have
+    /// to match: `default_bool` appears in typify 1's github.out and
+    /// vega.out goldens, `default_i64` in vega.out, and `default_nzu64`
+    /// in its types-with-defaults.rs golden. No typify 1 golden
+    /// contains `default_u64`, so that one is pinned against the source
+    /// of `impl From<&DefaultImpl> for TokenStream` in typify 1's
+    /// typify-impl/src/defaults.rs.
+    #[test]
+    fn test_shared_default_fn_definitions() {
+        assert_eq!(
+            unparse(DefaultHelper::Boolean),
+            "pub(super) fn default_bool<const V: bool>() -> bool {\n    V\n}\n",
+        );
+        assert_eq!(
+            unparse(DefaultHelper::I64),
+            concat!(
+                "pub(super) fn default_i64<T, const V: i64>() -> T\n",
+                "where\n",
+                "    T: ::std::convert::TryFrom<i64>,\n",
+                "    <T as ::std::convert::TryFrom<i64>>::Error: ::std::fmt::Debug,\n",
+                "{\n",
+                "    T::try_from(V).unwrap()\n",
+                "}\n",
+            ),
+        );
+        assert_eq!(
+            unparse(DefaultHelper::U64),
+            concat!(
+                "pub(super) fn default_u64<T, const V: u64>() -> T\n",
+                "where\n",
+                "    T: ::std::convert::TryFrom<u64>,\n",
+                "    <T as ::std::convert::TryFrom<u64>>::Error: ::std::fmt::Debug,\n",
+                "{\n",
+                "    T::try_from(V).unwrap()\n",
+                "}\n",
+            ),
+        );
+        assert_eq!(
+            unparse(DefaultHelper::NZU64),
+            concat!(
+                "pub(super) fn default_nzu64<T, const V: u64>() -> T\n",
+                "where\n",
+                "    T: ::std::convert::TryFrom<::std::num::NonZeroU64>,\n",
+                "    <T as ::std::convert::TryFrom<::std::num::NonZeroU64>>::Error: ::std::fmt::Debug,\n",
+                "{\n",
+                "    T::try_from(::std::num::NonZeroU64::try_from(V).unwrap()).unwrap()\n",
+                "}\n",
+            ),
         );
     }
 }

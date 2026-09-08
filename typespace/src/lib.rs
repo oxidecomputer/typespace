@@ -82,6 +82,7 @@ pub mod view;
 // they would from an external crate depending on `typespace`.
 extern crate self as typespace;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use proc_macro2::TokenStream;
@@ -91,7 +92,7 @@ use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
 };
-use crate::default::check_default;
+use crate::default::{DefaultHelper, SharedDefaultFn, check_default, shared_default_fn};
 use crate::error::Error;
 use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
 use crate::settings::{OptionalNullable, Settings, Std};
@@ -861,11 +862,24 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
 pub(crate) struct TypespaceRenderer<'a, Id> {
     pub(crate) types: &'a BTreeMap<Id, Type<Id>>,
     pub(crate) settings: &'a Settings,
+    /// Shared `defaults` functions that the rendered properties call.
+    ///
+    /// Rendering a property records the function it wants here, and
+    /// [`TypespaceRenderer::render`] defines each one once every type
+    /// is rendered. Rendering takes `&self` throughout, hence the
+    /// `RefCell`. Only a renderer driven by `render` fills this in: the
+    /// short-lived renderers that `default.rs` and `view.rs` build ask
+    /// only how a type is spelled.
+    default_helpers: RefCell<BTreeSet<DefaultHelper>>,
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
     pub(crate) fn new(types: &'a BTreeMap<Id, Type<Id>>, settings: &'a Settings) -> Self {
-        Self { types, settings }
+        Self {
+            types,
+            settings,
+            default_helpers: Default::default(),
+        }
     }
 
     fn render(&self) -> codespace::Codespace {
@@ -908,6 +922,20 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             cs.get_root_mod()
                 .get_mod("builder")
                 .add_docs(" Types for composing complex structures.");
+        }
+
+        // Every property whose default value a shared function
+        // produces recorded that function as it rendered; define each
+        // of them once. The empty key sorts them ahead of the
+        // per-property functions, which are keyed by name. Naming the
+        // module creates it, so ask for it only when something goes in
+        // it.
+        let default_helpers = self.default_helpers.borrow();
+        if !default_helpers.is_empty() {
+            let defaults_mod = cs.get_root_mod().get_mod("defaults");
+            for helper in default_helpers.iter() {
+                defaults_mod.add_item("", helper.definition());
+            }
         }
 
         cs
@@ -1270,6 +1298,27 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
         };
 
+        // A property with a default value calls a function in the
+        // `defaults` module to produce it. The serde attribute and the
+        // struct builder name the same function, so the path is worked
+        // out once, here, ahead of the match below: the attribute then
+        // follows a rename or flatten and precedes whatever that match
+        // adds.
+        let default = match state {
+            StructPropertyState::Required => DefaultConstructor::None,
+            StructPropertyState::Optional | StructPropertyState::Default => {
+                DefaultConstructor::Default
+            }
+            StructPropertyState::DefaultValue(JsonValue(value)) => {
+                let fn_path = self.default_fn(context, rust_name, type_id, value, cs);
+                serde_options.push(quote! { default = #fn_path });
+                let call = format!("{fn_path}()")
+                    .parse::<TokenStream>()
+                    .expect("a function path followed by () lexes as tokens");
+                DefaultConstructor::Generated(call)
+            }
+        };
+
         let ty = self.types.get(type_id).unwrap();
 
         enum TypeOfInterest<Id> {
@@ -1393,34 +1442,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 (ty_ident, ty_ident_scoped)
             }
             (
-                StructPropertyState::DefaultValue(JsonValue(value)),
+                StructPropertyState::DefaultValue(_),
                 TypeOfInterest::Option(_) | TypeOfInterest::Other,
             ) => {
-                // TODO 9/3/2026
-                // I don't love that the door is open to name collisions here,
-                // but this is what typify 1 does so we'll hold the line for
-                // now.
-                let fn_name_str = format!("{}_{}", context, rust_name);
-                let fn_name_ident = format_ident!("{}", fn_name_str);
-                let serde_path = format!("defaults::{fn_name_str}");
-                serde_options.push(quote! { default = #serde_path });
-
-                let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
-                let body = crate::default::generate_default(
-                    self.types,
-                    self.settings,
-                    value,
-                    type_id.clone(),
-                );
-                cs.get_root_mod().get_mod("defaults").add_item(
-                    &fn_name_str,
-                    quote! {
-                        pub(super) fn #fn_name_ident() -> #ty_for_fn {
-                            #body
-                        }
-                    },
-                );
-
+                // The default function and its serde attribute are
+                // settled above; a default value leaves the property's
+                // type alone.
                 (ty_ident, ty_ident_scoped)
             }
 
@@ -1448,20 +1475,6 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             ) => unreachable!("finalization rejects a Never property that requires a value"),
         };
 
-        let default = match state {
-            StructPropertyState::Required => DefaultConstructor::None,
-            StructPropertyState::Optional | StructPropertyState::Default => {
-                DefaultConstructor::Default
-            }
-            StructPropertyState::DefaultValue(_) => {
-                // TODO 9/1/2026
-                // we should dedup this code
-                let fn_name_str = format!("{}_{}", context, rust_name);
-                let fn_name_ident = format_ident!("{}", fn_name_str);
-                DefaultConstructor::Generated(quote! { defaults::#fn_name_ident() })
-            }
-        };
-
         let rust_name_ident = format_ident!("{rust_name}");
 
         RenderedStructProperty {
@@ -1472,6 +1485,56 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             prop_ty_ident,
             prop_ty_ident_scoped,
             default,
+        }
+    }
+
+    /// Name the `defaults` function that produces a property's default
+    /// value, adding whatever definition that takes.
+    ///
+    /// A value that one of the shared functions produces records that
+    /// function, which [`TypespaceRenderer::render`] defines once for
+    /// the whole codespace, and yields the path that instantiates it.
+    /// Any other value takes a function of its own, named for the
+    /// property and added to the module here.
+    fn default_fn(
+        &self,
+        context: &str,
+        rust_name: &str,
+        type_id: &Id,
+        value: &serde_json::Value,
+        cs: &mut codespace::Codespace,
+    ) -> String {
+        match shared_default_fn(self.types, type_id, value) {
+            Some(SharedDefaultFn { helper, path }) => {
+                self.default_helpers.borrow_mut().insert(helper);
+                path
+            }
+            None => {
+                // TODO 9/3/2026
+                // I don't love that the door is open to name collisions here,
+                // but this is what typify 1 does so we'll hold the line for
+                // now.
+                let fn_name_str = format!("{}_{}", context, rust_name);
+                let fn_name_ident = format_ident!("{}", fn_name_str);
+
+                let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
+                let body = crate::default::generate_default(
+                    self.types,
+                    self.settings,
+                    value,
+                    type_id.clone(),
+                );
+                cs.get_root_mod().get_mod("defaults").add_item(
+                    &fn_name_str,
+                    quote! {
+                        pub(super) fn #fn_name_ident() -> #ty_for_fn {
+                            #body
+                        }
+                    },
+                );
+
+                format!("defaults::{fn_name_str}")
+            }
         }
     }
 
