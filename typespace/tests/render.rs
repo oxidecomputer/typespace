@@ -3344,14 +3344,19 @@ fn test_copy_withheld_under_typify_compat() {
 fn test_copy_desired_box_and_json_value_drop_copy() {
     let builder = typespace_builder!(
         Settings::minimal()
+            .with_typify_compat(true)
             .with_required_trait(TypespaceTrait::Clone)
-            .with_desired_trait(TypespaceTrait::Copy),
+            .with_desired_trait(TypespaceTrait::Copy)
+            .with_desired_trait(TypespaceTrait::FromStr)
+            .with_desired_trait(TypespaceTrait::Display),
         {
             struct Boxed(Box<u32>);
 
             struct Blob {
                 data: JsonValue,
             }
+
+            struct Blob2(JsonValue);
         }
     );
 
@@ -3359,6 +3364,11 @@ fn test_copy_desired_box_and_json_value_drop_copy() {
     let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
     assert_eq!(common::derives_of(&file, "Boxed"), ["Clone"]);
     assert_eq!(common::derives_of(&file, "Blob"), ["Clone"]);
+    assert_eq!(common::derives_of(&file, "Blob2"), ["Clone"]);
+
+    assert_eq!(common::impls_of(&file, "Boxed"), ["Deref", "From<Box>"]);
+    assert!(common::impls_of(&file, "Blob").is_empty());
+    assert_eq!(common::impls_of(&file, "Blob2"), ["Deref", "From<Value>"]);
 }
 
 #[test]

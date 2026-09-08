@@ -9,6 +9,8 @@
 // helper only some of them use looks dead to the rest.
 #![allow(dead_code)]
 
+use quote::ToTokens;
+
 /// The names a type's `derive` attributes carry.
 pub fn derives_of(file: &syn::File, type_name: &str) -> Vec<String> {
     attrs_of(file, type_name)
@@ -34,6 +36,64 @@ pub fn attrs_of<'a>(file: &'a syn::File, type_name: &str) -> &'a [syn::Attribute
             _ => None,
         })
         .unwrap_or_else(|| panic!("{type_name} is rendered"))
+}
+
+/// The names of traits that a type implements.
+pub fn impls_of(file: &syn::File, type_name: &str) -> Vec<String> {
+    file.items
+        .iter()
+        .filter_map(|item| {
+            let syn::Item::Impl(syn::ItemImpl {
+                trait_: Some((trait_, _)),
+                self_ty,
+                ..
+            }) = item
+            else {
+                return None;
+            };
+
+            if self_ty.as_ref().to_token_stream().to_string() != type_name {
+                return None;
+            }
+
+            let syn::PathSegment { ident, arguments } = trait_
+                .segments
+                .iter()
+                .last()
+                .expect("gotta be at least one segment to name a path");
+
+            let mut out = ident.to_string();
+            match arguments {
+                syn::PathArguments::None => {}
+                syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                    args,
+                    ..
+                }) => {
+                    out.push('<');
+                    let args_str = args
+                        .iter()
+                        .filter_map(|arg| {
+                            let syn::GenericArgument::Type(syn::Type::Path(syn::TypePath {
+                                path: syn::Path { segments, .. },
+                                ..
+                            })) = arg
+                            else {
+                                return None;
+                            };
+
+                            Some(segments.iter().last().unwrap().ident.to_string())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    out.push_str(&args_str);
+                    out.push('>');
+                }
+                syn::PathArguments::Parenthesized(_) => todo!(),
+            }
+
+            Some(out)
+        })
+        .collect()
 }
 
 /// Whether the file carries `impl <trait_name> for <type_name>`.

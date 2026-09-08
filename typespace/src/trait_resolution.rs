@@ -493,9 +493,11 @@ where
                     // wherever a payload is irrefutable. Position in the
                     // variant list does not enter into it.
                     match irrefutable_variant(types, e) {
-                        Some(variant) => Feasibility::Impossible(
-                            OffenderReason::IrrefutableVariantPayload { variant },
-                        ),
+                        Some(variant) => {
+                            Feasibility::Impossible(OffenderReason::IrrefutableVariantPayload {
+                                variant,
+                            })
+                        }
                         None => Feasibility::ManuallyRealizable(ty.contained_children_related()),
                     }
                 }
@@ -1248,10 +1250,13 @@ where
 
             // JsonValue implements everything except for Ord,
             // PartialOrd, and Copy: it owns a String and a Vec.
-            Type::JsonValue => !matches!(
-                trait_name,
-                TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy
-            ),
+            Type::JsonValue => match (trait_name, settings.typify_compat) {
+                (TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy, _) => {
+                    false
+                }
+                (TypespaceTrait::FromStr | TypespaceTrait::Display, true) => false,
+                _ => true,
+            },
         }
     }
 }
