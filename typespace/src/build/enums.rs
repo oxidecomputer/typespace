@@ -10,6 +10,7 @@ use crate::build::{
 };
 use crate::default::{EnumDefault, generate_default_enum};
 use crate::error::{Error, NameAxis};
+use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
 use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
 
@@ -282,7 +283,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         &self,
         id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
     ) -> TokenStream {
         let Self {
             common:
@@ -323,13 +324,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             (true, true) => unreachable!(),
             (true, false) => self.render_tagged_unit_variant_impls(
                 typespace,
-                cs,
+                out,
                 &name_ident,
                 &mut derived_traits,
             ),
             (false, true) => self.render_untagged_item_variant_impls(
                 typespace,
-                cs,
+                out,
                 &name_ident,
                 &mut derived_traits,
             ),
@@ -424,7 +425,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                             serde_derives,
                             false,
                             &format!("{}{}", name, rust_name),
-                            cs,
+                            out,
                         )
                     });
                     quote! { { #( #properties, )* } }
@@ -472,7 +473,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     fn render_tagged_unit_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
         name_ident: &Ident,
         derived_traits: &mut TypespaceTraitSet,
     ) -> TokenStream {
@@ -508,7 +509,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
             // Parse each variant from its serialized name.
-            typespace.add_error_mod(cs);
+            typespace.add_error_mod(out);
             let string_type = typespace.render_std_string();
             quote! {
                 impl ::std::str::FromStr for #name_ident {
@@ -553,7 +554,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     fn render_untagged_item_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
         name_ident: &Ident,
         derived_traits: &mut TypespaceTraitSet,
     ) -> TokenStream {
@@ -564,7 +565,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .collect::<Vec<_>>();
 
         let from_str_impl = derived_traits.remove(TypespaceTrait::FromStr).then(|| {
-            typespace.add_error_mod(cs);
+            typespace.add_error_mod(out);
             quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;

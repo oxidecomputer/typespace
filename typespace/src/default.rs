@@ -34,13 +34,13 @@ const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 /// The declaration order here is the order the definitions appear in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DefaultHelper {
-    /// `default_bool::<V>() -> bool`
+    /// `default_bool::<const V: bool>() -> bool`
     Boolean,
-    /// `default_i64::<T, V>() -> T`
+    /// `default_i64::<T, const V: i64>() -> T`
     I64,
-    /// `default_u64::<T, V>() -> T`
+    /// `default_u64::<T, const V: u64>() -> T`
     U64,
-    /// `default_nzu64::<T, V>() -> T`
+    /// `default_nzu64::<T, const V: u64>() -> T`
     NZU64,
 }
 

@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
 use crate::default::{check_default, generate_default};
 use crate::error::{Error, NameAxis};
+use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
 use crate::settings::Settings;
 use crate::{DefaultConstructor, RenderedStructProperty, TypespaceRenderer, TypespaceTrait};
@@ -217,7 +218,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
     pub(crate) fn render(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
         let Self {
             common:
@@ -225,10 +226,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                     name,
                     description,
                     default,
-                    built: Some(TypeCommonBuilt {
-                        traits,
-                        from_string_irrefutable: _,
-                    }),
+                    built:
+                        Some(TypeCommonBuilt {
+                            traits,
+                            from_string_irrefutable: _,
+                        }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -249,7 +251,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let rendered_properties = properties
             .iter()
             .map(|prop| {
-                typespace.render_struct_property(prop, serde_derives, true, &snake_name, cs)
+                typespace.render_struct_property(prop, serde_derives, true, &snake_name, out)
             })
             .collect::<Vec<_>>();
 
@@ -366,8 +368,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 }
             };
 
-            cs.get_root_mod().get_mod("builder").add_item(name, builder);
-            typespace.add_error_mod(cs);
+            out.cs()
+                .get_root_mod()
+                .get_mod("builder")
+                .add_item(name, builder);
+            typespace.add_error_mod(out);
         }
 
         let builder_impl = typespace.settings.struct_builder.then(|| {
@@ -722,10 +727,11 @@ impl UnitStruct {
                 TypeCommon {
                     name,
                     description,
-                    built: Some(TypeCommonBuilt {
-                        traits,
-                        from_string_irrefutable: _,
-                    }),
+                    built:
+                        Some(TypeCommonBuilt {
+                            traits,
+                            from_string_irrefutable: _,
+                        }),
                     default: _,
                     extra_derives,
                     extra_attrs,
@@ -964,10 +970,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     name,
                     description,
                     default: _,
-                    built: Some(TypeCommonBuilt {
-                        traits,
-                        from_string_irrefutable: _,
-                    }),
+                    built:
+                        Some(TypeCommonBuilt {
+                            traits,
+                            from_string_irrefutable: _,
+                        }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -1330,7 +1337,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
     pub(crate) fn render(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
         let Self {
             common:
@@ -1338,10 +1345,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     name,
                     description,
                     default: _,
-                    built: Some(TypeCommonBuilt {
-                        traits,
-                        from_string_irrefutable: _,
-                    }),
+                    built:
+                        Some(TypeCommonBuilt {
+                            traits,
+                            from_string_irrefutable: _,
+                        }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -1370,7 +1378,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let constraint_impl = render_constraint_impl(
             typespace,
-            cs,
+            out,
             constraints,
             &mut traits,
             name,
@@ -1415,7 +1423,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
 fn render_constraint_impl<Id>(
     typespace: &TypespaceRenderer<'_, Id>,
-    cs: &mut codespace::Codespace,
+    out: &mut Outputspace,
     constraints: &NewtypeConstraints,
     traits: &mut crate::TypespaceTraitSet,
     name: &str,
@@ -1574,7 +1582,7 @@ where
             let display_impl = traits.remove(TypespaceTrait::Display).then(|| quote! {});
 
             let not = matches!(constraints, NewtypeConstraints::AllowList(_)).then(|| quote! { ! });
-            typespace.add_error_mod(cs);
+            typespace.add_error_mod(out);
 
             quote! {
                     // This is effectively the constructor for this type.
@@ -1605,7 +1613,7 @@ where
         }
 
         NewtypeConstraints::String { min, max, patterns } => {
-            typespace.add_error_mod(cs);
+            typespace.add_error_mod(out);
             let max = max.map(|v| {
                 let err = format!("longer than {} characters", v);
                 quote! {

@@ -69,6 +69,7 @@ pub mod build;
 pub(crate) mod cycles;
 mod default;
 pub mod error;
+pub(crate) mod output;
 pub(crate) mod serde_attrs;
 pub mod settings;
 pub(crate) mod trait_resolution;
@@ -82,7 +83,6 @@ pub mod view;
 // they would from an external crate depending on `typespace`.
 extern crate self as typespace;
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use proc_macro2::TokenStream;
@@ -92,8 +92,9 @@ use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
 };
-use crate::default::{DefaultHelper, SharedDefaultFn, check_default, shared_default_fn};
+use crate::default::{SharedDefaultFn, check_default, shared_default_fn};
 use crate::error::Error;
+use crate::output::Outputspace;
 use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
 use crate::settings::{OptionalNullable, Settings, Std};
 
@@ -862,89 +863,63 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
 pub(crate) struct TypespaceRenderer<'a, Id> {
     pub(crate) types: &'a BTreeMap<Id, Type<Id>>,
     pub(crate) settings: &'a Settings,
-    /// Shared `defaults` functions that the rendered properties call.
-    ///
-    /// Rendering a property records the function it wants here, and
-    /// [`TypespaceRenderer::render`] defines each one once every type
-    /// is rendered. Rendering takes `&self` throughout, hence the
-    /// `RefCell`. Only a renderer driven by `render` fills this in: the
-    /// short-lived renderers that `default.rs` and `view.rs` build ask
-    /// only how a type is spelled.
-    default_helpers: RefCell<BTreeSet<DefaultHelper>>,
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
     pub(crate) fn new(types: &'a BTreeMap<Id, Type<Id>>, settings: &'a Settings) -> Self {
-        Self {
-            types,
-            settings,
-            default_helpers: Default::default(),
-        }
+        Self { types, settings }
     }
 
     fn render(&self) -> codespace::Codespace {
-        let mut cs = codespace::Codespace::default();
+        let mut out = Outputspace::default();
 
         for (id, typ) in self.types {
             match typ {
                 Type::Struct(s) => {
                     let name = s.common.built_name().to_string();
-                    let tokens = s.render(self, &mut cs);
-                    cs.add_item(name, tokens);
+                    let tokens = s.render(self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 Type::Enum(e) => {
                     let name = e.common.built_name().to_string();
-                    let tokens = e.render(id, self, &mut cs);
-                    cs.add_item(name, tokens);
+                    let tokens = e.render(id, self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 Type::UnitStruct(u) => {
                     let name = u.common.built_name().to_string();
-                    cs.add_item(name, u.render(self));
+                    out.cs().add_item(name, u.render(self));
                 }
                 Type::TupleStruct(t) => {
                     let name = t.common.built_name().to_string();
-                    cs.add_item(name, t.render(self));
+                    out.cs().add_item(name, t.render(self));
                 }
                 Type::NewtypeStruct(n) => {
                     let name = n.common.built_name().to_string();
-                    let tokens = n.render(self, &mut cs);
-                    cs.add_item(name, tokens);
+                    let tokens = n.render(self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 Type::TypeAlias(a) => {
                     let name = a.common.built_name().to_string();
-                    cs.add_item(name, a.render(self));
+                    out.cs().add_item(name, a.render(self));
                 }
                 _ => {}
             }
         }
 
-        if cs.get_root_mod().has_mod("builder") {
-            cs.get_root_mod()
+        if out.cs().get_root_mod().has_mod("builder") {
+            out.cs()
+                .get_root_mod()
                 .get_mod("builder")
                 .add_docs(" Types for composing complex structures.");
         }
 
-        // Every property whose default value a shared function
-        // produces recorded that function as it rendered; define each
-        // of them once. The empty key sorts them ahead of the
-        // per-property functions, which are keyed by name. Naming the
-        // module creates it, so ask for it only when something goes in
-        // it.
-        let default_helpers = self.default_helpers.borrow();
-        if !default_helpers.is_empty() {
-            let defaults_mod = cs.get_root_mod().get_mod("defaults");
-            for helper in default_helpers.iter() {
-                defaults_mod.add_item("", helper.definition());
-            }
-        }
-
-        cs
+        out.into_codespace()
     }
 
-    pub(crate) fn add_error_mod(&self, cs: &mut codespace::Codespace) {
+    pub(crate) fn add_error_mod(&self, out: &mut Outputspace) {
         // We only need the error mod once and we carefully control its
         // contents.
-        if !cs.get_root_mod().has_mod("error") {
+        if !out.cs().get_root_mod().has_mod("error") {
             let mut error_mod = codespace::Mod::default();
             error_mod.add_docs(" Error types.");
             error_mod.add_item(
@@ -981,7 +956,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     }
                 },
             );
-            let _ = cs.get_root_mod().replace_mod("error", error_mod);
+            let _ = out.cs().get_root_mod().replace_mod("error", error_mod);
         }
     }
 
@@ -1076,9 +1051,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         let mut derives = traits
             .iter()
             .filter(|tt| {
-                comparison_exempt
-                    || !self.settings.typify_compat
-                    || !WITHHELD_TRAITS.contains(*tt)
+                comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
             })
             .map(|tt| tt.render(self.settings))
             .collect::<Vec<_>>();
@@ -1274,7 +1247,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         serde_derives: SerdeDerives,
         vis_pub: bool,
         context: &str,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
     ) -> RenderedStructProperty {
         let description = description.as_ref().map(|text| {
             quote! {
@@ -1310,7 +1283,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 DefaultConstructor::Default
             }
             StructPropertyState::DefaultValue(JsonValue(value)) => {
-                let fn_path = self.default_fn(context, rust_name, type_id, value, cs);
+                let fn_path = self.default_fn(context, rust_name, type_id, value, out);
                 serde_options.push(quote! { default = #fn_path });
                 let call = format!("{fn_path}()")
                     .parse::<TokenStream>()
@@ -1492,7 +1465,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     /// value, adding whatever definition that takes.
     ///
     /// A value that one of the shared functions produces records that
-    /// function, which [`TypespaceRenderer::render`] defines once for
+    /// function, which [`Outputspace::into_codespace`] defines once for
     /// the whole codespace, and yields the path that instantiates it.
     /// Any other value takes a function of its own, named for the
     /// property and added to the module here.
@@ -1502,11 +1475,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         rust_name: &str,
         type_id: &Id,
         value: &serde_json::Value,
-        cs: &mut codespace::Codespace,
+        out: &mut Outputspace,
     ) -> String {
         match shared_default_fn(self.types, type_id, value) {
             Some(SharedDefaultFn { helper, path }) => {
-                self.default_helpers.borrow_mut().insert(helper);
+                out.add_default_helper(helper);
                 path
             }
             None => {
@@ -1524,7 +1497,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     value,
                     type_id.clone(),
                 );
-                cs.get_root_mod().get_mod("defaults").add_item(
+                out.cs().get_root_mod().get_mod("defaults").add_item(
                     &fn_name_str,
                     quote! {
                         pub(super) fn #fn_name_ident() -> #ty_for_fn {
