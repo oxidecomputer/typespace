@@ -79,7 +79,7 @@ pub mod both {
         pub tags: Vec<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub flag: bool,
-        #[serde(default, skip)]
+        #[serde(default)]
         pub nothing: (),
         #[serde(default = "defaults::outer_peanut")]
         pub peanut: String,
@@ -257,7 +257,7 @@ pub mod deserialize_only {
         pub tags: Vec<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub flag: bool,
-        #[serde(default, skip)]
+        #[serde(default)]
         pub nothing: (),
         #[serde(default = "defaults::outer_peanut")]
         pub peanut: String,
@@ -496,7 +496,7 @@ pub mod serialize_only {
         pub tags: Vec<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub flag: bool,
-        #[serde(default, skip)]
+        #[serde(default)]
         pub nothing: (),
         #[serde(default = "defaults::outer_peanut")]
         pub peanut: String,

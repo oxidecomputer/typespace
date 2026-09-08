@@ -1515,9 +1515,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::Array(_, _) | Type::Tuple(_) => {}
 
             Type::Unit => {
-                // There's only one value for the unit type, so I guess we can
-                // unconditionally skip serializing it.
-                serde_options.push(quote! { skip });
+                // TODO 9.7.2026
+                // It's possible that we could add skip here, but typify
+                // doesn't do it, and it could also screw up JsonSchema
+                // generation.
             }
 
             Type::Boolean => {
