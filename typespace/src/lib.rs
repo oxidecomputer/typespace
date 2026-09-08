@@ -984,18 +984,23 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     /// the extra derives from settings.
     ///
     /// `comparison_exempt` marks a type as one of the two forms whose
-    /// derive list keeps `Eq`, `PartialEq`, `Ord`, `PartialOrd`, and
-    /// `Hash` under `typify_compat`: an enum whose variants are all unit
-    /// variants, or a newtype wrapping a `String`. Under that setting,
-    /// every other type has those five traits trimmed from the rendered
-    /// list here, even where trait resolution granted them because some
-    /// container depends on this type having them (a map key needs
-    /// `Eq`/`Hash`, or `Ord`, for the container itself to derive them).
-    /// The trim happens only here, at render, so that dependency keeps
-    /// flowing through trait resolution undisturbed; this function does
-    /// not add back a manual implementation to cover what it withholds,
-    /// matching typify, which never wrote one for these five traits
-    /// outside its two exceptions.
+    /// derive list keeps `Copy`, `Eq`, `PartialEq`, `Ord`, `PartialOrd`,
+    /// and `Hash` under `typify_compat`: an enum whose variants are all
+    /// unit variants, or a newtype wrapping a `String`. Under that
+    /// setting, every other type has those six traits trimmed from the
+    /// rendered list here, even where trait resolution granted them
+    /// because some container depends on this type having them (a map
+    /// key needs `Eq`/`Hash`, or `Ord`, for the container itself to
+    /// derive them). The trim happens only here, at render, so that
+    /// dependency keeps flowing through trait resolution undisturbed;
+    /// this function does not add back a manual implementation to cover
+    /// what it withholds, matching typify, which never wrote one for
+    /// these six traits outside its two exceptions.
+    ///
+    /// `Copy` reaches only the first of those two forms in practice: a
+    /// newtype wrapping a `String` never carries `Copy` into rendering,
+    /// since a `String` is not `Copy` and trait resolution drops it
+    /// long before this point.
     pub(crate) fn render_derives(
         &self,
         traits: &TypespaceTraitSet,
@@ -1019,13 +1024,21 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             });
 
         // TYPIFY COMPAT
-        // typify derives these five only for an all-unit enum or a
+        // typify derives these six only for an all-unit enum or a
         // string newtype; everywhere else it never derives or
         // implements them, even where a container elsewhere depends
         // on the type having them. typify_compat matches that outside
         // of the two exempted forms, without touching what trait
         // resolution computed.
-        const COMPARISON_TRAITS: [TypespaceTrait; 5] = [
+        //
+        // Copy's rule is narrower: typify grants it to the all-unit
+        // enum alone, never to a string newtype. The shared exemption
+        // is still right for it, because a string newtype wraps a
+        // String and `provides` withholds Copy from String, so trait
+        // resolution has already dropped it before rendering sees the
+        // type.
+        const WITHHELD_TRAITS: [TypespaceTrait; 6] = [
+            TypespaceTrait::Copy,
             TypespaceTrait::Eq,
             TypespaceTrait::PartialEq,
             TypespaceTrait::Ord,
@@ -1037,7 +1050,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             .filter(|tt| {
                 comparison_exempt
                     || !self.settings.typify_compat
-                    || !COMPARISON_TRAITS.contains(*tt)
+                    || !WITHHELD_TRAITS.contains(*tt)
             })
             .map(|tt| tt.render(self.settings))
             .collect::<Vec<_>>();

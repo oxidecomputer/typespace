@@ -3237,6 +3237,38 @@ fn test_copy_desired_renders_and_compiles() {
     }
 }
 
+// The other half of the rule the test above pins: under typify_compat,
+// `Copy` survives only on the form typify itself grants it to. typify
+// extends its derive set with Copy in `output_enum` alone, and only
+// when every variant is payload-free; `output_struct` and
+// `output_newtype` never name it, however Copy-eligible their contents
+// are.
+#[test]
+fn test_copy_withheld_under_typify_compat() {
+    let builder = typespace_builder!(Settings::maximal().with_typify_compat(true), {
+        struct Port(u32);
+
+        enum Color {
+            Red,
+            Green,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        !common::derives_of(&file, "Port").contains(&"Copy".to_string()),
+        "Port kept Copy under typify_compat, where typify grants it to \
+         no newtype"
+    );
+    assert!(
+        common::derives_of(&file, "Color").contains(&"Copy".to_string()),
+        "Color lost Copy under typify_compat, where typify grants it to \
+         every all-unit-variant enum"
+    );
+}
+
 // Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
 // a desired Copy drops at a type holding either. Clone is required
 // directly, as in the String case above, so a surviving derive
