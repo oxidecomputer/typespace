@@ -46,6 +46,7 @@ impl ::std::default::Default for Beta {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn default_bool<const V: bool>() -> bool {
         V

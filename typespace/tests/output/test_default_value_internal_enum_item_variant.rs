@@ -28,6 +28,7 @@ impl ::std::default::Default for InternalItemDefault {
 pub struct Payload {
     pub y: u32,
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn internal_item_default_solo() -> super::Internal {
         super::Internal::Solo

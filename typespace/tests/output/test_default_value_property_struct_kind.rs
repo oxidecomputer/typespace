@@ -14,6 +14,7 @@ impl ::std::default::Default for PropertyStructDefault {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn property_struct_default_inner() -> super::Inner {
         super::Inner { x: 5_u32 }

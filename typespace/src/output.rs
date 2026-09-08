@@ -52,6 +52,15 @@ impl Outputspace {
             }
         }
 
+        // A per-property function creates the module as it renders and
+        // a shared helper creates it just above, so document it here:
+        // the one point both paths pass through.
+        if cs.get_root_mod().has_mod("defaults") {
+            cs.get_root_mod()
+                .get_mod("defaults")
+                .add_docs(" Generation of default values for serde.");
+        }
+
         cs
     }
 }

@@ -43,6 +43,7 @@ impl ::std::default::Default for E {
         Self { d: defaults::e_d() }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn b_a() -> super::A {
         super::A {

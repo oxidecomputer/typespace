@@ -110,6 +110,7 @@ impl ::std::default::Default for TupleStructDefaults {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn tuple_struct_defaults_fixed() -> super::FixedTuple {
         super::FixedTuple(1_u32, "a".to_string())

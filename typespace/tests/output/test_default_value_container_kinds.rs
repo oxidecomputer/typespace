@@ -22,6 +22,7 @@ impl ::std::default::Default for ContainerDefaults {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn container_defaults_counts() -> ::std::collections::BTreeMap<
         ::std::string::String,

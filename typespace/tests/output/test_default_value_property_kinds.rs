@@ -48,6 +48,7 @@ impl ::std::convert::From<u32> for Wrapped {
         Self(value)
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn default_nzu64<T, const V: u64>() -> T
     where

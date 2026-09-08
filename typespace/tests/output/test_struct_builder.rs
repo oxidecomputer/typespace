@@ -116,6 +116,7 @@ pub mod builder {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn default_u64<T, const V: u64>() -> T
     where

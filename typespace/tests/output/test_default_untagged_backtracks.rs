@@ -33,6 +33,7 @@ impl ::std::convert::From<u32> for Wrap {
         Self(value)
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn holder_u() -> super::U {
         super::U::Second {

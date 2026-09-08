@@ -178,6 +178,7 @@ pub mod both {
             Self(value)
         }
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn outer_peanut() -> String {
             "peanuts".to_string()
@@ -344,6 +345,7 @@ pub mod deserialize_only {
             Self(value)
         }
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn outer_peanut() -> String {
             "peanuts".to_string()
@@ -431,6 +433,7 @@ pub mod neither {
             Self(value)
         }
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn outer_peanut() -> String {
             "peanuts".to_string()
@@ -558,6 +561,7 @@ pub mod serialize_only {
             Self(value)
         }
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn outer_peanut() -> String {
             "peanuts".to_string()

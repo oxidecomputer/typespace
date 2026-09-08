@@ -10,6 +10,7 @@ impl ::std::default::Default for Switch {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn default_bool<const V: bool>() -> bool {
         V

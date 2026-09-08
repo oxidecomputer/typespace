@@ -38,6 +38,7 @@ impl ::std::default::Default for KeyedDefaults {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn keyed_defaults_counts() -> ::std::collections::BTreeMap<
         super::Key,

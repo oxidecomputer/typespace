@@ -91,6 +91,7 @@ impl ::std::convert::From<(u32, ::std::string::String)> for Untagged {
         Self::AsDuo(value.0, value.1)
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn enum_defaults_adjacent_item() -> super::Adjacent {
         super::Adjacent::Newtype(7_u32)

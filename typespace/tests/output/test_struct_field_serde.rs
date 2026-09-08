@@ -24,6 +24,7 @@ pub mod conflated_as_absent {
         #[serde(default = "defaults::conflated_as_absent_peanut_option")]
         pub peanut_option: Option<String>,
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn conflated_as_absent_peanut_option() -> Option<String> {
             Some("peanuts".to_string())
@@ -54,6 +55,7 @@ pub mod conflated_as_null {
         #[serde(default = "defaults::conflated_as_null_peanut_option")]
         pub peanut_option: Option<String>,
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn conflated_as_null_peanut_option() -> Option<String> {
             Some("peanuts".to_string())
@@ -85,6 +87,7 @@ pub mod custom_type {
         #[serde(default = "defaults::custom_type_peanut_option")]
         pub peanut_option: Option<String>,
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn custom_type_peanut_option() -> Option<String> {
             Some("peanuts".to_string())
@@ -120,6 +123,7 @@ pub mod double_option {
         #[serde(default = "defaults::double_option_peanut_option")]
         pub peanut_option: Option<String>,
     }
+    /// Generation of default values for serde.
     pub mod defaults {
         pub(super) fn double_option_peanut_option() -> Option<String> {
             Some("peanuts".to_string())

@@ -10,6 +10,7 @@ impl ::std::default::Default for NullDefault {
         }
     }
 }
+/// Generation of default values for serde.
 pub mod defaults {
     pub(super) fn null_default_maybe() -> ::std::option::Option<u32> {
         ::std::option::Option::None
