@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 use crate::build::{
     JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt, check_properties, validate_ident,
 };
+use crate::default::{EnumDefault, generate_default_enum};
 use crate::error::{Error, NameAxis};
 use crate::serde_attrs::SerdeDerives;
 use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
@@ -279,6 +280,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
     pub(crate) fn render(
         &self,
+        id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
         cs: &mut codespace::Codespace,
     ) -> TokenStream {
@@ -288,10 +290,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     name,
                     description,
                     default,
-                    built: Some(TypeCommonBuilt {
-                        traits,
-                        from_string_irrefutable: _,
-                    }),
+                    built:
+                        Some(TypeCommonBuilt {
+                            traits,
+                            from_string_irrefutable: _,
+                        }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -357,6 +360,37 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         let variant_from = self.render_variant_from(typespace, &name_ident);
 
+        let (default_impl, unit_default_value) =
+            if derived_traits.contains(&TypespaceTrait::Default) {
+                let default_value = &default
+                    .as_ref()
+                    .expect("validated type with Default among its impls must have a valid default")
+                    .0;
+                let generated_default = generate_default_enum(
+                    typespace.types,
+                    typespace.settings,
+                    &default_value,
+                    id.clone(),
+                );
+
+                match generated_default {
+                    EnumDefault::Value(default_value) => {
+                        let default_impl = quote! {
+                            impl ::std::default::Default for #name_ident {
+                                fn default() -> Self {
+                                    #default_value
+                                }
+                            }
+                        };
+                        derived_traits.remove(TypespaceTrait::Default);
+                        (default_impl, None)
+                    }
+                    EnumDefault::Variant(variant_name) => (TokenStream::new(), Some(variant_name)),
+                }
+            } else {
+                (TokenStream::new(), None)
+            };
+
         let rendered_variants = variants.iter().map(|variant| {
             let EnumVariant {
                 rust_name,
@@ -368,6 +402,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             let mut variant_serde = serde_derives.attrs();
             variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
             let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+
+            let default_attr = (unit_default_value.as_ref() == Some(rust_name)).then(|| {
+                quote! { #[default] }
+            });
 
             let data = match details {
                 VariantDetails::Unit => TokenStream::new(),
@@ -396,6 +434,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             quote! {
                 #description
                 #variant_serde
+                #default_attr
                 #name #data
             }
         });
@@ -405,19 +444,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         if serde_derives.deserialize() && *deny_unknown_fields {
             serde.push(quote! { deny_unknown_fields });
         }
-
-        // `Default` comes out of the derive list unconditionally: a derived
-        // `Default` on an enum needs a `#[default]` variant, and typespace
-        // does not invent one. What is owed instead, whenever the trait set
-        // contains `Default`, is a hand-written impl built from `default`.
-        //
-        // Right now we only support manual implementations of Default
-
-        // TODO 9/4/2026
-        // and we don't even do that yet..
-        let _default_impl_owed = derived_traits
-            .remove(TypespaceTrait::Default)
-            .then_some(default);
 
         let derives_attr =
             typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit);
@@ -432,6 +458,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             pub enum #name_ident {
                 #( #rendered_variants, )*
             }
+
+            #default_impl
 
             #special_impls
             #( #variant_from )*

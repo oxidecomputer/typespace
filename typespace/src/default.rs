@@ -64,6 +64,43 @@ where
         .expect("a value should be generated with Mode::Generate")
 }
 
+pub(crate) enum EnumDefault {
+    Value(TokenStream),
+    Variant(String),
+}
+
+pub(crate) fn generate_default_enum<Id>(
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+    value: &serde_json::Value,
+    id: Id,
+) -> EnumDefault
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let imp = DefaultImpl {
+        types,
+        settings,
+        scope: None,
+        mode: Mode::Generate,
+    };
+    let mut expansion_set = Vec::new();
+
+    let Some(Type::Enum(enum_info)) = types.get(&id) else {
+        unreachable!("this should only be called on an enum type")
+    };
+
+    let enum_default = imp
+        .default_impl_enum(&mut expansion_set, enum_info, value, id)
+        .expect("an error should not be possible post-validation")
+        .expect("a value should be generated with Mode::Generate");
+
+    match (enum_default, &settings.typify_compat) {
+        ((_, Some(variant_name)), false) => EnumDefault::Variant(variant_name),
+        ((default_value, _), _) => EnumDefault::Value(default_value),
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Mode {
     Check,
@@ -142,7 +179,9 @@ where
     ) -> Result<Option<TokenStream>, Error<Id>> {
         let ty = self.types.get(&id).unwrap();
         match ty {
-            Type::Enum(enum_info) => self.default_impl_enum(expansion_set, enum_info, value, id),
+            Type::Enum(enum_info) => self
+                .default_impl_enum(expansion_set, enum_info, value, id)
+                .map(|ok| ok.map(|some| some.0)),
             Type::Struct(struct_info) => {
                 self.default_impl_struct(expansion_set, struct_info, value, id)
             }
@@ -708,7 +747,7 @@ where
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         match enum_info.tag_type.as_ref().unwrap() {
             build::EnumTagType::External => {
                 self.default_impl_enum_external(expansion_set, enum_info, value, id)
@@ -725,13 +764,16 @@ where
         }
     }
 
+    /// An externally tagged enum uses a bare string to represent unit
+    /// variants, and a one-item object with the variant name as the key
+    /// for all other variant types.
     fn default_impl_enum_external(
         &self,
         expansion_set: &mut Vec<(Id, serde_json::Value)>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         if let Some(variant_name) = value.as_str() {
             let variant = enum_info
                 .variants
@@ -749,9 +791,22 @@ where
                     reason: format!("variant {} not found in enum", variant_name),
                 })?;
 
+            if variant.details != VariantDetails::Unit {
+                return Err(Error::InvalidDefault {
+                    value: value.clone(),
+                    id: id.clone(),
+                    reason: format!("non-unit variant {} without its payload", variant_name),
+                });
+            }
+
             let var_ident = format_ident!("{}", variant.rust_name);
             let type_ident = self.render_ident(&id);
-            Ok(self.generate(|| quote! { #type_ident::#var_ident }))
+            Ok(self.generate(|| {
+                (
+                    quote! { #type_ident::#var_ident },
+                    Some(variant.rust_name.clone()),
+                )
+            }))
         } else if let Some(map) = value.as_object() {
             if map.len() != 1 {
                 return Err(Error::InvalidDefault {
@@ -781,16 +836,17 @@ where
                 VariantDetails::Unit => Err(Error::InvalidDefault {
                     value: value.clone(),
                     id: id.clone(),
-                    reason: format!("variant {} carries no payload", variant_name),
+                    reason: format!("unit variant {} carries no payload", variant_name),
                 }),
                 VariantDetails::Item(item_id) => {
                     let item = self.default_impl(expansion_set, item_id.clone(), var_value)?;
-                    Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
+                    Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
                 }
                 VariantDetails::Tuple(items) => {
                     let elems =
                         self.default_impl_tuple_items(expansion_set, items, var_value, &id)?;
-                    Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
+                    Ok(elems
+                        .map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
                 }
                 VariantDetails::Struct(props) => {
                     let rendered = self.default_impl_struct_props(
@@ -799,7 +855,12 @@ where
                         var_value,
                         id.clone(),
                     )?;
-                    Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                    Ok(self.generate(|| {
+                        (
+                            quote! { #type_ident::#var_ident { #( #rendered, )* } },
+                            None,
+                        )
+                    }))
                 }
             }
         } else {
@@ -820,7 +881,7 @@ where
         tag: &str,
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         let Some(map) = value.as_object() else {
             return Err(Error::InvalidDefault {
                 value: value.clone(),
@@ -861,19 +922,29 @@ where
         );
 
         match &variant.details {
-            VariantDetails::Unit => Ok(self.generate(|| quote! { #type_ident::#var_ident })),
+            VariantDetails::Unit => Ok(self.generate(|| {
+                (
+                    quote! { #type_ident::#var_ident },
+                    Some(variant.rust_name.clone()),
+                )
+            })),
             // Serde accepts an internally-tagged newtype variant as long
             // as its payload serializes as a map, so the tag can sit
             // alongside the payload's own keys; walk the payload's type
             // against the tag-stripped object exactly as Struct does.
             VariantDetails::Item(item_id) => {
                 let item = self.default_impl(expansion_set, item_id.clone(), &inner_value)?;
-                Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
+                Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             VariantDetails::Struct(props) => {
                 let rendered =
                     self.default_impl_struct_props(expansion_set, props, &inner_value, id.clone())?;
-                Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                Ok(self.generate(|| {
+                    (
+                        quote! { #type_ident::#var_ident { #( #rendered, )* } },
+                        None,
+                    )
+                }))
             }
             // Serde rejects an internally-tagged tuple variant outright: a
             // tuple's payload has no keys to merge the tag alongside.
@@ -896,7 +967,7 @@ where
         content: &str,
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
             value: value.clone(),
             id: id.clone(),
@@ -935,17 +1006,20 @@ where
         let type_ident = self.render_ident(&id);
 
         match (&variant.details, content_value) {
-            (VariantDetails::Unit, None) => {
-                Ok(self.generate(|| quote! { #type_ident::#var_ident }))
-            }
+            (VariantDetails::Unit, None) => Ok(self.generate(|| {
+                (
+                    quote! { #type_ident::#var_ident },
+                    Some(variant.rust_name.clone()),
+                )
+            })),
             (VariantDetails::Item(item_id), Some(content_value)) => {
                 let item = self.default_impl(expansion_set, item_id.clone(), content_value)?;
-                Ok(item.map(|item| quote! { #type_ident::#var_ident(#item) }))
+                Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             (VariantDetails::Tuple(items), Some(content_value)) => {
                 let elems =
                     self.default_impl_tuple_items(expansion_set, items, content_value, &id)?;
-                Ok(elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) }))
+                Ok(elems.map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
                 let rendered = self.default_impl_struct_props(
@@ -954,7 +1028,12 @@ where
                     content_value,
                     id.clone(),
                 )?;
-                Ok(self.generate(|| quote! { #type_ident::#var_ident { #( #rendered, )* } }))
+                Ok(self.generate(|| {
+                    (
+                        quote! { #type_ident::#var_ident { #( #rendered, )* } },
+                        None,
+                    )
+                }))
             }
             _ => Err(Error::InvalidDefault {
                 value: value.clone(),
@@ -970,7 +1049,7 @@ where
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: Id,
-    ) -> Result<Option<TokenStream>, Error<Id>> {
+    ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         let type_ident = self.render_ident(&id);
 
         // Untagged deserialization tries each variant in declaration
@@ -989,9 +1068,14 @@ where
                     // TODO 9/6/2026
                     // Need to consider unit variants with non-null
                     // serializations.
-                    VariantDetails::Unit => value
-                        .is_null()
-                        .then(|| self.generate(|| quote! { #type_ident::#var_ident })),
+                    VariantDetails::Unit => value.is_null().then(|| {
+                        self.generate(|| {
+                            (
+                                quote! { #type_ident::#var_ident },
+                                Some(variant.rust_name.clone()),
+                            )
+                        })
+                    }),
 
                     // Note that in this case we don't reduce the size of the
                     // value so this opens the door for infinite recursion if
@@ -999,20 +1083,27 @@ where
                     VariantDetails::Item(item_id) => self
                         .expansion_guard_default_impl(expansion_set, item_id.clone(), value)
                         .ok()
-                        .map(|item| item.map(|item| quote! { #type_ident::#var_ident(#item) })),
+                        .map(|item| {
+                            item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None))
+                        }),
                     VariantDetails::Tuple(items) => self
                         .default_impl_tuple_items(expansion_set, items, value, &id)
                         .ok()
                         .map(|elems| {
-                            elems.map(|elems| quote! { #type_ident::#var_ident( #( #elems ),* ) })
+                            elems.map(|elems| {
+                                (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)
+                            })
                         }),
                     VariantDetails::Struct(props) => self
                         .default_impl_struct_props(expansion_set, props, value, id.clone())
                         .ok()
                         .map(|rendered| {
-                            self.generate(
-                                || quote! { #type_ident::#var_ident { #( #rendered, )* } },
-                            )
+                            self.generate(|| {
+                                (
+                                    quote! { #type_ident::#var_ident { #( #rendered, )* } },
+                                    None,
+                                )
+                            })
                         }),
                 }
             })

@@ -5317,3 +5317,185 @@ fn empty_deny_list_constraints_are_rejected() {
         "expected VacuousConstraints, got: {err}"
     );
 }
+
+#[test]
+fn test_enum_derive_default() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::Default),
+        {
+            #[default = "Foo"]
+            enum EnumExternal {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[tag = "tag"]
+            #[default = { tag: "Foo" }]
+            enum EnumInternal {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[tag = "tag", content = "content"]
+            #[default = { tag: "Foo" }]
+            enum EnumAdjacent {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[untagged]
+            #[default = null]
+            enum EnumUntagged {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_enum_derive_default.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let instance = EnumExternal::default();
+        assert!(matches!(instance, EnumExternal::Foo));
+
+        let instance = EnumInternal::default();
+        assert!(matches!(instance, EnumInternal::Foo));
+
+        let instance = EnumAdjacent::default();
+        assert!(matches!(instance, EnumAdjacent::Foo));
+
+        let instance = EnumUntagged::default();
+        assert!(matches!(instance, EnumUntagged::Foo));
+    }
+}
+
+#[test]
+fn test_enum_generate_default_for_typify() {
+    let settings = Settings::minimal()
+        .with_desired_trait(TypespaceTrait::Default)
+        .with_typify_compat(true);
+    let builder = typespace_builder!(settings,
+        {
+            #[default = "Foo"]
+            enum EnumExternal {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[tag = "tag"]
+            #[default = { tag: "Foo" }]
+            enum EnumInternal {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[tag = "tag", content = "content"]
+            #[default = { tag: "Foo" }]
+            enum EnumAdjacent {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[untagged]
+            #[default = null]
+            enum EnumUntagged {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_enum_generate_default_for_typify.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let instance = EnumExternal::default();
+        assert!(matches!(instance, EnumExternal::Foo));
+
+        let instance = EnumInternal::default();
+        assert!(matches!(instance, EnumInternal::Foo));
+
+        let instance = EnumAdjacent::default();
+        assert!(matches!(instance, EnumAdjacent::Foo));
+
+        let instance = EnumUntagged::default();
+        assert!(matches!(instance, EnumUntagged::Foo));
+    }
+}
+
+#[test]
+fn test_enum_generate_default() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::Default),
+        {
+            #[default = { Bar: "None" }]
+            enum EnumExternal {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[tag = "tag"]
+            #[default = { tag: "Bar", value: "None" }]
+            enum EnumInternal {
+                Foo,
+                Bar { value: String },
+                Baz,
+            }
+
+            #[tag = "tag", content = "content"]
+            #[default = { tag: "Bar", content: "None" }]
+            enum EnumAdjacent {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+
+            #[untagged]
+            #[default = "None"]
+            enum EnumUntagged {
+                Foo,
+                Bar(String),
+                Baz,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_enum_generate_default.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let instance = EnumExternal::default();
+        assert!(matches!(instance, EnumExternal::Bar(value) if value == "None"));
+
+        let instance = EnumInternal::default();
+        assert!(matches!(instance, EnumInternal::Bar { value } if value == "None"));
+
+        let instance = EnumAdjacent::default();
+        assert!(matches!(instance, EnumAdjacent::Bar(value) if value == "None"));
+
+        let instance = EnumUntagged::default();
+        assert!(matches!(instance, EnumUntagged::Bar(value) if value == "None"));
+    }
+}

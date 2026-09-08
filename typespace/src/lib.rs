@@ -871,7 +871,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     fn render(&self) -> codespace::Codespace {
         let mut cs = codespace::Codespace::default();
 
-        for typ in self.types.values() {
+        for (id, typ) in self.types {
             match typ {
                 Type::Struct(s) => {
                     let name = s.common.built_name().to_string();
@@ -880,7 +880,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::Enum(e) => {
                     let name = e.common.built_name().to_string();
-                    let tokens = e.render(self, &mut cs);
+                    let tokens = e.render(id, self, &mut cs);
                     cs.add_item(name, tokens);
                 }
                 Type::UnitStruct(u) => {
