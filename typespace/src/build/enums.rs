@@ -483,9 +483,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             #from_str_impl
             #try_from_impl
 
-            #( #variant_from )*
-
             #default_impl
+
+            #( #variant_from )*
         }
     }
 

@@ -535,6 +535,36 @@ fn test_enum_variant_from() {
     }
 }
 
+// `Default` precedes an enum's per-variant payload conversions. This
+// enum carries both, so the order guard over tests/output reads a group
+// that ranks the two against each other.
+#[test]
+fn test_enum_default_precedes_variant_from() {
+    let settings = Settings::minimal()
+        .with_desired_trait(TypespaceTrait::Default)
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq);
+
+    let builder = typespace_builder!(settings, {
+        #[default = { Count: 0 }]
+        enum Choice {
+            Count(u32),
+            Flag(bool),
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_enum_default_precedes_variant_from.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(import::Choice::default(), import::Choice::Count(0));
+        assert_eq!(import::Choice::from(true), import::Choice::Flag(true));
+    }
+}
+
 // A single-type tuple body is a newtype struct unless #[tuple] asks
 // otherwise, in which case it is a one-field tuple struct. The two
 // differ on the wire: a newtype is transparent, a tuple struct is a

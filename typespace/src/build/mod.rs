@@ -32,9 +32,9 @@
 //!    (allow-list and deny-list newtypes; a string-constrained
 //!    newtype's constructor is its `TryFrom<&str>` from bucket 3, so
 //!    this bucket is empty for it).
-//! 5. Enum per-variant payload conversions, `From<Payload> for Self`,
+//! 5. `Default`.
+//! 6. Enum per-variant payload conversions, `From<Payload> for Self`,
 //!    in variant declaration order.
-//! 6. `Default`.
 //! 7. The inherent `impl Type { pub fn builder() }`.
 //! 8. `Deserialize`, then `JsonSchema`.
 //!
@@ -82,6 +82,14 @@
 //! also in bucket 3, but `FromStr` is emitted first). The intended
 //! order puts `TryFrom<&str>` in bucket C, ahead of `FromStr` in
 //! bucket D, so the callee always precedes its caller.
+//!
+//! The two orders also disagree about `Default` and an enum's
+//! per-variant payload conversions, and that disagreement is
+//! deliberate rather than a typo in either list: typify 1 emits
+//! `Default` first, so the order in force does too, while the intended
+//! order groups the variant conversions with the other type-specific
+//! conversions in bucket B and leaves `Default` among the hand-written
+//! impls in bucket D.
 
 mod alias;
 mod common;

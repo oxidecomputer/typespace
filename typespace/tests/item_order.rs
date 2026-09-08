@@ -105,9 +105,9 @@ const ORDER: &[Slot] = &[
     Slot::TryFromString,
     // The constrained-newtype constructor.
     Slot::TryFromInner,
+    Slot::Default,
     // Enum per-variant payload conversions.
     Slot::VariantFrom,
-    Slot::Default,
     // The `pub fn builder()` accessor.
     Slot::Inherent,
     Slot::Serialize,
