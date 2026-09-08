@@ -208,3 +208,128 @@ fn property_level_default_fills_a_flattened_struct() {
     assert!(rendered.contains("mod defaults"), "{rendered}");
     assert!(rendered.contains("inner: super::Inner {"), "{rendered}");
 }
+
+/// A struct cannot both deny unknown fields and flatten a property.
+///
+/// serde decides `deny_unknown_fields` in the outer struct's
+/// deserializer, which meets a key the flattened type may claim and
+/// has no way to ask, so serde documents the pair as unsupported.
+/// `finalize` refuses it rather than emitting code whose behavior
+/// cannot be read off the source. The default-value walk relies on
+/// this: its flattened branch asserts the flag is clear.
+#[test]
+fn deny_unknown_fields_with_a_flattened_property_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[default = { "a": 1, "b": 2 }]
+        #[deny_unknown_fields]
+        struct Outer {
+            a: u32,
+            #[flatten]
+            inner: Inner,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject deny_unknown_fields with a flattened property");
+    };
+    assert!(
+        matches!(err, Error::FlattenWithDenyUnknownFields { .. }),
+        "{err:?}"
+    );
+}
+
+/// The rule holds with no default value in sight: the combination is
+/// refused for what it would mean at deserialization, not for what it
+/// does to the value walk.
+#[test]
+fn deny_unknown_fields_with_a_flattened_property_is_rejected_without_a_default() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[deny_unknown_fields]
+        struct Outer {
+            a: u32,
+            #[flatten]
+            inner: Inner,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject deny_unknown_fields with a flattened property");
+    };
+    assert!(
+        matches!(err, Error::FlattenWithDenyUnknownFields { .. }),
+        "{err:?}"
+    );
+}
+
+/// A value the flattened type cannot accept leaves an OPTIONAL
+/// flattened property absent, and the field is still initialized.
+///
+/// `Inner` requires `b`, which the default value never names, so the
+/// walk into the flattened property fails. Because the property is
+/// optional, that failure means "absent" rather than propagating: an
+/// optional property has a legal empty state and the value walk uses
+/// it. The field must still appear in the struct literal, since
+/// omitting it would leave code that does not compile.
+///
+/// One consequence worth stating: a malformed value for an optional
+/// flattened property is indistinguishable from a deliberately absent
+/// one. That matches how an unclaimed key is tolerated outside
+/// `deny_unknown_fields`.
+#[test]
+fn unusable_value_leaves_an_optional_flattened_property_absent() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[default = { "a": 1 }]
+        struct Outer {
+            a: u32,
+            #[flatten]
+            inner: Optional<Inner>,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let body = default_body(&ts, "Outer");
+    assert!(body.contains("a: 1"), "{body}");
+    assert!(body.contains("inner: Default::default()"), "{body}");
+}
+
+/// A flattened map takes only the keys no named property claimed.
+///
+/// A map claims every key it is handed, so handing it the whole value
+/// would fold the outer struct's own properties into it. serde routes
+/// a key to the named property first and offers the flattened type
+/// only what is left; the value walk matches that.
+#[test]
+fn a_flattened_map_leaves_claimed_keys_to_their_properties() {
+    let builder = typespace_builder!(settings(), {
+        #[default = { "something": "s", "x": "1", "y": "2" }]
+        struct Foo {
+            something: String,
+            #[flatten]
+            rest: Map<String, String>,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let body = default_body(&ts, "Foo");
+    assert!(body.contains("something: \"s\".to_string()"), "{body}");
+    assert!(body.contains("\"x\""), "{body}");
+    assert!(body.contains("\"y\""), "{body}");
+    assert_eq!(
+        body.matches("something").count(),
+        1,
+        "`something` is claimed by its own property and must not also \
+         land in the flattened map: {body}"
+    );
+}

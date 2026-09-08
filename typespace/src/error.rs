@@ -107,6 +107,26 @@ where
         axis: NameAxis,
     },
 
+    /// A struct both denies unknown fields and flattens a property.
+    ///
+    /// serde cannot honor the combination: `deny_unknown_fields` is
+    /// decided by the outer struct's deserializer, which sees a key
+    /// the flattened type may claim and has no way to ask. serde
+    /// documents the pair as unsupported. typespace refuses it rather
+    /// than emitting code whose runtime behavior nobody can predict
+    /// from reading it.
+    #[error(
+        "`{type_name}` denies unknown fields and flattens the property \
+         `{property}`; serde does not support that combination"
+    )]
+    FlattenWithDenyUnknownFields {
+        /// The name of the struct carrying both.
+        type_name: String,
+        /// The Rust name of one flattened property. A struct may
+        /// flatten several; the first in declaration order is named.
+        property: String,
+    },
+
     /// Two types in the typespace share a name.
     ///
     /// Names come from the consumer, which is responsible for

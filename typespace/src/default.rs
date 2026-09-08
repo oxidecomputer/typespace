@@ -816,9 +816,12 @@ where
                     }
                 }
             } else {
+                // `check_type_structure` rejects a struct that both
+                // denies unknown fields and flattens a property, so a
+                // flattened property here means the flag is clear.
                 assert!(
                     !deny_unknown_fields,
-                    "per type validation should have caught deny_unknown_fields + flatten"
+                    "check_type_structure rejects deny_unknown_fields with a flattened property"
                 );
 
                 // We're flattening; take the full value and see if the
@@ -862,7 +865,7 @@ where
                     } else {
                         // TODO 9/8/2026
                         // qualify Default
-                        quote! { Default::default }
+                        quote! { Default::default() }
                     };
                     if self.mode == Mode::Generate {
                         let prop_ident = format_ident!("{}", prop_info.rust_name);

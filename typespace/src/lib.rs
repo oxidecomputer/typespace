@@ -614,6 +614,48 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// `type B = A` where `type A = !` bottoms out at a wrapper that
     /// directly contains `Never` (`A`), and that wrapper alone fails
     /// this check, which fails validation for the whole graph.
+    /// Per-type structural validation: rules a single type's own
+    /// declaration must satisfy, judged without reference to any other
+    /// type.
+    ///
+    /// This is the pass the Never-position and flatten rules both
+    /// belong to, per the direction that finalize wants general type
+    /// validation rather than a bespoke check per rule. It holds one
+    /// rule today. Two more belong here as they land:
+    ///
+    /// - a flattened property's type must be object shaped, which is
+    ///   what makes flattening meaningful at all;
+    /// - the Never-position rules in `check_never_positions`, which are
+    ///   per-type in exactly this sense.
+    ///
+    /// Add rules here rather than as new `check_*` methods.
+    fn check_type_structure(&self) -> Result<(), Error<Id>> {
+        for typ in self.types.values() {
+            let Type::Struct(struct_info) = typ else {
+                continue;
+            };
+            if !struct_info.deny_unknown_fields {
+                continue;
+            }
+            // serde decides deny_unknown_fields in the outer struct's
+            // deserializer, which cannot know whether a flattened type
+            // claims a given key, so the pair has no implementable
+            // meaning. Naming the first flattened property in
+            // declaration order is enough to locate the problem.
+            if let Some(prop) = struct_info
+                .properties
+                .iter()
+                .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
+            {
+                return Err(Error::FlattenWithDenyUnknownFields {
+                    type_name: struct_info.common.built_name().to_string(),
+                    property: prop.rust_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn check_never_positions(&self) -> Result<(), Error<Id>> {
         match self
             .types
@@ -780,6 +822,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // validation for which this is one kind of validation. There may be
         // multiple passes: per-type and then intra-type.
         self.check_never_positions()?;
+
+        // Per-type structural rules. Before check_type_defaults,
+        // because the default-value walk assumes a struct that denies
+        // unknown fields has no flattened property.
+        self.check_type_structure()?;
 
         // Check type defaults
         self.check_type_defaults()?;
