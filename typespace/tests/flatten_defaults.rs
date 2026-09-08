@@ -5,22 +5,31 @@
 //! A flattened property has no wire name of its own: its fields appear
 //! among the outer object's keys. So a default value written for the
 //! outer struct names the inner struct's fields directly, and the walk
-//! in `default.rs` has to route each key to whichever property claims
-//! it. Today it does neither, ending in two asserts that panic during
-//! `finalize`:
+//! in `default.rs` routes each key to whichever property claims it.
 //!
-//! ```ignore
-//! assert!(extra_keys.is_empty());
-//! assert!(flattened_properties.is_empty());
-//! ```
+//! The rules these tests pin:
 //!
-//! typify 1 implements this in `value_for_struct_props`
-//! (typify-impl/src/value.rs): it collects every key no ordinary
-//! property claims into one object and hands that object to each
-//! flattened property in turn, requiring the flattened type to be a
-//! struct, an option of one, or a map.
+//! - A named property claims its own key first. A flattened property
+//!   receives only what is left, which is what serde does at
+//!   deserialization and what keeps a flattened map from swallowing
+//!   the outer struct's own properties.
+//! - Every flattened property receives the same leftover keys and
+//!   takes what it recognizes, so two flattened properties each end up
+//!   with their own.
+//! - A key nothing claims is tolerated, matching serde, except under
+//!   `deny_unknown_fields`, where it is an error. The strictness of
+//!   the default-value check follows the strictness the struct itself
+//!   declares.
+//! - A value a flattened property cannot use leaves an optional one
+//!   absent rather than failing the whole walk, so a malformed value
+//!   there is indistinguishable from a deliberately absent one.
+//! - `deny_unknown_fields` alongside a flattened property is refused by
+//!   `finalize`, since serde cannot honor the pair.
 //!
-//! Every test here is red until that lands.
+//! typify 1 implements the routing in `value_for_struct_props`
+//! (typify-impl/src/value.rs), requiring the flattened type to be a
+//! struct, an option of one, or a map. typespace has no such structural
+//! check yet; see the journal.
 
 use typespace::{
     TypespaceTrait,
