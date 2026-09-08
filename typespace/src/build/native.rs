@@ -22,16 +22,6 @@ pub struct Native<Id> {
     // char and &'static str since schemars represents a char as a string of
     // length 1.
     pub(crate) parameters: Vec<Id>,
-
-    /// Whether the type's `FromStr` accepts every input string.
-    ///
-    /// This is an analysis fact tracked for internal use (deciding, for
-    /// example, whether an untagged enum with a string variant can
-    /// implement `FromStr` without a failure case), not a requestable
-    /// trait; it is fed by [`Native::new_string_like`] and is not part
-    /// of the public trait vocabulary.
-    #[allow(dead_code)]
-    pub(crate) from_string_irrefutable: bool,
 }
 
 impl<Id> Native<Id> {
@@ -79,7 +69,6 @@ impl<Id> Native<Id> {
             impls,
             unknown: TypespaceTraitSet::empty(),
             parameters,
-            from_string_irrefutable: false,
         }
     }
 
@@ -107,7 +96,6 @@ impl<Id> Native<Id> {
             .collect(),
             unknown: TypespaceTraitSet::empty(),
             parameters: Default::default(),
-            from_string_irrefutable: true,
         }
     }
 

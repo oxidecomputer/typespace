@@ -5,9 +5,9 @@ use quote::{format_ident, quote};
 use typespace::{
     TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::{
-        Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeStruct, Struct, StructProperty,
-        StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias, UnitStruct,
-        VariantDetails,
+        Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct,
+        Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type,
+        TypeAlias, UnitStruct, VariantDetails,
     },
     error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin},
     no_cycles,
@@ -4998,5 +4998,322 @@ fn untagged_enum_from_str_renders() {
     assert!(
         common::has_impl(&file, "FromStr", "Parsed"),
         "no FromStr impl for Parsed"
+    );
+}
+// An untagged enum's generated `FromStr` is a first-match-wins chain, so
+// a variant whose payload parses every string always wins and every
+// later variant is dead code. `Display` keeps forwarding to the variant
+// payloads; `FromStr` does not.
+#[test]
+fn untagged_enum_with_irrefutable_payload_loses_from_str() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+        {
+            #[untagged]
+            enum StrOrInt {
+                Text(String),
+                Count(u32),
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "StrOrInt"),
+        "no Display impl for StrOrInt"
+    );
+    assert!(
+        !common::has_impl(&file, "FromStr", "StrOrInt"),
+        "StrOrInt implements FromStr, but its Text arm parses every \
+         string, so Count is unreachable"
+    );
+}
+
+// The same enum with the variants swapped. The answer does not depend on
+// where the irrefutable payload sits in the variant list: typify 1 uses
+// `.any()`, and its `IntOrStr` in `multiple-instance-types.rs` has the
+// `String` variant last and still gets `Display` with no `FromStr`.
+#[test]
+fn untagged_enum_with_irrefutable_payload_last_loses_from_str() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+        {
+            #[untagged]
+            enum IntOrStr {
+                Count(u32),
+                Text(String),
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "IntOrStr"),
+        "no Display impl for IntOrStr"
+    );
+    assert!(
+        !common::has_impl(&file, "FromStr", "IntOrStr"),
+        "IntOrStr implements FromStr, but its Text arm parses every \
+         string, so Display and FromStr do not round-trip"
+    );
+}
+
+// The property is syntactic, not semantic. A native declaring `FromStr`
+// says nothing about which strings it accepts, and a newtype whose only
+// pattern is `".*"` has a validation step between the `&str` and the
+// constructed value even though the pattern accepts every string.
+// Neither payload is irrefutable, so the enum keeps both traits. This is
+// typify 1's `IdOrName` / `IdOrYolo`.
+#[test]
+fn untagged_enum_with_pattern_constrained_payload_keeps_from_str() {
+    let mut builder = TypespaceBuilder::new(
+        Settings::minimal()
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+    );
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "::id::Id".to_string(),
+            Type::Native(Native::new(
+                "::id::Id",
+                [TypespaceTrait::Display, TypespaceTrait::FromStr]
+                    .into_iter()
+                    .collect::<TypespaceTraitSet>(),
+                Vec::new(),
+            )),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "Yolo".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Yolo")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec![".*".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "IdOrYolo".to_string(),
+            Enum::new()
+                .name("IdOrYolo")
+                .tag_type(EnumTagType::Untagged)
+                .variants([
+                    EnumVariant::new("Id", VariantDetails::Item("::id::Id".to_string())),
+                    EnumVariant::new("Yolo", VariantDetails::Item("Yolo".to_string())),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "IdOrYolo"),
+        "no Display impl for IdOrYolo"
+    );
+    assert!(
+        common::has_impl(&file, "FromStr", "IdOrYolo"),
+        "no FromStr impl for IdOrYolo: every payload validates, so no \
+         arm swallows the rest"
+    );
+}
+
+// The property is transitive through unconstrained newtypes, so an
+// untagged enum over two separate `String` newtypes is in exactly the
+// same position as one with a bare `String` payload: the first arm
+// always wins. The newtypes keep their own `FromStr`; the enum does not.
+// This is typify 1's `ReferencesObjectValue`.
+#[test]
+fn untagged_enum_over_string_newtypes_loses_from_str() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_desired_trait(TypespaceTrait::Display)
+            .with_desired_trait(TypespaceTrait::FromStr),
+        {
+            struct Reference(String);
+            struct Literal(String);
+
+            #[untagged]
+            enum ReferenceOrLiteral {
+                Reference(Reference),
+                Literal(Literal),
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "FromStr", "Reference"),
+        "no FromStr impl for Reference"
+    );
+    assert!(
+        common::has_impl(&file, "Display", "ReferenceOrLiteral"),
+        "no Display impl for ReferenceOrLiteral"
+    );
+    assert!(
+        !common::has_impl(&file, "FromStr", "ReferenceOrLiteral"),
+        "ReferenceOrLiteral implements FromStr, but its Reference arm \
+         parses every string, so Literal is unreachable"
+    );
+
+    // The assertions above say why; the snapshot says what, and puts
+    // the answer through the compiler: the spliced-in enum has no
+    // `FromStr` for a dead `Literal` arm to hide in.
+    #[check_and_include(
+        "tests/output/untagged_enum_over_string_newtypes_loses_from_str.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let traits = crate::implemented_traits!(ReferenceOrLiteral);
+        assert!(traits.contains(&TypespaceTrait::Display));
+        assert!(!traits.contains(&TypespaceTrait::FromStr));
+
+        // Each newtype keeps the irrefutable FromStr of its own that
+        // costs the enum its FromStr.
+        assert_eq!("#/x".parse::<Reference>().unwrap().0, "#/x");
+        assert_eq!("plain".parse::<Literal>().unwrap().0, "plain");
+
+        // Display forwards to whichever payload the value holds.
+        assert_eq!(
+            ReferenceOrLiteral::Reference(Reference("#/x".to_string())).to_string(),
+            "#/x"
+        );
+        assert_eq!(
+            ReferenceOrLiteral::Literal(Literal("plain".to_string())).to_string(),
+            "plain"
+        );
+    }
+}
+
+// A desired `FromStr` is dropped silently; a required one is a
+// finalization error naming the variant whose payload swallows the rest.
+#[test]
+fn required_from_str_on_irrefutable_untagged_enum_conflicts() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::FromStr),
+        {
+            #[untagged]
+            enum StrOrInt {
+                Text(String),
+                Count(u32),
+            }
+        }
+    );
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("finalization unexpectedly succeeded");
+    };
+    let message = err.to_string();
+    let Error::TraitConflicts { conflicts } = err else {
+        panic!("expected TraitConflicts, got: {message}");
+    };
+
+    assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::FromStr);
+    assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
+    assert_eq!(conflict.offender, "StrOrInt");
+    assert!(
+        matches!(
+            &conflict.reason,
+            OffenderReason::IrrefutableVariantPayload { variant } if variant == "Text"
+        ),
+        "reason: {:#?}",
+        conflict.reason
+    );
+    assert!(
+        message.contains("Text"),
+        "the message does not name the offending variant:\n{message}"
+    );
+}
+
+// A `String` constraint with no minimum, no maximum, and no patterns
+// says nothing `NewtypeConstraints::None` does not already say, and it
+// is the one case where "syntactically constrained" and "irrefutable"
+// would disagree. Validation rejects it.
+#[test]
+fn vacuous_string_constraints_are_rejected() {
+    let result = NewtypeStruct::new("string".to_string())
+        .name("Vacuous")
+        .constraints(NewtypeConstraints::String {
+            min: None,
+            max: None,
+            patterns: Vec::new(),
+        })
+        .build();
+
+    let Err(err) = result else {
+        panic!("a String constraint with no bounds and no patterns is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::VacuousConstraints { name, kind }
+                if name == "Vacuous" && *kind == "string"
+        ),
+        "expected VacuousConstraints, got: {err}"
+    );
+}
+
+// An allow list with nothing on it admits no value at all, which is a
+// mistake at the source rather than a type worth generating.
+#[test]
+fn empty_allow_list_constraints_are_rejected() {
+    let result = NewtypeStruct::new("string".to_string())
+        .name("Vacuous")
+        .constraints(NewtypeConstraints::AllowList(Vec::new()))
+        .build();
+
+    let Err(err) = result else {
+        panic!("an empty allow list is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::VacuousConstraints { name, kind }
+                if name == "Vacuous" && *kind == "allow list"
+        ),
+        "expected VacuousConstraints, got: {err}"
+    );
+}
+
+// A deny list with nothing on it denies nothing, so the newtype is the
+// unconstrained one written the long way.
+#[test]
+fn empty_deny_list_constraints_are_rejected() {
+    let result = NewtypeStruct::new("string".to_string())
+        .name("Vacuous")
+        .constraints(NewtypeConstraints::DenyList(Vec::new()))
+        .build();
+
+    let Err(err) = result else {
+        panic!("an empty deny list is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::VacuousConstraints { name, kind }
+                if name == "Vacuous" && *kind == "deny list"
+        ),
+        "expected VacuousConstraints, got: {err}"
     );
 }

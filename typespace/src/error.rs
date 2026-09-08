@@ -229,6 +229,26 @@ where
         conflicts: Vec<TraitConflict<Id>>,
     },
 
+    /// A newtype struct states constraints with nothing in them.
+    ///
+    /// Three constructions say nothing that
+    /// [`NewtypeConstraints::None`](crate::build::NewtypeConstraints::None)
+    /// does not already say: a `String` constraint with no minimum, no
+    /// maximum, and no patterns, an empty allow list, and an empty deny
+    /// list. Each is a mistake at the source rather than a type worth
+    /// generating, so each is rejected.
+    #[error(
+        "the newtype struct `{name}` states {kind} constraints with \
+         nothing in them"
+    )]
+    VacuousConstraints {
+        /// The name of the newtype struct.
+        name: String,
+        /// Which kind of constraint is empty: `"string"`, `"allow
+        /// list"`, or `"deny list"`.
+        kind: &'static str,
+    },
+
     /// TODO 9/4/2026
     /// fix this up
     #[error("the value `{value}` does not fit the type `{id}`: {reason}")]
@@ -317,6 +337,13 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                 f,
                 "the generated {kind} with id `{offender}` cannot \
                  implement the required trait `{required}`"
+            )?,
+            OffenderReason::IrrefutableVariantPayload { variant } => write!(
+                f,
+                "the untagged enum with id `{offender}` cannot \
+                 implement the required trait `{required}`: its \
+                 `FromStr` would try the variants in order, and the \
+                 payload of its variant `{variant}` parses every string"
             )?,
         }
         // Render the chain innermost first, rustc style: each hop names
@@ -464,5 +491,21 @@ pub enum OffenderReason {
     TypeCannotImplement {
         /// The kind of type (`"struct"`, `"enum"`, ...).
         kind: &'static str,
+    },
+    /// An untagged enum carries a variant whose payload has an
+    /// irrefutable `FromStr`: one that returns `Ok` for every `&str`.
+    ///
+    /// The generated `FromStr` tries the variants in order and takes
+    /// the first that parses, so an irrefutable payload always wins and
+    /// every later variant is unreachable. `Display` and `FromStr` also
+    /// stop round-tripping, since a value built from a later variant
+    /// parses back as this one. The enum could implement `FromStr`, but
+    /// the impl would be meaningless, so the trait is refused instead.
+    IrrefutableVariantPayload {
+        /// The Rust name of the first such variant, in declaration
+        /// order. The message could name every qualifying variant
+        /// instead; one reason per offending type is the granularity
+        /// trait resolution reports at everywhere else.
+        variant: String,
     },
 }

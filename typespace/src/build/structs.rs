@@ -225,7 +225,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                     name,
                     description,
                     default,
-                    built: Some(TypeCommonBuilt { traits }),
+                    built: Some(TypeCommonBuilt {
+                        traits,
+                        from_string_irrefutable: _,
+                    }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -719,7 +722,10 @@ impl UnitStruct {
                 TypeCommon {
                     name,
                     description,
-                    built: Some(TypeCommonBuilt { traits }),
+                    built: Some(TypeCommonBuilt {
+                        traits,
+                        from_string_irrefutable: _,
+                    }),
                     default: _,
                     extra_derives,
                     extra_attrs,
@@ -946,7 +952,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     name,
                     description,
                     default: _,
-                    built: Some(TypeCommonBuilt { traits }),
+                    built: Some(TypeCommonBuilt {
+                        traits,
+                        from_string_irrefutable: _,
+                    }),
                     extra_derives,
                     extra_attrs,
                 },
@@ -1191,7 +1200,31 @@ impl<Id> NewtypeStruct<Id> {
     where
         Id: std::fmt::Debug + std::fmt::Display,
     {
-        self.common.validate_name("newtype struct")
+        self.common.validate_name("newtype struct")?;
+
+        // Constraints with nothing in them say nothing
+        // NewtypeConstraints::None does not already say, and an
+        // unconstrained newtype is the one written the short way.
+        // Rejecting them is also what keeps "syntactically constrained"
+        // and "stores its input verbatim" from disagreeing.
+        let vacuous = match &self.constraints {
+            NewtypeConstraints::String {
+                min: None,
+                max: None,
+                patterns,
+            } if patterns.is_empty() => Some("string"),
+            NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
+            NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
+            _ => None,
+        };
+
+        match vacuous {
+            Some(kind) => Err(Error::VacuousConstraints {
+                name: self.common.built_name().to_string(),
+                kind,
+            }),
+            None => Ok(()),
+        }
     }
 
     /// The newtype's name, if one has been set.
@@ -1293,7 +1326,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     name,
                     description,
                     default: _,
-                    built: Some(TypeCommonBuilt { traits }),
+                    built: Some(TypeCommonBuilt {
+                        traits,
+                        from_string_irrefutable: _,
+                    }),
                     extra_derives,
                     extra_attrs,
                 },

@@ -15,13 +15,13 @@
 //! silently. The resulting per-type trait set is authoritative: query
 //! answers and rendered derives both read it.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use log::debug;
 
 use crate::build::{
-    Native, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState, TupleStruct,
-    Type, VariantDetails,
+    Enum, Native, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
+    TupleStruct, Type, TypeAlias, VariantDetails,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::{ContainerType, Settings, TraitProvision};
@@ -48,6 +48,132 @@ where
     desired_resolution(types, settings);
 
     Ok(())
+}
+
+/// Record, for every named type, whether its `FromStr` is irrefutable.
+///
+/// Runs after `break_cycles`, so the ids it walks are the final ones,
+/// and before [`resolve_traits`], which reads the answers through
+/// [`from_string_irrefutable`] as it consults [`feasibility`].
+///
+/// One chain walk per named type: the walk is what costs anything, and
+/// the cache is what keeps `feasibility`, called once per type per
+/// trait, from repeating it.
+pub(crate) fn resolve_from_string_irrefutable<Id>(types: &mut BTreeMap<Id, Type<Id>>)
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let answers = types
+        .iter()
+        .filter(|(_, ty)| ty.is_named())
+        .map(|(type_id, _)| (type_id.clone(), walk_wrapper_chain(types, type_id)))
+        .collect::<Vec<_>>();
+
+    for (type_id, answer) in answers {
+        let common = types
+            .get_mut(&type_id)
+            .expect("the id came from this map")
+            .common_mut()
+            .expect("a named type has common metadata");
+        common
+            .built
+            .as_mut()
+            .expect("build_commons ran before this pass")
+            .from_string_irrefutable = answer;
+    }
+}
+
+/// Follow the wrapper chain from `id` to the type that decides whether
+/// the chain stores its input verbatim.
+///
+/// An unconstrained newtype struct hands the question to its inner type
+/// and a type alias to its target, so the chain is a run of single
+/// links ending at the first type that answers for itself:
+/// `Type::String` stores the input verbatim and everything else does
+/// not. A constrained newtype answers for itself too, since its
+/// `FromStr` validates what it parsed.
+///
+/// A chain that revisits a type has no such end and answers false. That
+/// guard is what bounds the walk; `break_cycles` also puts a `Box` in
+/// every cycle before this pass runs, and a `Box` ends a chain on its
+/// own account.
+fn walk_wrapper_chain<Id>(types: &BTreeMap<Id, Type<Id>>, id: &Id) -> bool
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let mut seen = BTreeSet::new();
+    let mut here = id.clone();
+    loop {
+        if !seen.insert(here.clone()) {
+            return false;
+        }
+        match types.get(&here).expect("every id names a type") {
+            Type::String => return true,
+            Type::NewtypeStruct(NewtypeStruct {
+                inner,
+                constraints: NewtypeConstraints::None,
+                ..
+            }) => here = inner.clone(),
+            Type::TypeAlias(TypeAlias { target, .. }) => here = target.clone(),
+            _ => return false,
+        }
+    }
+}
+
+/// Whether the `FromStr` of the type with `id` returns `Ok` for every
+/// `&str`.
+///
+/// True when the value is stored verbatim, with no validation step
+/// between the `&str` and the constructed value: `Type::String`, an
+/// unconstrained newtype struct over an irrefutable type, and a type
+/// alias to one. The property is syntactic, not semantic: a constraint
+/// counts as validation even where it accepts every string, so a
+/// `String` newtype whose only pattern is `".*"` is refutable.
+/// Everything else, `Type::Native` included, is refutable.
+///
+/// `Type::String` is answered by matching the variant, which is why it
+/// is not cached; the two recursive answers are read from the cache
+/// [`resolve_from_string_irrefutable`] fills in, so this is a lookup
+/// rather than a second walk.
+///
+/// # Panics
+///
+/// Panics if `id` names no type in `types`. Every id survives
+/// finalization's reference check, so a panic here is a typespace bug.
+pub(crate) fn from_string_irrefutable<Id>(types: &BTreeMap<Id, Type<Id>>, id: &Id) -> bool
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    match types.get(id).expect("every id names a type") {
+        Type::String => true,
+        ty => ty.common().is_some_and(|common| {
+            common
+                .built
+                .as_ref()
+                .expect("build_commons ran before trait resolution")
+                .from_string_irrefutable
+        }),
+    }
+}
+
+/// The first variant of `enum_info`, in declaration order, whose
+/// payload has an irrefutable `FromStr`.
+///
+/// Only the first is reported: one conflict per offending type is the
+/// granularity trait resolution works at everywhere else. The message
+/// could name every qualifying variant instead.
+fn irrefutable_variant<Id>(types: &BTreeMap<Id, Type<Id>>, enum_info: &Enum<Id>) -> Option<String>
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    enum_info
+        .variants
+        .iter()
+        .find(|variant| match &variant.details {
+            VariantDetails::Item(id) => from_string_irrefutable(types, id),
+            VariantDetails::Unit | VariantDetails::Tuple(_) | VariantDetails::Struct(_) => false,
+        })
+        .map(|variant| variant.rust_name.clone())
 }
 
 /// Expand a requirement set to include the supertraits its members
@@ -106,8 +232,9 @@ enum Feasibility<Id> {
     /// A type alias: the trait's fate is entirely its target's.
     Forward,
     /// No derive and no manual impl exists for this kind of type and
-    /// trait.
-    Impossible,
+    /// trait; the reason is the one a [`TraitConflict`] reports if the
+    /// trait was required.
+    Impossible(OffenderReason),
 }
 
 /// The vocabulary word for [`OffenderReason::TypeCannotImplement`]'s
@@ -136,6 +263,9 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 /// obligation); enums realize both with a hand-written impl when every
 /// variant is a simple unit variant, or by forwarding to variant
 /// payloads when the enum is untagged, and are otherwise impossible.
+/// The two part company at one place: an untagged enum whose `FromStr`
+/// would be decided by a payload that parses every string goes without
+/// `FromStr` while keeping `Display`.
 /// `Default` needs every constituent to implement it, unless the type
 /// carries an attached default value, in which case the manual impl
 /// needs nothing further (an enum with no attached default value has
@@ -145,6 +275,7 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 /// trait, which is exactly `derive(Copy)`'s own condition, so no
 /// separate case is needed for it.
 fn feasibility<Id>(
+    types: &BTreeMap<Id, Type<Id>>,
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     settings: &Settings,
@@ -152,6 +283,15 @@ fn feasibility<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
+    // Every `Impossible` outside the untagged-enum `FromStr` case says
+    // the same thing: this kind of type has no way to implement this
+    // trait. `type_kind` panics for an alias, which never reaches here.
+    let cannot_implement = || {
+        Feasibility::Impossible(OffenderReason::TypeCannotImplement {
+            kind: type_kind(ty),
+        })
+    };
+
     match ty {
         // An alias has no impl site of its own to realize anything
         // with; every trait's fate belongs entirely to its target.
@@ -161,7 +301,7 @@ where
                 // Neither has a derive, and neither has a sensible
                 // manual rendering: a struct's fields have no implied
                 // textual order or separator.
-                TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+                TypespaceTrait::Display | TypespaceTrait::FromStr => cannot_implement(),
                 TypespaceTrait::Default => {
                     if let Some(default) = struct_info.common.default() {
                         // The hand-written impl takes each property the
@@ -225,7 +365,7 @@ where
                     {
                         // If there's any required property, Default is not
                         // possible.
-                        Feasibility::Impossible
+                        cannot_implement()
                     } else {
                         // A property in the Default state fills from
                         // Default::default(), so its type must implement
@@ -259,9 +399,9 @@ where
                 // Neither has a derive, and neither has a sensible
                 // manual rendering: a struct's fields have no implied
                 // textual order or separator.
-                TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+                TypespaceTrait::Display | TypespaceTrait::FromStr => cannot_implement(),
                 // TYPIFY COMPAT
-                TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
+                TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
                 TypespaceTrait::Default => {
                     if common.default().is_some() {
                         Feasibility::ManuallyRealizable(Vec::new())
@@ -276,9 +416,9 @@ where
         Type::UnitStruct(_) => match trait_name {
             // Same reasoning as Struct: there is no field to render
             // and no textual form to parse.
-            TypespaceTrait::Display | TypespaceTrait::FromStr => Feasibility::Impossible,
+            TypespaceTrait::Display | TypespaceTrait::FromStr => cannot_implement(),
             // TYPIFY COMPAT
-            TypespaceTrait::Default if settings.typify_compat => Feasibility::Impossible,
+            TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
             // No fields means no obligations either way.
             _ => Feasibility::Derivable,
         },
@@ -313,14 +453,14 @@ where
             // TYPIFY COMPAT: the typify_compat half only; the attached
             // default value half stands on its own.
             TypespaceTrait::Default if settings.typify_compat || common.default().is_some() => {
-                Feasibility::Impossible
+                cannot_implement()
             }
             TypespaceTrait::Default => Feasibility::Derivable,
             _ => Feasibility::Derivable,
         },
 
         Type::Enum(e) => match trait_name {
-            TypespaceTrait::Display | TypespaceTrait::FromStr => {
+            TypespaceTrait::Display => {
                 if e.all_tagged_unit_variants() {
                     // A hand-written impl maps variants to and from
                     // their serialized names; no variant has payload
@@ -329,11 +469,35 @@ where
                 } else if e.all_untagged_item_variants() {
                     // An untagged enum's serialized form is exactly
                     // one variant's payload's serialized form, so
-                    // Display/FromStr forward to whichever payload
-                    // types the variants carry.
+                    // Display forwards to whichever payload types the
+                    // variants carry.
                     Feasibility::ManuallyRealizable(ty.contained_children_related())
                 } else {
-                    Feasibility::Impossible
+                    cannot_implement()
+                }
+            }
+            TypespaceTrait::FromStr => {
+                if e.all_tagged_unit_variants() {
+                    // The same hand-written impl as Display's, read
+                    // backwards: a serialized name maps to one variant.
+                    Feasibility::ManuallyRealizable(Vec::new())
+                } else if !e.all_untagged_item_variants() {
+                    cannot_implement()
+                } else {
+                    // An untagged enum's FromStr tries the payload
+                    // types in declaration order and takes the first
+                    // that parses. A payload whose own FromStr accepts
+                    // every string always wins, which makes every later
+                    // variant unreachable and stops Display and FromStr
+                    // round-tripping, so the enum goes without FromStr
+                    // wherever a payload is irrefutable. Position in the
+                    // variant list does not enter into it.
+                    match irrefutable_variant(types, e) {
+                        Some(variant) => Feasibility::Impossible(
+                            OffenderReason::IrrefutableVariantPayload { variant },
+                        ),
+                        None => Feasibility::ManuallyRealizable(ty.contained_children_related()),
+                    }
                 }
             }
             TypespaceTrait::Default => {
@@ -342,7 +506,7 @@ where
                 } else {
                     // No derive exists, and there is no invented
                     // #[default] variant.
-                    Feasibility::Impossible
+                    cannot_implement()
                 }
             }
             _ => Feasibility::Derivable,
@@ -564,7 +728,7 @@ where
         path,
     }) = work.pop_front()
     {
-        let ty = types.get_mut(&target).unwrap();
+        let ty = types.get(&target).unwrap();
 
         // Record one conflict per unsatisfiable trait at this type.
         let mut conflict = |bad: Vec<TypespaceTrait>, reason: OffenderReason| {
@@ -601,8 +765,9 @@ where
             let mut manual_pushes = Vec::<(TypespaceTrait, Vec<(Relation, Id)>)>::new();
 
             // Work against a copy of the built trait set: feasibility
-            // borrows the type, so we cannot hold a live reference into
-            // it across the loop. Written back below in one shot.
+            // borrows the whole graph, so we cannot hold a live
+            // reference into it across the loop. Written back below in
+            // one shot, once every read of `ty` is done.
             let mut built = ty.common().unwrap().built.as_ref().unwrap().traits.clone();
 
             for trait_name in traits {
@@ -610,7 +775,7 @@ where
                     continue;
                 }
 
-                match feasibility(ty, trait_name, settings) {
+                match feasibility(types, ty, trait_name, settings) {
                     Feasibility::Derivable | Feasibility::Forward => {
                         built.add(trait_name);
                         derivable_new.add(trait_name);
@@ -621,20 +786,26 @@ where
                             manual_pushes.push((trait_name, obligations));
                         }
                     }
-                    Feasibility::Impossible => {
-                        let kind = type_kind(ty);
-                        conflict(
-                            vec![trait_name],
-                            OffenderReason::TypeCannotImplement { kind },
-                        );
+                    Feasibility::Impossible(reason) => {
+                        conflict(vec![trait_name], reason);
                     }
                 }
             }
 
-            ty.common_mut().unwrap().built.as_mut().unwrap().traits = built;
+            let children = ty.contained_children_related();
+
+            types
+                .get_mut(&target)
+                .unwrap()
+                .common_mut()
+                .unwrap()
+                .built
+                .as_mut()
+                .unwrap()
+                .traits = built;
 
             if !derivable_new.is_empty() {
-                for (relation, child_id) in ty.contained_children_related() {
+                for (relation, child_id) in children {
                     work.push_back(WorkItem {
                         target: child_id,
                         traits: derivable_new.clone(),
@@ -985,6 +1156,7 @@ fn container_provides(
 /// except that none has `Display` or `FromStr` and `Option` provides
 /// `Default` whatever it holds.
 fn provides<Id>(
+    types: &BTreeMap<Id, Type<Id>>,
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     has: &BTreeMap<Id, TypespaceTraitSet>,
@@ -999,8 +1171,8 @@ where
     };
 
     if ty.is_named() {
-        match feasibility(ty, trait_name, settings) {
-            Feasibility::Impossible => false,
+        match feasibility(types, ty, trait_name, settings) {
+            Feasibility::Impossible(_) => false,
             Feasibility::Derivable | Feasibility::Forward => ty
                 .contained_children_related()
                 .iter()
@@ -1220,7 +1392,7 @@ where
         .flat_map(|(type_id, ty)| {
             desired
                 .iter()
-                .filter(|trait_name| !provides(ty, **trait_name, &state.has, settings))
+                .filter(|trait_name| !provides(types, ty, **trait_name, &state.has, settings))
                 .map(|trait_name| (type_id.clone(), *trait_name))
                 .collect::<Vec<_>>()
         })
@@ -1234,7 +1406,7 @@ where
         for referrer in referrers.get(&loser).into_iter().flatten() {
             let ty = types.get(referrer).unwrap();
             if state.has[referrer].contains(&trait_name)
-                && !provides(ty, trait_name, &state.has, settings)
+                && !provides(types, ty, trait_name, &state.has, settings)
             {
                 let granted = granted_traits(types, referrer);
                 state.lose(referrer, trait_name, &loser, granted);
@@ -1264,12 +1436,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Feasibility, feasibility};
+    use std::collections::BTreeMap;
+
+    use super::{Feasibility, feasibility, from_string_irrefutable};
     use crate::{
-        Typespace, TypespaceTrait, TypespaceTraitSet,
+        Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
         build::{
-            Native, Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct,
-            Type,
+            JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct, StructProperty,
+            StructPropertySerde, StructPropertyState, TupleStruct, Type,
         },
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
@@ -2477,9 +2651,12 @@ mod tests {
             .build()
             .unwrap();
 
-        let Feasibility::ManuallyRealizable(obligations) =
-            feasibility(&ty, TypespaceTrait::Default, &Settings::minimal())
-        else {
+        let Feasibility::ManuallyRealizable(obligations) = feasibility(
+            &BTreeMap::new(),
+            &ty,
+            TypespaceTrait::Default,
+            &Settings::minimal(),
+        ) else {
             panic!("expected a hand-written impl");
         };
 
@@ -4230,5 +4407,190 @@ mod tests {
             built_traits(&ts, "Inner"),
             trait_set([TypespaceTrait::Clone])
         );
+    }
+    // FromStrIrrefutable: whether a type's `FromStr` returns `Ok` for
+    // every `&str`, because the value is stored verbatim with no
+    // validation step between the `&str` and the constructed value.
+    // The property is syntactic, not semantic: a constraint counts as
+    // validation even where it happens to accept every string.
+
+    /// Whether the type with `id` has an irrefutable `FromStr`.
+    fn is_irrefutable(typespace: &Typespace<String>, id: &str) -> bool {
+        from_string_irrefutable(&typespace.types, &id.to_string())
+    }
+
+    /// `Type::String` is the base case: it takes the input verbatim and
+    /// has nothing to reject. An integer parses, and parsing fails.
+    /// A struct has no `FromStr` at all.
+    #[test]
+    fn irrefutable_holds_for_string_alone_among_primitives() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Holder {
+                text: String,
+                count: u32,
+            }
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert!(is_irrefutable(&ts, "String"));
+        assert!(!is_irrefutable(&ts, "u32"));
+        assert!(!is_irrefutable(&ts, "Holder"));
+    }
+
+    /// An unconstrained newtype's `FromStr` is its inner type's, so the
+    /// property passes through it, and through a chain of them. A
+    /// newtype over an integer parses, and parsing fails.
+    #[test]
+    fn irrefutable_follows_unconstrained_newtypes() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Wrapper(String);
+            struct Rewrapper(Wrapper);
+            struct Port(u32);
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert!(is_irrefutable(&ts, "Wrapper"));
+        assert!(is_irrefutable(&ts, "Rewrapper"));
+        assert!(!is_irrefutable(&ts, "Port"));
+    }
+
+    /// A type alias has no impl site of its own, so its `FromStr` is
+    /// its target's and so is the property.
+    #[test]
+    fn irrefutable_follows_type_aliases() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            type Text = String;
+            type Count = u32;
+            type Wrapped = Wrapper;
+
+            struct Wrapper(String);
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert!(is_irrefutable(&ts, "Text"));
+        assert!(is_irrefutable(&ts, "Wrapped"));
+        assert!(!is_irrefutable(&ts, "Count"));
+    }
+
+    /// Each of the three constraint kinds is a validation step between
+    /// the `&str` and the constructed value, so a constrained newtype
+    /// is refutable even where the constraint accepts every string:
+    /// `Patterned` admits everything `Plain` does and is still
+    /// refutable. This is typify 1's `IdOrYoloYolo`.
+    #[test]
+    fn irrefutable_stops_at_every_constraint_kind() {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+
+        let newtype = |name: &str, constraints: NewtypeConstraints| {
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name(name)
+                    .constraints(constraints),
+            )
+        };
+
+        builder
+            .insert(
+                "Plain".to_string(),
+                newtype("Plain", NewtypeConstraints::None),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Patterned".to_string(),
+                newtype(
+                    "Patterned",
+                    NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec![".*".to_string()],
+                    },
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Allowed".to_string(),
+                newtype(
+                    "Allowed",
+                    NewtypeConstraints::AllowList(vec![JsonValue::new(serde_json::json!("yes"))]),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Denied".to_string(),
+                newtype(
+                    "Denied",
+                    NewtypeConstraints::DenyList(vec![JsonValue::new(serde_json::json!("no"))]),
+                ),
+            )
+            .unwrap();
+
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert!(is_irrefutable(&ts, "Plain"));
+        assert!(!is_irrefutable(&ts, "Patterned"));
+        assert!(!is_irrefutable(&ts, "Allowed"));
+        assert!(!is_irrefutable(&ts, "Denied"));
+    }
+
+    /// Nothing outside `Type::String`, an unconstrained newtype, and a
+    /// type alias carries the property. A native cannot declare it
+    /// however string-like the declaration is, and a `Box`, an
+    /// `Option`, and a `Vec` have no `FromStr` at all.
+    #[test]
+    fn irrefutable_excludes_natives_and_containers() {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "::string::Str".to_string(),
+                Type::Native(Native::new_string_like("::string::Str")),
+            )
+            .unwrap();
+        builder
+            .insert("Box<String>".to_string(), Type::Box("string".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Nullable<String>".to_string(),
+                Type::Option("string".to_string()),
+            )
+            .unwrap();
+        builder
+            .insert("Vec<String>".to_string(), Type::Vec("string".to_string()))
+            .unwrap();
+
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert!(is_irrefutable(&ts, "string"));
+        assert!(!is_irrefutable(&ts, "::string::Str"));
+        assert!(!is_irrefutable(&ts, "Box<String>"));
+        assert!(!is_irrefutable(&ts, "Nullable<String>"));
+        assert!(!is_irrefutable(&ts, "Vec<String>"));
+    }
+
+    /// The walk terminates on a cycle and answers false for it:
+    /// `break_cycles` puts a `Box` in every cycle before this pass
+    /// runs, and a `Box` is never irrefutable, so the recursion has
+    /// somewhere to stop. `Plain` sits outside the cycle and still
+    /// answers true, so the `false` for `Loop` and `Knot` is the walk's
+    /// answer rather than the walk giving up.
+    #[test]
+    fn irrefutable_terminates_on_a_cycle() {
+        let builder = typespace_builder!(Settings::minimal(), {
+            struct Loop(Knot);
+            struct Knot(Loop);
+            struct Plain(String);
+        });
+        let ts = builder
+            .finalize(|id: &String| format!("Box<{id}>"))
+            .unwrap();
+
+        assert!(!is_irrefutable(&ts, "Loop"));
+        assert!(!is_irrefutable(&ts, "Knot"));
+        assert!(is_irrefutable(&ts, "Plain"));
     }
 }

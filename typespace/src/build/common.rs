@@ -161,4 +161,23 @@ pub(crate) struct TypeCommonBuilt {
     // TODO 3/25/2026
     // This definitely needs more consideration after I start feeling it out.
     pub traits: TypespaceTraitSet,
+
+    /// Whether the type's `FromStr` returns `Ok` for every `&str`.
+    ///
+    /// True when the value is stored verbatim with no validation step
+    /// between the `&str` and the constructed value, which makes the
+    /// type useless as anything but the last arm of an untagged enum's
+    /// first-match-wins `FromStr` chain. The property is syntactic: a
+    /// constraint counts as validation even where it happens to accept
+    /// every string.
+    ///
+    /// Only the recursive answers land here (an unconstrained newtype
+    /// struct's and a type alias's). `Type::String` is answered by
+    /// matching the variant, and every other kind of type is `false`
+    /// outright, so neither wants a cache.
+    ///
+    /// Filled in by
+    /// `resolve_from_string_irrefutable`, which runs after
+    /// `break_cycles` and before trait resolution.
+    pub from_string_irrefutable: bool,
 }

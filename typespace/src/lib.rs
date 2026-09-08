@@ -790,6 +790,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         build_commons(&mut types);
         cycles::break_cycles(&mut types, make_box_id);
         cycles::check_anonymous_cycles(&types)?;
+        // After break_cycles, because a newtype's inner may have become
+        // a freshly minted Box, which has no FromStr at all; before
+        // resolve_traits, because both required and desired resolution
+        // consult `feasibility`, which reads the answer.
+        trait_resolution::resolve_from_string_irrefutable(&mut types);
         trait_resolution::resolve_traits(&mut types, &settings)?;
 
         Ok(Typespace { types, settings })
@@ -1584,6 +1589,10 @@ fn build_commons<Id: Clone>(types: &mut BTreeMap<Id, Type<Id>>) {
         if let Some(common) = typ.common_mut() {
             common.built = Some(TypeCommonBuilt {
                 traits: TypespaceTraitSet::empty(),
+                // The real answer needs the post-break_cycles graph, so
+                // resolve_from_string_irrefutable computes it later;
+                // this pass only creates the slot.
+                from_string_irrefutable: false,
             });
         }
     }

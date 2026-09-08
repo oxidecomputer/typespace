@@ -288,7 +288,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     name,
                     description,
                     default,
-                    built: Some(TypeCommonBuilt { traits }),
+                    built: Some(TypeCommonBuilt {
+                        traits,
+                        from_string_irrefutable: _,
+                    }),
                     extra_derives,
                     extra_attrs,
                 },
