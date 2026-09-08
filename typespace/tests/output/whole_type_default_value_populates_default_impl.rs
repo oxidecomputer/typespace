@@ -7,9 +7,9 @@ pub struct Config {
 }
 impl ::std::default::Default for Config {
     fn default() -> Self {
-        Self {
-            b: Default::default(),
-            name: Default::default(),
+        Config {
+            b: 7_u32,
+            name: "bob".to_string(),
         }
     }
 }

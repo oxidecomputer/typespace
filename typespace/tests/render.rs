@@ -4023,7 +4023,6 @@ fn test_default_enum_with_default_value() {
 /// `unreachable!()`, so rendering this graph panics. The value walk the
 /// correct body needs belongs in `default.rs`.
 #[test]
-#[ignore]
 fn test_default_whole_type_value_with_required_property() {
     let builder = typespace_builder!(default_settings(), {
         #[default = { "a": "x", "b": 7 }]
@@ -5697,5 +5696,77 @@ fn test_enum_generate_default() {
 
         let instance = EnumUntagged::default();
         assert!(matches!(instance, EnumUntagged::Bar(value) if value == "None"));
+    }
+}
+
+#[test]
+fn test_struct_defaults() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::Default),
+        {
+
+            #[default = { a: "x" }]
+            struct StructAllDefault {
+                a: String,
+                b: Optional<String>,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/test_struct_defaults.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let instance = StructAllDefault::default();
+        assert_eq!(instance.a, "x");
+        assert_eq!(instance.b, None);
+    }
+}
+
+// `feasibility` documents the contract for a struct with an attached
+// default value: "The hand-written impl takes each property the
+// default value names from that value and fills the rest with
+// Default::default()". `Struct::render` in `build/structs.rs` consults
+// `common.default` only to decide whether the derive shortcut applies;
+// the impl body it writes comes entirely from each property's
+// `DefaultConstructor`, so the attached value's contents are
+// discarded.
+#[test]
+fn whole_type_default_value_populates_default_impl() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
+            .with_required_trait(TypespaceTrait::PartialEq)
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_desired_trait(TypespaceTrait::Default),
+        {
+            #[default = { b: 7, name: "bob" }]
+            struct Config {
+                #[default]
+                b: u32,
+                #[default]
+                name: String,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include(
+        "tests/output/whole_type_default_value_populates_default_impl.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        assert_eq!(
+            import::Config::default(),
+            import::Config {
+                b: 7,
+                name: "bob".to_string(),
+            }
+        );
     }
 }

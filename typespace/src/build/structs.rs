@@ -6,7 +6,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
-use crate::default::{check_default, generate_default};
+use crate::default::{check_default, generate_default, generate_default_value_for_impl};
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
@@ -217,6 +217,7 @@ where
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
     pub(crate) fn render(
         &self,
+        id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
@@ -293,14 +294,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                      default,
                      ..
                  }| match default {
-                    crate::DefaultConstructor::None => {
+                    DefaultConstructor::None => {
                         let msg = format!("no value supplied for {}", rust_name_ident);
                         quote! {
                             Err(#msg.to_string())
                         }
                     }
-                    crate::DefaultConstructor::Default => quote! { Ok(Default::default()) },
-                    crate::DefaultConstructor::Generated(default_expr) => {
+                    DefaultConstructor::Default => quote! { Ok(Default::default()) },
+                    DefaultConstructor::Generated(default_expr) => {
                         quote! { Ok(super::#default_expr) }
                     }
                 },
@@ -380,7 +381,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 impl #name_ident {
                     pub fn builder() -> builder::#name_ident {
                         // TODO 9/1/2026
-                        // Add std scope
+                        // TYPIFY COMPAT: Add std scope
                         Default::default()
                     }
                 }
@@ -408,28 +409,44 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
 
             traits.remove(TypespaceTrait::Default);
 
-            let default_props = rendered_properties.iter().map(
-                |RenderedStructProperty {
-                     rust_name_ident,
-                     default,
-                     ..
-                 }| {
-                    let default_value = match default {
-                        DefaultConstructor::None => unreachable!(),
-                        DefaultConstructor::Default => quote! { Default::default() },
-                        DefaultConstructor::Generated(default_fn) => default_fn.clone(),
-                    };
-                    quote! {
-                        #rust_name_ident: #default_value
+            if let Some(JsonValue(default_value)) = default {
+                let body = generate_default_value_for_impl(
+                    &typespace.types,
+                    &typespace.settings,
+                    default_value,
+                    id.clone(),
+                );
+                quote! {
+                    impl ::std::default::Default for #name_ident {
+                        fn default() -> Self {
+                            #body
+                        }
                     }
-                },
-            );
+                }
+            } else {
+                let default_props = rendered_properties.iter().map(
+                    |RenderedStructProperty {
+                         rust_name_ident,
+                         default,
+                         ..
+                     }| {
+                        let default_value = match default {
+                            DefaultConstructor::None => unreachable!(),
+                            DefaultConstructor::Default => quote! { Default::default() },
+                            DefaultConstructor::Generated(default_fn) => default_fn.clone(),
+                        };
+                        quote! {
+                            #rust_name_ident: #default_value
+                        }
+                    },
+                );
 
-            quote! {
-                impl ::std::default::Default for #name_ident {
-                    fn default() -> Self {
-                        Self {
-                            #( #default_props, )*
+                quote! {
+                    impl ::std::default::Default for #name_ident {
+                        fn default() -> Self {
+                            Self {
+                                #( #default_props, )*
+                            }
                         }
                     }
                 }

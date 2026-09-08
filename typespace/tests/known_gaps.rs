@@ -13,7 +13,7 @@ use typespace::{
     no_cycles,
     settings::{ContainerType, Settings},
 };
-use typespace_test_macro::{check_and_include, typespace_builder};
+use typespace_test_macro::typespace_builder;
 
 mod common;
 
@@ -126,58 +126,6 @@ fn box_provides_display() {
         common::has_impl(&file, "Display", "Wrapper"),
         "Display was not granted through a Box, which forwards it"
     );
-}
-
-// `feasibility` documents the contract for a struct with an attached
-// default value: "The hand-written impl takes each property the
-// default value names from that value and fills the rest with
-// Default::default()". `Struct::render` in `build/structs.rs` consults
-// `common.default` only to decide whether the derive shortcut applies;
-// the impl body it writes comes entirely from each property's
-// `DefaultConstructor`, so the attached value's contents are
-// discarded. The code compiles and misbehaves.
-//
-// The ignored test `test_default_whole_type_value_with_required_
-// property` in `render.rs` pins the loud half of this gap (a required
-// property's constructor is `DefaultConstructor::None`, which the impl
-// body maps to `unreachable!()`). This test pins the quiet half: when
-// every property has a constructor of its own the render succeeds, and
-// the emitted `Default::default()` contradicts the attached value.
-#[test]
-#[ignore = "deferred until after the typify merge"]
-fn whole_type_default_value_populates_default_impl() {
-    let builder = typespace_builder!(
-        Settings::minimal()
-            .with_required_trait(TypespaceTrait::Debug)
-            .with_required_trait(TypespaceTrait::PartialEq)
-            .with_required_trait(TypespaceTrait::Serialize)
-            .with_required_trait(TypespaceTrait::Deserialize)
-            .with_desired_trait(TypespaceTrait::Default),
-        {
-            #[default = { b: 7, name: "bob" }]
-            struct Config {
-                #[default]
-                b: u32,
-                #[default]
-                name: String,
-            }
-        }
-    );
-    let ts = builder.finalize(no_cycles).unwrap();
-
-    #[check_and_include(
-        "tests/output/whole_type_default_value_populates_default_impl.rs",
-        ts.to_codespace().into_stream()
-    )]
-    fn inner() {
-        assert_eq!(
-            import::Config::default(),
-            import::Config {
-                b: 7,
-                name: "bob".to_string(),
-            }
-        );
-    }
 }
 
 // Trait resolution accepts the graph: the `#[serde(default)]` seeding

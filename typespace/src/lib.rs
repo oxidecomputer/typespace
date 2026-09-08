@@ -877,7 +877,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             match typ {
                 Type::Struct(s) => {
                     let name = s.common.built_name().to_string();
-                    let tokens = s.render(self, &mut out);
+                    let tokens = s.render(id, self, &mut out);
                     out.cs().add_item(name, tokens);
                 }
                 Type::Enum(e) => {

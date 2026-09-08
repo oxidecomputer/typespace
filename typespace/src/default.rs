@@ -195,6 +195,27 @@ where
         .expect("a value should be generated with Mode::Generate")
 }
 
+pub(crate) fn generate_default_value_for_impl<Id>(
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+    value: &serde_json::Value,
+    id: Id,
+) -> TokenStream
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let imp = DefaultImpl {
+        types,
+        settings,
+        scope: None,
+        mode: Mode::Generate,
+    };
+    let mut expansion_set = Vec::new();
+    imp.default_impl(&mut expansion_set, id, value)
+        .expect("an error should not be possible post-validation")
+        .expect("a value should be generated with Mode::Generate")
+}
+
 pub(crate) enum EnumDefault {
     Value(TokenStream),
     Variant(String),
