@@ -26,9 +26,9 @@
 //!   attribute, and so no dependency.
 //! - [serde_json](https://crates.io/crates/serde_json): required if
 //!   the output contains a [`build::Type::JsonValue`] (rendered as
-//!   `::serde_json::Value`), a property with
+//!   `::serde_json::Value`), a [`build::Native`] property with
 //!   [`build::StructPropertyState::DefaultValue`] (the generated default
-//!   function calls `::serde_json::from_value`), or a
+//!   function calls `::serde_json::from_str`), or a
 //!   [`build::UnitStruct`] (its `Deserialize` impl compares input
 //!   against the fixed JSON representation).
 //! - [json-serde](https://crates.io/crates/json-serde): required if
@@ -52,10 +52,6 @@
 //!   `Absent`'s use is independent of the trait set holds; the
 //!   rest ride on serde attributes and impls, so settings that require
 //!   neither serde trait leave them out.
-//!
-//!   The `::json_serde` path itself follows
-//!   [`settings::Settings::with_json_serde_crate`], for consumers that
-//!   re-export the crate under another name.
 //!
 //! Generated code also reproduces, verbatim, every type path the
 //! consumer supplies: the `name` of a [`build::Native`] (a converter

@@ -79,6 +79,12 @@ Consumers render a finalized `Typespace` via the
 includes runtime dependencies on crates; the crate docs section "Dependencies
 of generated code" gives the exact conditions.
 
+Generated code needs `serde_json` 1.0.145 or later if it holds a JSON
+value (`build::Type::JsonValue`) as a `HashSet` element or `HashMap`
+key: that release added `Hash` for `serde_json::Value`. This crate's
+own `serde_json` dependency already floors at 1.0.148, so building
+`typespace` satisfies it.
+
 Finalized types can also be inspected without rendering: `get_type` and
 `iter_types` return `view::Type` views exposing names, identifiers,
 structural details, and trait impls. This allows additional code generation
