@@ -744,9 +744,12 @@ where
                         let prop_id = &prop_info.type_id;
 
                         let prop_ty = self.types.get(prop_id).unwrap();
-                        let is_option = matches!(prop_ty, Type::Option(_));
+                        let maybe_option = match prop_ty {
+                            Type::Option(inner_ty) => Some(inner_ty),
+                            _ => None,
+                        };
 
-                        let prop_default_value = if is_option {
+                        let prop_default_value = if let Some(option_inner_id) = maybe_option {
                             match &self.settings.optional_nullable {
                                 // A simple Option<T> is sufficient.
                                 OptionalNullable::ConflateAsAbsent
@@ -762,12 +765,11 @@ where
                                     }),
 
                                 // Construct the custom type
-                                OptionalNullable::CustomType(type_name) => self
+                                OptionalNullable::CustomType(_) => self
                                     .default_impl_custom_optional_nullable(
                                         expansion_set,
-                                        prop_id,
+                                        option_inner_id,
                                         prop_value,
-                                        type_name,
                                     )?,
                             }
                         } else {
@@ -1403,24 +1405,19 @@ where
         expansion_set: &mut Vec<(Id, serde_json::Value)>,
         id: &Id,
         value: &serde_json::Value,
-        _type_name: &str,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         if value.is_null() {
             Ok(self.generate(|| {
                 quote! {
-                    // TODO 9/4/2026
-                    // Create the null value.
-                    todo!()
+                    ::json_serde::OptionalNullable::null()
                 }
             }))
         } else {
             Ok(self
                 .default_impl(expansion_set, id, value)?
-                .map(|_value_stream| {
+                .map(|value_stream| {
                     quote! {
-                        // TODO 9/4/2026
-                        // Create the typed value
-                        todo!()
+                        ::json_serde::OptionalNullable::value(#value_stream)
                     }
                 }))
         }

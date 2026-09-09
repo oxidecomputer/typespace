@@ -76,7 +76,10 @@ pub mod custom_type {
         pub optional_string: Option<String>,
         #[serde(deserialize_with = "Option::deserialize")]
         pub required_option: Option<String>,
-        #[serde(default, skip_serializing_if = "super::OptionField::is_absent")]
+        #[serde(
+            default,
+            skip_serializing_if = "::json_serde::OptionalNullable::is_absent"
+        )]
         pub optional_option: super::OptionField<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         pub default_string: String,

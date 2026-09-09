@@ -4,10 +4,13 @@
 
 use typespace::{
     TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
-    build::{Native, Struct, StructProperty, Type},
-    error::Error,
+    build::{
+        Enum, EnumTagType, EnumVariant, Native, Struct, StructProperty, StructPropertyState, Type,
+        VariantDetails,
+    },
+    error::{Error, PathStep, Relation},
     no_cycles,
-    settings::{ContainerType, Settings, TraitProvision},
+    settings::{ContainerType, OptionalNullable, Settings, TraitProvision},
 };
 
 fn set(traits: impl IntoIterator<Item = TypespaceTrait>) -> TypespaceTraitSet {
@@ -412,4 +415,258 @@ fn json_schema_demanded_of_map_key() {
     };
     let rendered = err.to_string();
     assert!(rendered.contains("JsonSchema"), "{rendered}");
+}
+
+// The custom optional-nullable wrapper is declared like any other
+// container, in code and in settings data, with the option preset as
+// its base.
+#[test]
+fn a_custom_optional_wrapper_deserializes_like_a_container() {
+    let settings = serde_json::from_str::<Settings>(
+        r#"{
+            "optional_nullable": {
+                "custom-type": { "like": "option", "path": "::my::Opt" }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let OptionalNullable::CustomType(declaration) = settings.optional_nullable() else {
+        panic!("the settings data names a custom wrapper");
+    };
+    assert_eq!(declaration, &ContainerType::option().with_path("::my::Opt"));
+    assert_eq!(declaration.obligations(), [set([])]);
+    assert_eq!(
+        declaration.provision(TypespaceTrait::Copy),
+        TraitProvision::IfParameters
+    );
+    assert_eq!(
+        declaration.provision(TypespaceTrait::Display),
+        TraitProvision::Never
+    );
+}
+
+// The wrapper takes exactly one parameter; a declaration with any other
+// obligation count is rejected at finalization like a mis-declared map.
+#[test]
+fn a_custom_optional_arity_mismatch_is_rejected_at_finalization() {
+    let settings = Settings::minimal().with_optional_nullable(OptionalNullable::CustomType(
+        ContainerType::option()
+            .with_path("::my::Opt")
+            .with_obligations(Vec::<TypespaceTraitSet>::new()),
+    ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the wrapper declaration");
+    };
+    assert!(
+        matches!(
+            err,
+            Error::ContainerParameterCount {
+                position: "optional-nullable",
+                declared: 0,
+                parameters: 1,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+// What the wrapper demands of its value type is imposed like a map
+// key's demand, from each optional property the declaration wraps: a
+// value type without the trait conflicts, whatever else is required.
+#[test]
+fn a_custom_optional_wrapper_states_a_value_obligation() {
+    let settings = Settings::minimal().with_optional_nullable(OptionalNullable::CustomType(
+        ContainerType::option()
+            .with_path("::my::Opt")
+            .with_obligations([set([TypespaceTrait::Hash])]),
+    ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert(
+            "value".to_string(),
+            Type::Native(Native::new(
+                "::ext::NoHash",
+                set([
+                    TypespaceTrait::Clone,
+                    TypespaceTrait::Debug,
+                    TypespaceTrait::Serialize,
+                    TypespaceTrait::Deserialize,
+                ]),
+                Vec::new(),
+            )),
+        )
+        .unwrap();
+    builder
+        .insert("option".to_string(), Type::Option("value".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Holder".to_string(),
+            Struct::new()
+                .name("Holder")
+                .properties(vec![
+                    StructProperty::new("o", "option".to_string())
+                        .with_state(StructPropertyState::Optional),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("the value type is demanded Hash");
+    };
+    let rendered = err.to_string();
+    assert!(rendered.contains("Hash"), "{rendered}");
+}
+
+// The declaration models exactly the positions rendering wraps. One
+// Option node shared between an optional property (wrapped) and a vec
+// element (std Option) conflicts only through the property.
+#[test]
+fn a_weakened_wrapper_conflicts_only_at_wrapped_properties() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Hash)
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option()
+                .with_path("::custom::Opt")
+                .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
+        ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("value".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert("option".to_string(), Type::Option("value".to_string()))
+        .unwrap();
+    builder
+        .insert("vec".to_string(), Type::Vec("option".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Holder".to_string(),
+            Struct::new()
+                .name("Holder")
+                .properties(vec![
+                    StructProperty::new("wrapped", "option".to_string())
+                        .with_state(StructPropertyState::Optional),
+                    StructProperty::new("listed", "vec".to_string()),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("the wrapped property is refused Hash");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Hash);
+    assert_eq!(conflict.offender, "option");
+    assert!(
+        matches!(
+            conflict.path.as_slice(),
+            [PathStep { type_id, relation: Relation::Field(name), .. }]
+                if type_id == "Holder" && name == "wrapped"
+        ),
+        "{conflict:#?}"
+    );
+}
+
+// A struct-shaped enum variant's optional property wraps exactly as a
+// struct's does: the same declaration answers, and a weakened wrapper
+// conflicts at the variant edge.
+#[test]
+fn a_weakened_wrapper_conflicts_at_struct_variant_properties() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Hash)
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option()
+                .with_path("::custom::Opt")
+                .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
+        ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("value".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert("option".to_string(), Type::Option("value".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Holder".to_string(),
+            Enum::new()
+                .name("Holder")
+                .tag_type(EnumTagType::External)
+                .variants(vec![EnumVariant::new(
+                    "Named",
+                    VariantDetails::Struct(vec![
+                        StructProperty::new("wrapped", "option".to_string())
+                            .with_state(StructPropertyState::Optional),
+                    ]),
+                )])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("the wrapped variant property is refused Hash");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Hash);
+    assert_eq!(conflict.offender, "option");
+    assert!(
+        matches!(
+            conflict.path.as_slice(),
+            [PathStep { type_id, relation: Relation::Variant(name), .. }]
+                if type_id == "Holder" && name == "Named"
+        ),
+        "{conflict:#?}"
+    );
+}
+
+// A required property whose type happens to be an Option renders as
+// std Option, so the declaration is not consulted there and the std
+// model answers.
+#[test]
+fn a_required_option_property_keeps_the_std_model() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Hash)
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option()
+                .with_path("::custom::Opt")
+                .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
+        ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("value".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert("option".to_string(), Type::Option("value".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Holder".to_string(),
+            Struct::new()
+                .name("Holder")
+                .properties(vec![StructProperty::new("r", "option".to_string())])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+
+    builder.finalize(no_cycles).unwrap();
 }

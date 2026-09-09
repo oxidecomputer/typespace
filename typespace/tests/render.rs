@@ -15,7 +15,7 @@ use typespace_test_macro::{check_and_include, typespace_builder};
 mod common;
 
 // Stub for the user-provided type referenced by OptionalNullable::CustomType.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum OptionField<T> {
     #[default]
@@ -24,9 +24,34 @@ pub enum OptionField<T> {
     Null,
     Present(T),
 }
-impl<T> OptionField<T> {
-    pub fn is_absent(&self) -> bool {
+
+impl<T> json_serde::OptionalNullable for OptionField<T> {
+    type Target = T;
+
+    fn is_absent(&self) -> bool {
         matches!(self, OptionField::Absent)
+    }
+
+    fn null() -> Self {
+        Self::Null
+    }
+
+    fn value(value: Self::Target) -> Self {
+        Self::Present(value)
+    }
+}
+
+impl<T: schemars::JsonSchema> schemars::JsonSchema for OptionField<T> {
+    fn schema_name() -> String {
+        format!("OptionField_for_{}", T::schema_name())
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        Option::<T>::json_schema(generator)
+    }
+
+    fn is_referenceable() -> bool {
+        false
     }
 }
 
@@ -64,7 +89,7 @@ fn test_struct_field_serde() {
                 .with_required_trait(TypespaceTrait::Serialize)
                 .with_required_trait(TypespaceTrait::Deserialize)
                 .with_optional_nullable(OptionalNullable::CustomType(
-                    "super::OptionField".to_string(),
+                    ContainerType::option().with_path("super::OptionField"),
                 )),
         ),
     ];
@@ -191,6 +216,13 @@ fn test_struct_field_serde() {
             value.optional_option,
             OptionField::Present(s) if s == "howdy"
         ));
+
+        let value = serde_json::json!({
+            "required_option": null,
+            "optional_option": null,
+        });
+        let value = import::CustomType::deserialize(value).unwrap();
+        assert!(matches!(value.optional_option, OptionField::Null));
     }
 }
 
@@ -5912,4 +5944,67 @@ fn test_default_fn_items_group_by_containing_type() {
          default function comes first; ordering by function name or \
          mixing snake_case and CamelCase contexts would reverse it:\n{rendered}"
     );
+}
+
+#[test]
+fn test_optional_nullable_custom_default() {
+    let settings = Settings::minimal()
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option().with_path("super::OptionField"),
+        ))
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::Default)
+        .with_required_trait(TypespaceTrait::JsonSchema);
+
+    let builder = typespace_builder!(settings, {
+        #[default = { piggy_a: "roast beef", piggy_c: null }]
+        struct Piggies {
+            piggy_a: OptionalNullable<String>,
+            piggy_b: OptionalNullable<String>,
+            piggy_c: OptionalNullable<String>,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    #[check_and_include(
+        "tests/output/test_optional_nullable_custom_default.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        use import::*;
+
+        let piggies = Piggies::default();
+
+        assert_eq!(
+            piggies.piggy_a,
+            OptionField::Present("roast beef".to_string()),
+        );
+        assert_eq!(piggies.piggy_b, OptionField::Absent);
+        assert_eq!(piggies.piggy_c, OptionField::Null);
+
+        let schema = schemars::schema_for!(Piggies);
+        let schema = serde_json::to_value(&schema).unwrap();
+        let expected = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "Piggies",
+            "type": "object",
+            "properties": {
+                "piggy_a": {
+                    "type": ["string", "null"]
+                },
+                "piggy_b": {
+                    "type": ["string", "null"]
+                },
+                "piggy_c": {
+                    "type": ["string", "null"]
+                }
+            }
+        });
+        assert_eq!(
+            schema,
+            expected,
+            "{}",
+            serde_json::to_string_pretty(&schema).unwrap(),
+        );
+    }
 }

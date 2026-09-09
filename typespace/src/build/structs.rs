@@ -615,6 +615,13 @@ pub enum StructPropertyState {
     DefaultValue(JsonValue),
 }
 
+impl StructPropertyState {
+    /// Whether the property is in the optional state.
+    pub(crate) fn is_optional(&self) -> bool {
+        matches!(self, StructPropertyState::Optional)
+    }
+}
+
 /// A fieldless struct with a fixed JSON representation.
 ///
 /// A `UnitStruct` is its own builder: [`UnitStruct::new`] starts one

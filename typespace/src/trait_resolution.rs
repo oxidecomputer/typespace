@@ -20,12 +20,59 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use log::debug;
 
 use crate::build::{
-    Enum, Native, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
-    TupleStruct, Type, TypeAlias, VariantDetails,
+    ContainedChild, Enum, Native, NewtypeConstraints, NewtypeStruct, StructProperty,
+    StructPropertyState, TupleStruct, Type, TypeAlias, VariantDetails,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
-use crate::settings::{ContainerType, Settings, TraitProvision};
+use crate::settings::{ContainerType, OptionalNullable, Settings, TraitProvision, path_text};
 use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet};
+
+/// A contained child edge classified against the settings.
+///
+/// An edge rendering wraps with the declared custom optional-nullable
+/// wrapper is `Wrapped`, carrying the declaration, the `Option` node at
+/// the property, and the option's value type; every other edge is
+/// `Plain`. The wrapping condition--the optional property state, an
+/// `Option` type, the `CustomType` setting--mirrors
+/// `render_struct_property`'s optional-`Option` arm; keep the two in
+/// sync.
+enum Edge<'a, Id> {
+    Plain(Relation, Id),
+    Wrapped {
+        relation: Relation,
+        option_id: Id,
+        container: &'a ContainerType,
+        value_id: Id,
+    },
+}
+
+/// Classify every contained child of `ty` for trait propagation.
+fn classify_edges<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
+    ty: &Type<Id>,
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &'a Settings,
+) -> Vec<Edge<'a, Id>> {
+    ty.contained_children_related()
+        .into_iter()
+        .map(|child| {
+            match (
+                &settings.optional_nullable,
+                child.optional,
+                types.get(&child.id).unwrap(),
+            ) {
+                (OptionalNullable::CustomType(container), true, Type::Option(value_id)) => {
+                    Edge::Wrapped {
+                        relation: child.relation,
+                        option_id: child.id,
+                        container,
+                        value_id: value_id.clone(),
+                    }
+                }
+                _ => Edge::Plain(child.relation, child.id),
+            }
+        })
+        .collect()
+}
 
 /// Resolve the trait set for every named type in the graph.
 ///
@@ -471,7 +518,12 @@ where
                     // one variant's payload's serialized form, so
                     // Display forwards to whichever payload types the
                     // variants carry.
-                    Feasibility::ManuallyRealizable(ty.contained_children_related())
+                    Feasibility::ManuallyRealizable(
+                        ty.contained_children_related()
+                            .into_iter()
+                            .map(|ContainedChild { relation, id, .. }| (relation, id))
+                            .collect(),
+                    )
                 } else {
                     cannot_implement()
                 }
@@ -498,7 +550,12 @@ where
                                 variant,
                             })
                         }
-                        None => Feasibility::ManuallyRealizable(ty.contained_children_related()),
+                        None => Feasibility::ManuallyRealizable(
+                            ty.contained_children_related()
+                                .into_iter()
+                                .map(|ContainedChild { relation, id, .. }| (relation, id))
+                                .collect(),
+                        ),
                     }
                 }
             }
@@ -605,6 +662,32 @@ where
                 },
                 path: Vec::new(),
             }],
+            // A declared custom optional-nullable wrapper is consulted at
+            // exactly the positions rendering substitutes it: the optional
+            // struct-style properties whose type is itself an Option. What the
+            // declaration demands of the wrapper's value type seeds from each
+            // such property, like a map key's demand; the same Option node
+            // reached any other way is a std Option and demands nothing.
+            Type::Struct(_) | Type::Enum(_) => classify_edges(ty, types, settings)
+                .into_iter()
+                .filter_map(|edge| match edge {
+                    Edge::Wrapped {
+                        option_id,
+                        container,
+                        value_id,
+                        ..
+                    } => Some(WorkItem {
+                        target: value_id,
+                        traits: close_supertraits(container.obligation(0).clone()),
+                        origin: RequirementOrigin::ContainerParameter {
+                            container: option_id,
+                            relation: Relation::Element,
+                        },
+                        path: Vec::new(),
+                    }),
+                    Edge::Plain(..) => None,
+                })
+                .collect::<Vec<_>>(),
             _ => Vec::new(),
         })
         .collect::<VecDeque<_>>();
@@ -794,7 +877,7 @@ where
                 }
             }
 
-            let children = ty.contained_children_related();
+            let children = classify_edges(ty, types, settings);
 
             types
                 .get_mut(&target)
@@ -806,16 +889,65 @@ where
                 .unwrap()
                 .traits = built;
 
+            // Push each derivable trait to every child: a derived impl
+            // compiles only if each field or payload type also implements the
+            // trait.
+            //
+            // A wrapped edge is the exception. There, the generated field's
+            // type is the declared custom optional-nullable wrapper, not the
+            // graph's Option node, so the requirement is put to the wrapper's
+            // declaration and each trait takes the route its answer dictates:
+            // a trait the declaration never provides is unsatisfiable at this
+            // property and becomes a conflict naming the wrapper; a trait it
+            // always provides is satisfied and stops here; a trait it
+            // provides when its parameter does continues to the option's
+            // value type, with the option node recorded as a hop on the path.
             if !derivable_new.is_empty() {
-                for (relation, child_id) in children {
-                    work.push_back(WorkItem {
-                        target: child_id,
-                        traits: derivable_new.clone(),
-                        origin: origin.clone(),
-                        path: hop(relation),
-                    });
+                for edge in children {
+                    match edge {
+                        Edge::Wrapped {
+                            relation,
+                            option_id,
+                            container,
+                            value_id,
+                        } => {
+                            let (bad, pass) = container_split(container, &derivable_new);
+                            conflicts.extend(bad.into_iter().map(|required| TraitConflict {
+                                required,
+                                origin: origin.clone(),
+                                path: hop(relation.clone()),
+                                offender: option_id.clone(),
+                                reason: OffenderReason::Primitive {
+                                    type_name: path_text(container.path()),
+                                },
+                            }));
+                            if !pass.is_empty() {
+                                let mut path = hop(relation);
+                                path.push(PathStep {
+                                    type_id: option_id,
+                                    relation: Relation::Element,
+                                });
+                                work.push_back(WorkItem {
+                                    target: value_id,
+                                    traits: pass,
+                                    origin: origin.clone(),
+                                    path,
+                                });
+                            }
+                        }
+                        Edge::Plain(relation, child_id) => work.push_back(WorkItem {
+                            target: child_id,
+                            traits: derivable_new.clone(),
+                            origin: origin.clone(),
+                            path: hop(relation),
+                        }),
+                    }
                 }
             }
+            // Manual obligations need no wrapper routing: feasibility builds
+            // them only from default-state properties and from untagged item
+            // variants, and the wrapper substitutes only at optional-state
+            // properties, so no obligation ever names a wrapped edge.
             for (trait_name, obligations) in manual_pushes {
                 for (relation, child_id) in obligations {
                     work.push_back(WorkItem {
@@ -1175,10 +1307,19 @@ where
     if ty.is_named() {
         match feasibility(types, ty, trait_name, settings) {
             Feasibility::Impossible(_) => false,
-            Feasibility::Derivable | Feasibility::Forward => ty
-                .contained_children_related()
-                .iter()
-                .all(|(_, child)| child_has(child)),
+            // A wrapped property edge answers from the declared custom
+            // optional-nullable wrapper, exactly as required resolution
+            // routes it; every other edge asks the child directly.
+            Feasibility::Derivable | Feasibility::Forward => classify_edges(ty, types, settings)
+                .into_iter()
+                .all(|edge| match edge {
+                    Edge::Wrapped {
+                        container,
+                        value_id,
+                        ..
+                    } => container_provides(container, trait_name, || child_has(&value_id)),
+                    Edge::Plain(_, child_id) => child_has(&child_id),
+                }),
             Feasibility::ManuallyRealizable(obligations) => obligations
                 .iter()
                 .all(|(_, obligated)| child_has(obligated)),

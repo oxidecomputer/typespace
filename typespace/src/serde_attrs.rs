@@ -22,6 +22,7 @@ use crate::{TypespaceTrait, TypespaceTraitSet};
 pub(crate) struct SerdeDerives {
     serialize: bool,
     deserialize: bool,
+    jsonschema: bool,
 }
 
 impl SerdeDerives {
@@ -35,6 +36,7 @@ impl SerdeDerives {
         Self {
             serialize: traits.contains(&TypespaceTrait::Serialize),
             deserialize: traits.contains(&TypespaceTrait::Deserialize),
+            jsonschema: traits.contains(&TypespaceTrait::JsonSchema),
         }
     }
 
@@ -83,13 +85,21 @@ impl Extend<TokenStream> for SerdeAttrs {
 impl ToTokens for SerdeAttrs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { derives, options } = self;
-        let derived = derives.serialize || derives.deserialize;
-        if derived && !options.is_empty() {
-            tokens.extend(quote! {
-                #[serde(
-                    #( #options ),*
-                )]
-            });
+        let serde = derives.serialize || derives.deserialize;
+        if !options.is_empty() {
+            if serde {
+                tokens.extend(quote! {
+                    #[serde(
+                        #( #options ),*
+                    )]
+                });
+            } else if derives.jsonschema {
+                tokens.extend(quote! {
+                    #[schemars(
+                        #( #options ),*
+                    )]
+                });
+            }
         }
     }
 }

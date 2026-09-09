@@ -28,10 +28,10 @@
 
 use typespace::{
     Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
-    build::{Native, NewtypeStruct, Type},
+    build::{Native, NewtypeStruct, Struct, StructProperty, StructPropertyState, Type},
     error::{Error, OffenderReason, Relation, RequirementOrigin, TraitConflict},
     no_cycles,
-    settings::{ContainerType, Settings, TraitProvision},
+    settings::{ContainerType, OptionalNullable, Settings, TraitProvision},
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
 
@@ -180,9 +180,7 @@ fn vec_matches_std() {
 // has Default whatever it holds, Option forwards Copy but Box never has
 // it (a box heap-allocates), and everything else follows the parameter.
 fn option_rules() -> ContainerType {
-    ContainerType::vec()
-        .with_path("::std::option::Option")
-        .with_provision(TypespaceTrait::Copy, TraitProvision::IfParameters)
+    ContainerType::option()
 }
 
 fn box_rules() -> ContainerType {
@@ -244,6 +242,12 @@ enum Position {
     Set,
     Vec,
     Option,
+    /// An `Option` node at an optional struct property under a
+    /// declared custom optional-nullable wrapper--the one position the
+    /// declaration models. The probe graph holds the node as a wrapped
+    /// property rather than a newtype's inner, since the declaration
+    /// is consulted only at that edge.
+    OptionCustom,
     Box,
 }
 
@@ -253,7 +257,9 @@ impl Position {
     fn relations(self) -> Vec<Relation> {
         match self {
             Position::Map => vec![Relation::Key, Relation::Value],
-            Position::Set | Position::Vec | Position::Option => vec![Relation::Element],
+            Position::Set | Position::Vec | Position::Option | Position::OptionCustom => {
+                vec![Relation::Element]
+            }
             Position::Box => vec![Relation::Boxed],
         }
     }
@@ -265,6 +271,9 @@ impl Position {
             Position::Map => settings.with_map_type(declaration),
             Position::Set => settings.with_set_type(declaration),
             Position::Vec => settings.with_vec_type(declaration),
+            Position::OptionCustom => {
+                settings.with_optional_nullable(OptionalNullable::CustomType(declaration))
+            }
             // Nothing installs a declaration for these two; the rules
             // the matrix drives them against are trait_resolution's
             // own.
@@ -278,8 +287,28 @@ impl Position {
             Position::Map => Type::Map(parameters[0].clone(), parameters[1].clone()),
             Position::Set => Type::Set(parameters[0].clone()),
             Position::Vec => Type::Vec(parameters[0].clone()),
-            Position::Option => Type::Option(parameters[0].clone()),
+            Position::Option | Position::OptionCustom => Type::Option(parameters[0].clone()),
             Position::Box => Type::Box(parameters[0].clone()),
+        }
+    }
+
+    /// The traits the position's probe graph can put to the
+    /// declaration.
+    ///
+    /// The wrapped-property position sits under a struct, and a struct
+    /// refuses `Display` and `FromStr` on its own account, so a
+    /// requirement for either dies before the declaration is
+    /// consulted; the newtype the other positions probe through
+    /// forwards them.
+    fn probed_traits(self) -> Vec<TypespaceTrait> {
+        match self {
+            Position::OptionCustom => all_traits()
+                .into_iter()
+                .filter(|trait_| {
+                    !matches!(trait_, TypespaceTrait::Display | TypespaceTrait::FromStr)
+                })
+                .collect::<Vec<_>>(),
+            _ => all_traits(),
         }
     }
 }
@@ -311,7 +340,7 @@ impl Parameter {
     }
 }
 
-/// A newtype struct wrapping one container over `parameters`.
+/// A named type holding one container over `parameters`.
 ///
 /// Approximately, for the map position:
 ///
@@ -321,6 +350,12 @@ impl Parameter {
 /// Display and FromStr included, so this one graph probes all
 /// fourteen. It is built by hand because `typespace_builder!` cannot
 /// state a native's traits from a set computed at run time.
+///
+/// The custom optional-nullable position instead holds the container
+/// as an optional struct property--the edge its declaration is
+/// consulted at:
+///
+///     struct Wrapper { wrapped: Opt<Poison> }
 fn wrapped_container(
     settings: Settings,
     position: Position,
@@ -339,15 +374,21 @@ fn wrapped_container(
     builder
         .insert(CONTAINER.to_string(), position.node(&ids))
         .unwrap();
-    builder
-        .insert(
-            WRAPPER.to_string(),
-            NewtypeStruct::new(CONTAINER.to_string())
-                .name(WRAPPER)
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let wrapper = match position {
+        Position::OptionCustom => Struct::new()
+            .name(WRAPPER)
+            .properties(vec![
+                StructProperty::new("wrapped", CONTAINER.to_string())
+                    .with_state(StructPropertyState::Optional),
+            ])
+            .build()
+            .unwrap(),
+        _ => NewtypeStruct::new(CONTAINER.to_string())
+            .name(WRAPPER)
+            .build()
+            .unwrap(),
+    };
+    builder.insert(WRAPPER.to_string(), wrapper).unwrap();
     builder
 }
 
@@ -446,7 +487,8 @@ fn required_landing(
 /// Run the required phase over every trait and parameter position, and
 /// describe every cell that came out other than the declaration says.
 fn required_mismatches(position: Position, name: &str, declaration: &ContainerType) -> Vec<String> {
-    all_traits()
+    position
+        .probed_traits()
         .into_iter()
         .flat_map(|trait_| {
             let provision = declaration.provision(trait_);
@@ -485,7 +527,8 @@ fn required_mismatches(position: Position, name: &str, declaration: &ContainerTy
 /// Run the desired phase over every trait and parameter position, and
 /// describe every cell that came out other than the declaration says.
 fn desired_mismatches(position: Position, name: &str, declaration: &ContainerType) -> Vec<String> {
-    all_traits()
+    position
+        .probed_traits()
         .into_iter()
         .flat_map(|trait_| {
             let provision = declaration.provision(trait_);
@@ -594,6 +637,26 @@ fn box_declarations() -> Vec<(&'static str, ContainerType)> {
     vec![("Box", box_rules())]
 }
 
+/// The declarations the custom optional-nullable position is driven
+/// with: the `Option` preset a consumer's wrapper starts from, an
+/// opaque wrapper claiming nothing, and a wrapper without `Hash`, the
+/// customization a weaker wrapper would state.
+fn custom_optional_declarations() -> Vec<(&'static str, ContainerType)> {
+    vec![
+        (
+            "option preset",
+            ContainerType::option().with_path("::custom::Opt"),
+        ),
+        ("opaque", opaque(Position::OptionCustom)),
+        (
+            "no hash",
+            ContainerType::option()
+                .with_path("::custom::Opt")
+                .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
+        ),
+    ]
+}
+
 /// Every mismatch the declarations produced, run through `drive`.
 fn mismatches(
     position: Position,
@@ -663,6 +726,26 @@ fn desired_phase_follows_the_option_rules() {
 #[test]
 fn desired_phase_follows_the_box_rules() {
     let found = mismatches(Position::Box, box_declarations(), desired_mismatches);
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+#[test]
+fn required_phase_follows_the_custom_optional_declaration() {
+    let found = mismatches(
+        Position::OptionCustom,
+        custom_optional_declarations(),
+        required_mismatches,
+    );
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+#[test]
+fn desired_phase_follows_the_custom_optional_declaration() {
+    let found = mismatches(
+        Position::OptionCustom,
+        custom_optional_declarations(),
+        desired_mismatches,
+    );
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
 

@@ -196,6 +196,11 @@ impl Settings {
         self
     }
 
+    /// The modeling of values that may be absent, null, or a value.
+    pub fn optional_nullable(&self) -> &OptionalNullable {
+        &self.optional_nullable
+    }
+
     /// Set the container type used to render
     /// [`Type::Map`](crate::build::Type).
     ///
@@ -462,6 +467,27 @@ impl ContainerType {
         }
     }
 
+    /// `Option` and similar wrappers: nothing is demanded of the parameter,
+    /// `Default` is unconditional, and every trait but `Display` and `FromStr`
+    /// follows the parameter, `Copy` included.
+    ///
+    /// This is the intended base for an
+    /// [`OptionalNullable::CustomType`](crate::settings::OptionalNullable::CustomType)
+    /// declaration: point it at the wrapper with
+    /// [`with_path`](Self::with_path), then narrow any provision the
+    /// wrapper lacks.
+    pub fn option() -> Self {
+        Self {
+            path: parse_path("::std::option::Option"),
+            prelude_path: Some(parse_path("Option")),
+            obligations: vec![TypespaceTraitSet::empty()],
+            provisions: ProvisionTable::new(
+                &[TypespaceTrait::Display, TypespaceTrait::FromStr],
+                &[TypespaceTrait::Default],
+            ),
+        }
+    }
+
     /// `::std::collections::BTreeSet` and containers that behave as it
     /// does: elements must be ordered, and the provisions are `Vec`'s.
     pub fn btree_set() -> Self {
@@ -581,7 +607,7 @@ fn parse_path(path: &str) -> syn::Type {
 /// `syn::Type` implements neither `PartialEq` nor `Debug` without syn's
 /// `extra-traits` feature; equality and debug output go through the
 /// tokens instead.
-fn path_text(path: &syn::Type) -> String {
+pub(crate) fn path_text(path: &syn::Type) -> String {
     use quote::ToTokens;
     path.to_token_stream().to_string()
 }
@@ -639,6 +665,7 @@ enum ContainerFamily {
     BtreeMap,
     HashMap,
     Vec,
+    Option,
     BtreeSet,
     HashSet,
 }
@@ -650,6 +677,7 @@ impl ContainerFamily {
             Self::BtreeMap => ContainerType::btree_map(),
             Self::HashMap => ContainerType::hash_map(),
             Self::Vec => ContainerType::vec(),
+            Self::Option => ContainerType::option(),
             Self::BtreeSet => ContainerType::btree_set(),
             Self::HashSet => ContainerType::hash_set(),
         }
@@ -842,6 +870,9 @@ pub enum Std {
 
 /// Specify the modeling of values that may be either 'null' or 'optional'
 /// (i.e. absent).
+// One of these lives in each Settings; boxing CustomType's declaration
+// to shrink the enum would tax every construction site instead.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OptionalNullable {
@@ -864,17 +895,14 @@ pub enum OptionalNullable {
     /// and non-null.
     DoubleOption,
 
-    /// Use a custom type `Opt` where `Opt: std::default::Default +
-    /// serde::Deserialize + serde::Serialize`. The `Default` implementation
-    /// specifies the value for a field when absent; the `Deserialize`
-    /// implementation produces a value otherwise (null or a non-null value of
-    /// T). In addition, `Opt` must implement `is_absent(&self) -> bool` which
-    /// is used with the serde `skip_serializing_if` attribute to omit the
-    /// field.
-    CustomType(String),
-    // 8/21/2026
-    // At the fringes to consider. Should we have a AbsentOptional traits that
-    // requires Default + Deserialize + Serialize, and requires an is_absent()
-    // method? We could shove it into json-serde, and we could impl it for
-    // Option<Option<T>>.
+    /// Use a custom tri-state, type `Opt` where `Opt:
+    /// json_serde::OptionalNullable` (note that `OptionalNullable` implies
+    /// `Default`). It should typically be an enum, generic over `T`, with
+    /// variants for absent, null, and a `T` value.
+    ///
+    /// The [`ContainerType`] specifies the type's path, the traits it
+    /// requires of `T` (typically none), and--for each trait--whether `Opt<T>`
+    /// implements it never, always, or (typically) when `T` does.
+    /// [`ContainerType::option`] is the intended base for a declaration.
+    CustomType(ContainerType),
 }

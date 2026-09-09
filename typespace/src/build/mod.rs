@@ -237,6 +237,38 @@ impl<Id> Type<Id> {
     }
 }
 
+/// A contained child of a type: the relation reaching it, its id, and
+/// whether the edge is a struct-style property in the optional state.
+///
+/// Produced by [`Type::contained_children_related`]; trait resolution
+/// classifies each against the settings to decide whether the declared
+/// custom optional-nullable wrapper substitutes at that edge.
+pub(crate) struct ContainedChild<Id> {
+    pub(crate) relation: crate::error::Relation,
+    pub(crate) id: Id,
+    pub(crate) optional: bool,
+}
+
+impl<Id> ContainedChild<Id> {
+    /// A required edge; not an optional struct-style property.
+    fn required(relation: crate::error::Relation, id: Id) -> Self {
+        Self {
+            relation,
+            id,
+            optional: false,
+        }
+    }
+
+    /// An optional struct-style property.
+    fn optional(relation: crate::error::Relation, id: Id) -> Self {
+        Self {
+            relation,
+            id,
+            optional: true,
+        }
+    }
+}
+
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// The IDs of every type this type refers to directly. Each such ID
     /// must have a corresponding type inserted into the
@@ -461,28 +493,43 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
-    /// The contained children paired with the relation reaching each.
+    /// The contained children, each with the relation reaching it and
+    /// whether that edge is a struct-style property in the optional
+    /// state--the one position a declared custom optional-nullable
+    /// wrapper substitutes at.
     ///
     /// Mirrors [`Type::contained_children_mut`]--the same children, in
     /// the same order--labeled for trait-requirement propagation paths;
     /// keep the two functions in sync. Container types that trait
     /// propagation handles directly (box, vec, map, set) report no
     /// children here, exactly as `contained_children_mut` does.
-    pub(crate) fn contained_children_related(&self) -> Vec<(crate::error::Relation, Id)> {
+    pub(crate) fn contained_children_related(&self) -> Vec<ContainedChild<Id>> {
         use crate::error::Relation;
         match self {
             Type::Enum(Enum { variants, .. }) => {
                 let mut out = Vec::new();
                 for variant in variants {
-                    let relation = || Relation::Variant(variant.rust_name.clone());
+                    let relation = Relation::Variant(variant.rust_name.clone());
                     match &variant.details {
                         VariantDetails::Unit => {}
-                        VariantDetails::Item(id) => out.push((relation(), id.clone())),
+                        VariantDetails::Item(id) => {
+                            out.push(ContainedChild::required(relation.clone(), id.clone()))
+                        }
                         VariantDetails::Tuple(ids) => {
-                            out.extend(ids.iter().map(|id| (relation(), id.clone())));
+                            out.extend(
+                                ids.iter().map(|id| {
+                                    ContainedChild::required(relation.clone(), id.clone())
+                                }),
+                            );
                         }
                         VariantDetails::Struct(props) => {
-                            out.extend(props.iter().map(|prop| (relation(), prop.type_id.clone())));
+                            out.extend(props.iter().map(|prop| {
+                                if prop.state.is_optional() {
+                                    ContainedChild::optional(relation.clone(), prop.type_id.clone())
+                                } else {
+                                    ContainedChild::required(relation.clone(), prop.type_id.clone())
+                                }
+                            }));
                         }
                     }
                 }
@@ -491,10 +538,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::Struct(Struct { properties, .. }) => properties
                 .iter()
                 .map(|prop| {
-                    (
-                        Relation::Field(prop.rust_name.to_string()),
-                        prop.type_id.clone(),
-                    )
+                    let relation = Relation::Field(prop.rust_name.to_string());
+                    let id = prop.type_id.clone();
+                    if prop.state.is_optional() {
+                        ContainedChild::optional(relation, id)
+                    } else {
+                        ContainedChild::required(relation, id)
+                    }
                 })
                 .collect(),
 
@@ -502,25 +552,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::TupleStruct(TupleStruct { fields, rest, .. }) => {
                 let mut out = fields
                     .iter()
-                    .map(|id| (Relation::Element, id.clone()))
+                    .map(|id| ContainedChild::required(Relation::Element, id.clone()))
                     .collect::<Vec<_>>();
                 if let Some(rest) = rest {
-                    out.push((Relation::Element, rest.clone()));
+                    out.push(ContainedChild::required(Relation::Element, rest.clone()));
                 }
                 out
             }
             Type::NewtypeStruct(NewtypeStruct { inner, .. }) => {
-                vec![(Relation::Inner, inner.clone())]
+                vec![ContainedChild::required(Relation::Inner, inner.clone())]
             }
             Type::TypeAlias(alias_info) => {
-                vec![(Relation::Target, alias_info.target.clone())]
+                vec![ContainedChild::required(
+                    Relation::Target,
+                    alias_info.target.clone(),
+                )]
             }
 
-            Type::Option(id) => vec![(Relation::Element, id.clone())],
-            Type::Array(id, _) => vec![(Relation::Element, id.clone())],
+            Type::Option(id) => vec![ContainedChild::required(Relation::Element, id.clone())],
+            Type::Array(id, _) => vec![ContainedChild::required(Relation::Element, id.clone())],
             Type::Tuple(items) => items
                 .iter()
-                .map(|id| (Relation::Element, id.clone()))
+                .map(|id| ContainedChild::required(Relation::Element, id.clone()))
                 .collect(),
 
             Type::Native(_) => Vec::new(),

@@ -44,7 +44,10 @@
 //!   - a [`build::TupleStruct`] with a `rest` field (its serde impls use
 //!     `::json_serde::FlattenedSequenceSerializer` and
 //!     `::json_serde::FlattenedSequenceDeserializer`);
-//!   - a [`build::Type::Never`] (rendered as `::json_serde::Absent`).
+//!   - an optional [`build::Type::Never`] (rendered as
+//!     `::json_serde::Absent`).
+//!   - a custom type to represent a field whose value may be absent, null, or
+//!     a type value, specified with [`settings::OptionalNullable::CustomType`]
 //!
 //!   `Absent`'s use is independent of the trait set holds; the
 //!   rest ride on serde attributes and impls, so settings that require
@@ -494,12 +497,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Verify that each configured container declares what it demands
     /// of every type parameter the position it renders supplies.
     fn check_containers(&self) -> Result<(), Error<Id>> {
+        let custom_optional = match &self.settings.optional_nullable {
+            OptionalNullable::CustomType(container) => Some(("optional-nullable", container, 1)),
+            _ => None,
+        };
         [
             ("map", &self.settings.map_type, 2),
             ("set", &self.settings.set_type, 1),
             ("vec", &self.settings.vec_type, 1),
         ]
         .into_iter()
+        .chain(custom_optional)
         .try_for_each(|(position, container, parameters)| {
             match container.obligations().len() {
                 declared if declared == parameters => Ok(()),
@@ -1516,12 +1524,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                             quote! { #std_opt_type<#ty_ident_scoped> },
                         )
                     }
-                    OptionalNullable::CustomType(custom_type_name) => {
-                        let custom_type_path =
-                            syn::parse_str::<syn::TypePath>(custom_type_name).unwrap();
+                    // Trait resolution's edge classifier mirrors this
+                    // condition.
+                    OptionalNullable::CustomType(container) => {
+                        let custom_type_path = container.rendered_path(&self.settings.std);
                         serde_options.push(quote! { default });
-                        let custom_is_absent = format!("{}::is_absent", custom_type_name);
-                        serde_options.push(quote! { skip_serializing_if = #custom_is_absent });
+                        let is_absent = "::json_serde::OptionalNullable::is_absent";
+                        serde_options.push(quote! {
+                            skip_serializing_if = #is_absent
+                        });
 
                         let inner_ident = self.render_ident(inner_id);
                         let inner_ident_scoped =
