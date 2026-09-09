@@ -9,7 +9,7 @@
 
 use typespace::{
     TypespaceBuilder, TypespaceTrait,
-    build::{JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct, StructProperty, Type},
+    build::{JsonValue, NewtypeConstraints, NewtypeStruct, Type},
     no_cycles,
     settings::{ContainerType, Settings},
 };
@@ -40,48 +40,16 @@ mod common;
 #[test]
 #[ignore = "deferred until after the typify merge"]
 fn desired_eq_not_granted_over_unknown_hash_key() {
-    let native = Native::new(
-        "::ext::NativeK",
-        [
-            TypespaceTrait::Clone,
-            TypespaceTrait::Debug,
-            TypespaceTrait::Serialize,
-            TypespaceTrait::Deserialize,
-            TypespaceTrait::Eq,
-            TypespaceTrait::PartialEq,
-        ]
-        .into_iter()
-        .collect(),
-        Vec::new(),
-    )
-    .with_rest_unknown();
-
     let settings = Settings::minimal()
         .with_map_type(ContainerType::hash_map())
         .with_desired_trait(TypespaceTrait::Eq);
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert("key".to_string(), Type::Native(native))
-        .unwrap();
-    builder
-        .insert("value".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "map".to_string(),
-            Type::Map("key".to_string(), "value".to_string()),
-        )
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![StructProperty::new("m", "map".to_string())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        native ::ext::NativeK: Clone + Debug + Serialize + Deserialize + Eq + PartialEq + ..;
+
+        struct Holder {
+            m: Map<::ext::NativeK, u32>,
+        }
+    });
 
     let ts = builder.finalize(no_cycles).expect("an unknown passes");
     let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();

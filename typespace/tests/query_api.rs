@@ -169,104 +169,50 @@ fn ident_produces_expected_tokens() {
 // keep their own syntax and apply the rule to what they hold.
 #[test]
 fn parameter_idents_borrow_by_rule() {
-    let mut builder =
-        TypespaceBuilder::new(Settings::minimal().with_std(typespace::settings::Std::Unqualified));
+    let settings = Settings::minimal().with_std(typespace::settings::Std::Unqualified);
+    let builder = typespace_builder!(settings, {
+        enum UnitEnum {
+            One,
+            Two,
+        }
 
-    let str_id = "str".to_string();
-    builder.insert(str_id.clone(), Type::String).unwrap();
+        enum PayloadEnum {
+            Bare,
+            Wrapped(u32),
+        }
 
-    let u32_id = "u32".to_string();
-    builder
-        .insert(u32_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
+        struct MyStruct {
+            name: String,
+        }
 
-    let bool_id = "bool".to_string();
-    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
+        struct Positions {
+            flag: bool,
+            vec: Vec<MyStruct>,
+            opt_u32: Nullable<u32>,
+            opt_str: Nullable<String>,
+            opt_struct: Nullable<MyStruct>,
+            tuple: (u32, String, MyStruct),
+        }
+    });
 
-    let unit_enum_id = "UnitEnum".to_string();
-    builder
-        .insert(
-            unit_enum_id.clone(),
-            Enum::new()
-                .name("UnitEnum")
-                .tag_type(EnumTagType::External)
-                .variants(vec![
-                    EnumVariant::new("One", VariantDetails::Unit),
-                    EnumVariant::new("Two", VariantDetails::Unit),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    let payload_enum_id = "PayloadEnum".to_string();
-    builder
-        .insert(
-            payload_enum_id.clone(),
-            Enum::new()
-                .name("PayloadEnum")
-                .tag_type(EnumTagType::External)
-                .variants(vec![
-                    EnumVariant::new("Bare", VariantDetails::Unit),
-                    EnumVariant::new("Wrapped", VariantDetails::Item(u32_id.clone())),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
+    let str_id = "String".to_string();
     let struct_id = "MyStruct".to_string();
-    builder
-        .insert(
-            struct_id.clone(),
-            Struct::new()
-                .name("MyStruct")
-                .properties(vec![StructProperty::new("name", str_id.clone())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    let vec_id = "vec".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec(struct_id.clone()))
-        .unwrap();
-
-    let opt_u32_id = "opt_u32".to_string();
-    builder
-        .insert(opt_u32_id.clone(), Type::Option(u32_id.clone()))
-        .unwrap();
-
-    let opt_str_id = "opt_str".to_string();
-    builder
-        .insert(opt_str_id.clone(), Type::Option(str_id.clone()))
-        .unwrap();
-
-    let opt_struct_id = "opt_struct".to_string();
-    builder
-        .insert(opt_struct_id.clone(), Type::Option(struct_id.clone()))
-        .unwrap();
-
-    let tuple_id = "tuple".to_string();
-    builder
-        .insert(
-            tuple_id.clone(),
-            Type::Tuple(vec![u32_id.clone(), str_id.clone(), struct_id.clone()]),
-        )
-        .unwrap();
+    let opt_str_id = "Nullable<String>".to_string();
+    let opt_struct_id = "Nullable<MyStruct>".to_string();
+    let unit_enum_id = "UnitEnum".to_string();
 
     let cases = [
         ("u32", quote! { u32 }),
         ("bool", quote! { bool }),
-        ("str", quote! { &str }),
+        ("String", quote! { &str }),
         ("UnitEnum", quote! { UnitEnum }),
         ("PayloadEnum", quote! { &PayloadEnum }),
         ("MyStruct", quote! { &MyStruct }),
-        ("vec", quote! { &Vec<MyStruct> }),
-        ("opt_u32", quote! { Option<u32> }),
-        ("opt_str", quote! { Option<&str> }),
-        ("opt_struct", quote! { Option<&MyStruct> }),
-        ("tuple", quote! { (u32, &str, &MyStruct) }),
+        ("Vec<MyStruct>", quote! { &Vec<MyStruct> }),
+        ("Nullable<u32>", quote! { Option<u32> }),
+        ("Nullable<String>", quote! { Option<&str> }),
+        ("Nullable<MyStruct>", quote! { Option<&MyStruct> }),
+        ("(u32, String, MyStruct)", quote! { (u32, &str, &MyStruct) }),
     ];
 
     // The builder answers the same question before finalization.
@@ -462,28 +408,20 @@ fn build_side_queries() {
 // equivalents on the builder.
 #[test]
 fn scoped_and_prefinalize_idents() {
-    let mut builder =
-        TypespaceBuilder::new(Settings::minimal().with_std(typespace::settings::Std::Unqualified));
+    let settings = Settings::minimal().with_std(typespace::settings::Std::Unqualified);
+    let builder = typespace_builder!(settings, {
+        struct MyStruct {
+            name: String,
+        }
 
-    let str_id = "str".to_string();
-    builder.insert(str_id.clone(), Type::String).unwrap();
+        struct Positions {
+            v: Vec<MyStruct>,
+        }
+    });
 
-    let vec_id = "vec".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec("MyStruct".to_string()))
-        .unwrap();
-
+    let str_id = "String".to_string();
     let struct_id = "MyStruct".to_string();
-    builder
-        .insert(
-            struct_id.clone(),
-            Struct::new()
-                .name("MyStruct")
-                .properties(vec![StructProperty::new("name", str_id.clone())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let vec_id = "Vec<MyStruct>".to_string();
 
     // Pre-finalize rendering on the builder.
     assert_eq!(

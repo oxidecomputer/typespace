@@ -4,14 +4,12 @@
 
 use typespace::{
     TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
-    build::{
-        Enum, EnumTagType, EnumVariant, Native, Struct, StructProperty, StructPropertyState, Type,
-        VariantDetails,
-    },
+    build::Type,
     error::{Error, PathStep, Relation},
     no_cycles,
     settings::{ContainerType, OptionalNullable, Settings, TraitProvision},
 };
+use typespace_test_macro::typespace_builder;
 
 fn set(traits: impl IntoIterator<Item = TypespaceTrait>) -> TypespaceTraitSet {
     traits.into_iter().collect()
@@ -336,7 +334,7 @@ fn a_deserialized_declaration_is_whole() {
 // map type is rejected--silently wrong before the obligations became a
 // list.
 #[test]
-fn an_arity_mismatch_is_rejected_at_finalization() {
+fn cardinality_mismatch_is_rejected_at_finalization() {
     let settings = Settings::minimal()
         .with_map_type(ContainerType::hash_map().with_obligations([hash_lookup()]));
 
@@ -372,43 +370,14 @@ fn an_arity_mismatch_is_rejected_at_finalization() {
 // states the stronger form, so this refusal is deliberate.
 #[test]
 fn json_schema_demanded_of_map_key() {
-    let native = Native::new(
-        "::ext::RawKey",
-        [
-            TypespaceTrait::Clone,
-            TypespaceTrait::Debug,
-            TypespaceTrait::Serialize,
-            TypespaceTrait::Deserialize,
-        ]
-        .into_iter()
-        .collect(),
-        Vec::new(),
-    );
-
     let settings = Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema);
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert("key".to_string(), Type::Native(native))
-        .unwrap();
-    builder
-        .insert("value".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "map".to_string(),
-            Type::Map("key".to_string(), "value".to_string()),
-        )
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![StructProperty::new("m", "map".to_string())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        native ::ext::RawKey: Clone + Debug + Serialize + Deserialize;
+
+        struct Holder {
+            m: Map<::ext::RawKey, u32>,
+        }
+    });
 
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("the key is demanded JsonSchema");
@@ -449,7 +418,7 @@ fn a_custom_optional_wrapper_deserializes_like_a_container() {
 // The wrapper takes exactly one parameter; a declaration with any other
 // obligation count is rejected at finalization like a mis-declared map.
 #[test]
-fn a_custom_optional_arity_mismatch_is_rejected_at_finalization() {
+fn custom_optional_cardinality_mismatch_is_rejected_at_finalization() {
     let settings = Settings::minimal().with_optional_nullable(OptionalNullable::CustomType(
         ContainerType::option()
             .with_path("::my::Opt")
@@ -487,38 +456,13 @@ fn a_custom_optional_wrapper_states_a_value_obligation() {
             .with_obligations([set([TypespaceTrait::Hash])]),
     ));
 
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert(
-            "value".to_string(),
-            Type::Native(Native::new(
-                "::ext::NoHash",
-                set([
-                    TypespaceTrait::Clone,
-                    TypespaceTrait::Debug,
-                    TypespaceTrait::Serialize,
-                    TypespaceTrait::Deserialize,
-                ]),
-                Vec::new(),
-            )),
-        )
-        .unwrap();
-    builder
-        .insert("option".to_string(), Type::Option("value".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![
-                    StructProperty::new("o", "option".to_string())
-                        .with_state(StructPropertyState::Optional),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        native ::ext::NoHash: Clone + Debug + Serialize + Deserialize;
+
+        struct Holder {
+            o: OptionalNullable<::ext::NoHash>,
+        }
+    });
 
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("the value type is demanded Hash");
@@ -540,30 +484,12 @@ fn a_weakened_wrapper_conflicts_only_at_wrapped_properties() {
                 .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
         ));
 
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert("value".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert("option".to_string(), Type::Option("value".to_string()))
-        .unwrap();
-    builder
-        .insert("vec".to_string(), Type::Vec("option".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![
-                    StructProperty::new("wrapped", "option".to_string())
-                        .with_state(StructPropertyState::Optional),
-                    StructProperty::new("listed", "vec".to_string()),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            wrapped: OptionalNullable<u32>,
+            listed: Vec<Nullable<u32>>,
+        }
+    });
 
     let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("the wrapped property is refused Hash");
@@ -571,7 +497,7 @@ fn a_weakened_wrapper_conflicts_only_at_wrapped_properties() {
     assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
     let conflict = &conflicts[0];
     assert_eq!(conflict.required, TypespaceTrait::Hash);
-    assert_eq!(conflict.offender, "option");
+    assert_eq!(conflict.offender, "Nullable<u32>");
     assert!(
         matches!(
             conflict.path.as_slice(),
@@ -595,30 +521,11 @@ fn a_weakened_wrapper_conflicts_at_struct_variant_properties() {
                 .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
         ));
 
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert("value".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert("option".to_string(), Type::Option("value".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Enum::new()
-                .name("Holder")
-                .tag_type(EnumTagType::External)
-                .variants(vec![EnumVariant::new(
-                    "Named",
-                    VariantDetails::Struct(vec![
-                        StructProperty::new("wrapped", "option".to_string())
-                            .with_state(StructPropertyState::Optional),
-                    ]),
-                )])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        enum Holder {
+            Named { wrapped: OptionalNullable<u32> },
+        }
+    });
 
     let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("the wrapped variant property is refused Hash");
@@ -626,7 +533,7 @@ fn a_weakened_wrapper_conflicts_at_struct_variant_properties() {
     assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
     let conflict = &conflicts[0];
     assert_eq!(conflict.required, TypespaceTrait::Hash);
-    assert_eq!(conflict.offender, "option");
+    assert_eq!(conflict.offender, "Nullable<u32>");
     assert!(
         matches!(
             conflict.path.as_slice(),
@@ -650,23 +557,11 @@ fn a_required_option_property_keeps_the_std_model() {
                 .with_provision(TypespaceTrait::Hash, TraitProvision::Never),
         ));
 
-    let mut builder = TypespaceBuilder::new(settings);
-    builder
-        .insert("value".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert("option".to_string(), Type::Option("value".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![StructProperty::new("r", "option".to_string())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            r: Nullable<u32>,
+        }
+    });
 
     builder.finalize(no_cycles).unwrap();
 }

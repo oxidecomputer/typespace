@@ -5,7 +5,7 @@ use quote::{format_ident, quote};
 use typespace::build::{
     Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct,
     StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias,
-    UnitStruct, VariantDetails,
+    VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
 use typespace::settings::{ContainerType, OptionalNullable, Settings, Std};
@@ -57,43 +57,6 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for OptionField<T> {
 
 #[test]
 fn test_struct_field_serde() {
-    let configs = [
-        (
-            "ConflatedAsAbsent",
-            Settings::minimal()
-                .with_std(Std::Unqualified)
-                .with_required_trait(TypespaceTrait::Serialize)
-                .with_required_trait(TypespaceTrait::Deserialize)
-                .with_optional_nullable(OptionalNullable::ConflateAsAbsent),
-        ),
-        (
-            "ConflatedAsNull",
-            Settings::minimal()
-                .with_std(Std::Unqualified)
-                .with_required_trait(TypespaceTrait::Serialize)
-                .with_required_trait(TypespaceTrait::Deserialize)
-                .with_optional_nullable(OptionalNullable::ConflateAsNull),
-        ),
-        (
-            "DoubleOption",
-            Settings::minimal()
-                .with_std(Std::Unqualified)
-                .with_required_trait(TypespaceTrait::Serialize)
-                .with_required_trait(TypespaceTrait::Deserialize)
-                .with_optional_nullable(OptionalNullable::DoubleOption),
-        ),
-        (
-            "CustomType",
-            Settings::minimal()
-                .with_std(Std::Unqualified)
-                .with_required_trait(TypespaceTrait::Serialize)
-                .with_required_trait(TypespaceTrait::Deserialize)
-                .with_optional_nullable(OptionalNullable::CustomType(
-                    ContainerType::option().with_path("super::OptionField"),
-                )),
-        ),
-    ];
-
     // For each configuration we create a type with the following fields:
     // - optional_string: A string that may be absent
     // - required_option: Either a string or null, but must be present
@@ -102,46 +65,100 @@ fn test_struct_field_serde() {
     // - default_option: A string or null with the intrinsic default (i.e. null)
     // - peanut_string: A string with a custom default of "peanuts"
     // - peanut_option: A string or null with a custom default of "peanuts"
-    let outputs = configs.into_iter().map(|(name, settings)| {
-        let mut builder = TypespaceBuilder::new(settings);
+    let conflated_as_absent = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_optional_nullable(OptionalNullable::ConflateAsAbsent);
+    let conflated_as_absent = typespace_builder!(conflated_as_absent, {
+        struct ConflatedAsAbsent {
+            optional_string: Optional<String>,
+            required_option: Nullable<String>,
+            optional_option: OptionalNullable<String>,
+            #[default]
+            default_string: String,
+            #[default]
+            default_option: Nullable<String>,
+            #[default = "peanuts"]
+            peanut_string: String,
+            #[default = "peanuts"]
+            peanut_option: Nullable<String>,
+        }
+    });
 
-        let string_id = "string".to_string();
-        builder.insert(string_id.clone(), Type::String).unwrap();
+    let conflated_as_null = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_optional_nullable(OptionalNullable::ConflateAsNull);
+    let conflated_as_null = typespace_builder!(conflated_as_null, {
+        struct ConflatedAsNull {
+            optional_string: Optional<String>,
+            required_option: Nullable<String>,
+            optional_option: OptionalNullable<String>,
+            #[default]
+            default_string: String,
+            #[default]
+            default_option: Nullable<String>,
+            #[default = "peanuts"]
+            peanut_string: String,
+            #[default = "peanuts"]
+            peanut_option: Nullable<String>,
+        }
+    });
 
-        let option_id = "option_string".to_string();
-        builder
-            .insert(option_id.clone(), Type::Option(string_id.clone()))
-            .unwrap();
+    let double_option = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_optional_nullable(OptionalNullable::DoubleOption);
+    let double_option = typespace_builder!(double_option, {
+        struct DoubleOption {
+            optional_string: Optional<String>,
+            required_option: Nullable<String>,
+            optional_option: OptionalNullable<String>,
+            #[default]
+            default_string: String,
+            #[default]
+            default_option: Nullable<String>,
+            #[default = "peanuts"]
+            peanut_string: String,
+            #[default = "peanuts"]
+            peanut_option: Nullable<String>,
+        }
+    });
 
-        let properties = vec![
-            StructProperty::new("optional_string", string_id.clone())
-                .with_state(StructPropertyState::Optional),
-            StructProperty::new("required_option", option_id.clone()),
-            StructProperty::new("optional_option", option_id.clone())
-                .with_state(StructPropertyState::Optional),
-            StructProperty::new("default_string", string_id.clone())
-                .with_state(StructPropertyState::Default),
-            StructProperty::new("default_option", option_id.clone())
-                .with_state(StructPropertyState::Default),
-            StructProperty::new("peanut_string", string_id.clone()).with_state(
-                StructPropertyState::DefaultValue(JsonValue::new(serde_json::json!("peanuts"))),
-            ),
-            StructProperty::new("peanut_option", option_id.clone()).with_state(
-                StructPropertyState::DefaultValue(JsonValue::new(serde_json::json!("peanuts"))),
-            ),
-        ];
+    let custom_type = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option().with_path("super::OptionField"),
+        ));
+    let custom_type = typespace_builder!(custom_type, {
+        struct CustomType {
+            optional_string: Optional<String>,
+            required_option: Nullable<String>,
+            optional_option: OptionalNullable<String>,
+            #[default]
+            default_string: String,
+            #[default]
+            default_option: Nullable<String>,
+            #[default = "peanuts"]
+            peanut_string: String,
+            #[default = "peanuts"]
+            peanut_option: Nullable<String>,
+        }
+    });
 
-        builder
-            .insert(
-                "X".to_string(),
-                Struct::new()
-                    .name(name)
-                    .properties(properties)
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+    let builders = [
+        ("ConflatedAsAbsent", conflated_as_absent),
+        ("ConflatedAsNull", conflated_as_null),
+        ("DoubleOption", double_option),
+        ("CustomType", custom_type),
+    ];
 
+    let outputs = builders.into_iter().map(|(name, builder)| {
         let ts = builder.finalize(no_cycles).unwrap();
         let out = ts.to_codespace();
 
@@ -228,21 +245,15 @@ fn test_struct_field_serde() {
 
 #[test]
 fn test_unit_struct() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize),
+        {
+            #[json = "<<+>>"]
+            struct MyUnitStruct;
+        }
     );
-
-    builder
-        .insert(
-            "MyUnitStruct".to_string(),
-            UnitStruct::new(serde_json::json!("<<+>>"))
-                .name("MyUnitStruct")
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
@@ -258,37 +269,15 @@ fn test_unit_struct() {
 
 #[test]
 fn test_tuple_struct() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_std(Std::Unqualified)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_required_trait(TypespaceTrait::Serialize),
+        {
+            struct MyTupleStruct(String, u32, #[flatten] Vec<String>);
+        }
     );
-
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let string_vec_id = "string_vec".to_string();
-    builder
-        .insert(string_vec_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
-
-    builder
-        .insert(
-            "MyTupleStruct".to_string(),
-            TupleStruct::new()
-                .name("MyTupleStruct")
-                .fields(vec![string_id, int_id])
-                .rest(string_vec_id)
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
@@ -328,78 +317,58 @@ fn test_tuple_struct() {
 // Enums: one test covering all four serde tag types.
 #[test]
 fn test_enums() {
-    let configs: &[(&str, EnumTagType)] = &[
-        ("External", EnumTagType::External),
-        (
-            "Internal",
-            EnumTagType::Internal {
-                tag: "type".to_string(),
-            },
-        ),
-        (
-            "Adjacent",
-            EnumTagType::Adjacent {
-                tag: "t".to_string(),
-                content: "c".to_string(),
-            },
-        ),
-        ("Untagged", EnumTagType::Untagged),
-    ];
+    fn settings() -> Settings {
+        Settings::minimal()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::Serialize)
+    }
 
-    let outputs = configs.iter().map(|(name, tag_type)| {
-        let mut builder = TypespaceBuilder::new(
-            Settings::minimal()
-                .with_std(Std::Unqualified)
-                .with_required_trait(TypespaceTrait::Deserialize)
-                .with_required_trait(TypespaceTrait::Serialize),
-        );
-
-        let string_id = "string".to_string();
-        builder.insert(string_id.clone(), Type::String).unwrap();
-
-        let int_id = "integer".to_string();
-        builder
-            .insert(int_id.clone(), Type::Integer("u32".to_string()))
-            .unwrap();
-
-        // Internal tagging doesn't support newtype variants wrapping non-struct
-        // types, so we use only unit and struct variants for Internal.
-        let variants = match tag_type {
-            EnumTagType::Internal { .. } => vec![
-                EnumVariant::new("Unit", VariantDetails::Unit),
-                EnumVariant::new(
-                    "Named",
-                    VariantDetails::Struct(vec![StructProperty::new("x", int_id.clone())]),
-                ),
-            ],
-            _ => vec![
-                EnumVariant::new("Unit", VariantDetails::Unit),
-                EnumVariant::new("Item", VariantDetails::Item(string_id.clone())),
-                EnumVariant::new(
-                    "Named",
-                    VariantDetails::Struct(vec![StructProperty::new("x", int_id.clone())]),
-                ),
-            ],
-        };
-
-        builder
-            .insert(
-                "E".to_string(),
-                Enum::new()
-                    .name(*name)
-                    .tag_type(tag_type.clone())
-                    .variants(variants)
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
-
-        builder
-            .finalize(no_cycles)
-            .unwrap()
-            .to_codespace()
-            .into_stream()
+    // Internal tagging doesn't support newtype variants wrapping non-struct
+    // types, so we use only unit and struct variants for Internal.
+    let external = typespace_builder!(settings(), {
+        enum External {
+            Unit,
+            Item(String),
+            Named { x: u32 },
+        }
     });
+
+    let internal = typespace_builder!(settings(), {
+        #[tag = "type"]
+        enum Internal {
+            Unit,
+            Named { x: u32 },
+        }
+    });
+
+    let adjacent = typespace_builder!(settings(), {
+        #[tag = "t", content = "c"]
+        enum Adjacent {
+            Unit,
+            Item(String),
+            Named { x: u32 },
+        }
+    });
+
+    let untagged = typespace_builder!(settings(), {
+        #[untagged]
+        enum Untagged {
+            Unit,
+            Item(String),
+            Named { x: u32 },
+        }
+    });
+
+    let outputs = [external, internal, adjacent, untagged]
+        .into_iter()
+        .map(|builder| {
+            builder
+                .finalize(no_cycles)
+                .unwrap()
+                .to_codespace()
+                .into_stream()
+        });
 
     let output = quote! { #( #outputs )* };
 
@@ -869,26 +838,24 @@ fn test_struct_serde_rename_flatten() {
 
 #[test]
 fn test_native_type() {
-    let mut builder = TypespaceBuilder::new(Settings::minimal().with_std(Std::Unqualified));
+    let builder = typespace_builder!(Settings::minimal().with_std(Std::Unqualified), {
+        native std::path::PathBuf: Clone
+            + Debug
+            + Serialize
+            + Deserialize
+            + JsonSchema
+            + Ord
+            + PartialOrd
+            + Eq
+            + PartialEq
+            + Hash
+            + Display
+            + FromStr;
 
-    let uuid_id = "path".to_string();
-    builder
-        .insert(
-            uuid_id.clone(),
-            Type::Native(Native::new_string_like("std::path::PathBuf")),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Resource".to_string(),
-            Struct::new()
-                .name("Resource")
-                .properties(vec![StructProperty::new("location", uuid_id)])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        struct Resource {
+            location: std::path::PathBuf,
+        }
+    });
 
     let ts = builder.finalize(no_cycles).unwrap();
 
@@ -900,25 +867,17 @@ fn test_native_type() {
 /// whose type is `Type::Never`.
 #[test]
 fn test_never_field() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_required_trait(TypespaceTrait::Debug),
+        {
+            struct Gone {
+                value: !,
+            }
+        }
     );
-
-    builder.insert("never".to_string(), Type::Never).unwrap();
-
-    builder
-        .insert(
-            "Gone".to_string(),
-            Struct::new()
-                .name("Gone")
-                .properties(vec![StructProperty::new("value", "never".to_string())])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
 
     let Err(Error::NeverInValuePosition {
         position,
@@ -935,131 +894,57 @@ fn test_never_field() {
 
 #[test]
 fn test_compound_field_types() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
+        {
+            struct All {
+                a_bool: bool,
+                an_int: u32,
+                a_float: f64,
+                a_string: String,
+                a_json: JsonValue,
+                a_vec: Vec<String>,
+                a_map: Map<String, u32>,
+                a_set: Set<String>,
+                an_array: [u32; 3],
+                a_tuple: (String, u32),
+                a_box_string: Box<String>,
+                a_box_vec: Box<Vec<String>>,
+            }
+
+            // Exercise StructPropertyState::Default for each applicable field
+            // type. JsonValue is excluded: Default is not supported for it.
+            struct Defaults {
+                #[default]
+                a_bool: bool,
+                #[default]
+                an_int: u32,
+                #[default]
+                a_float: f64,
+                #[default]
+                a_string: String,
+                #[default]
+                a_vec: Vec<String>,
+                #[default]
+                a_map: Map<String, u32>,
+                #[default]
+                a_set: Set<String>,
+                #[default]
+                an_array: [u32; 3],
+                #[default]
+                a_tuple: (String, u32),
+                #[default]
+                an_option: Nullable<String>,
+                #[default]
+                a_box_string: Box<String>,
+                #[default]
+                a_box_vec: Box<Vec<String>>,
+            }
+        }
     );
-
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    let bool_id = "boolean".to_string();
-    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
-
-    let float_id = "float".to_string();
-    builder
-        .insert(float_id.clone(), Type::Float("f64".to_string()))
-        .unwrap();
-
-    let json_id = "json".to_string();
-    builder.insert(json_id.clone(), Type::JsonValue).unwrap();
-
-    let vec_id = "vec_string".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
-
-    let map_id = "map".to_string();
-    builder
-        .insert(map_id.clone(), Type::Map(string_id.clone(), int_id.clone()))
-        .unwrap();
-
-    let set_id = "set".to_string();
-    builder
-        .insert(set_id.clone(), Type::Set(string_id.clone()))
-        .unwrap();
-
-    let array_id = "array".to_string();
-    builder
-        .insert(array_id.clone(), Type::Array(int_id.clone(), 3))
-        .unwrap();
-
-    let opt_id = "opt_string".to_string();
-    builder
-        .insert(opt_id.clone(), Type::Option(string_id.clone()))
-        .unwrap();
-
-    let box_string_id = "box_string".to_string();
-    builder
-        .insert(box_string_id.clone(), Type::Box(string_id.clone()))
-        .unwrap();
-
-    let box_vec_id = "box_vec_string".to_string();
-    builder
-        .insert(box_vec_id.clone(), Type::Box(vec_id.clone()))
-        .unwrap();
-
-    let tuple_id = "tuple".to_string();
-    builder
-        .insert(
-            tuple_id.clone(),
-            Type::Tuple(vec![string_id.clone(), int_id.clone()]),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "All".to_string(),
-            Struct::new()
-                .name("All")
-                .properties(vec![
-                    StructProperty::new("a_bool", bool_id.clone()),
-                    StructProperty::new("an_int", int_id.clone()),
-                    StructProperty::new("a_float", float_id.clone()),
-                    StructProperty::new("a_string", string_id.clone()),
-                    StructProperty::new("a_json", json_id),
-                    StructProperty::new("a_vec", vec_id.clone()),
-                    StructProperty::new("a_map", map_id.clone()),
-                    StructProperty::new("a_set", set_id.clone()),
-                    StructProperty::new("an_array", array_id.clone()),
-                    StructProperty::new("a_tuple", tuple_id.clone()),
-                    StructProperty::new("a_box_string", box_string_id.clone()),
-                    StructProperty::new("a_box_vec", box_vec_id.clone()),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    // Exercise StructPropertyState::Default for each applicable field type.
-    // JsonValue is excluded: Default is not supported for it.
-    builder
-        .insert(
-            "Defaults".to_string(),
-            Struct::new()
-                .name("Defaults")
-                .properties(vec![
-                    StructProperty::new("a_bool", bool_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("an_int", int_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("a_float", float_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("a_string", string_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("a_vec", vec_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("a_map", map_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("a_set", set_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("an_array", array_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("a_tuple", tuple_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("an_option", opt_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("a_box_string", box_string_id)
-                        .with_state(StructPropertyState::Default),
-                    StructProperty::new("a_box_vec", box_vec_id)
-                        .with_state(StructPropertyState::Default),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
 
@@ -1456,16 +1341,11 @@ fn test_fieldless_tuple_struct_self_reference_would_have_overflowed() {
 #[test]
 fn test_map_key_traits_override() {
     let settings = Settings::minimal().with_map_type(ContainerType::hash_map());
-    let mut builder = TypespaceBuilder::new(settings);
-
-    let float_id = "float".to_string();
-    builder
-        .insert(float_id.clone(), Type::Float("f64".to_string()))
-        .unwrap();
-    builder.insert("value".to_string(), Type::String).unwrap();
-    builder
-        .insert("map".to_string(), Type::Map(float_id, "value".to_string()))
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            m: Map<f64, String>,
+        }
+    });
 
     let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
@@ -1674,75 +1554,28 @@ fn test_container_overrides() {
             "::std::collections::VecDeque",
             [TypespaceTraitSet::empty()],
         ));
-    let mut builder = TypespaceBuilder::new(settings);
+    let builder = typespace_builder!(settings, {
+        struct Containers {
+            a_map: Map<String, u32>,
+            a_set: Set<String>,
+            a_vec: Vec<String>,
+            an_obj: Map<String, JsonValue>,
+        }
 
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    let json_id = "json".to_string();
-    builder.insert(json_id.clone(), Type::JsonValue).unwrap();
-
-    let map_id = "map".to_string();
-    builder
-        .insert(map_id.clone(), Type::Map(string_id.clone(), int_id.clone()))
-        .unwrap();
-
-    let set_id = "set".to_string();
-    builder
-        .insert(set_id.clone(), Type::Set(string_id.clone()))
-        .unwrap();
-
-    let vec_id = "vec".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
-
-    let obj_id = "obj".to_string();
-    builder
-        .insert(
-            obj_id.clone(),
-            Type::Map(string_id.clone(), json_id.clone()),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Containers".to_string(),
-            Struct::new()
-                .name("Containers")
-                .properties(vec![
-                    StructProperty::new("a_map", map_id.clone()),
-                    StructProperty::new("a_set", set_id.clone()),
-                    StructProperty::new("a_vec", vec_id.clone()),
-                    StructProperty::new("an_obj", obj_id.clone()),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    // Default-state fields exercise the is_empty path against the
-    // overridden container types (and the ::serde_json::Map special case).
-    builder
-        .insert(
-            "ContainerDefaults".to_string(),
-            Struct::new()
-                .name("ContainerDefaults")
-                .properties(vec![
-                    StructProperty::new("a_map", map_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("a_set", set_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("a_vec", vec_id).with_state(StructPropertyState::Default),
-                    StructProperty::new("an_obj", obj_id).with_state(StructPropertyState::Default),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        // Default-state fields exercise the is_empty path against the
+        // overridden container types (and the ::serde_json::Map special
+        // case).
+        struct ContainerDefaults {
+            #[default]
+            a_map: Map<String, u32>,
+            #[default]
+            a_set: Set<String>,
+            #[default]
+            a_vec: Vec<String>,
+            #[default]
+            an_obj: Map<String, JsonValue>,
+        }
+    });
 
     let ts = builder.finalize(no_cycles).unwrap();
 
@@ -1784,90 +1617,26 @@ fn test_trait_impls() {
         .with_required_trait(typespace::TypespaceTrait::PartialEq)
         .with_required_trait(typespace::TypespaceTrait::Eq)
         .with_derive("::std::hash::Hash");
-    let mut builder = TypespaceBuilder::new(settings);
+    let builder = typespace_builder!(settings, {
+        struct Widget {
+            name: String,
+            tags: Vec<String>,
+        }
 
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
+        enum Gadget {
+            Off,
+            On(u32),
+        }
 
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
+        struct Wrapper(String);
 
-    let vec_id = "vec".to_string();
-    builder
-        .insert(vec_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
+        #[json = "marker"]
+        struct Marker;
 
-    builder
-        .insert(
-            "Widget".to_string(),
-            Struct::new()
-                .name("Widget")
-                .properties(vec![
-                    StructProperty::new("name", string_id.clone()),
-                    StructProperty::new("tags", vec_id.clone()),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        struct Pair(String, u32);
 
-    builder
-        .insert(
-            "Gadget".to_string(),
-            Enum::new()
-                .name("Gadget")
-                .tag_type(EnumTagType::External)
-                .variants(vec![
-                    EnumVariant::new("Off", VariantDetails::Unit),
-                    EnumVariant::new("On", VariantDetails::Item(int_id.clone())),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Wrapper".to_string(),
-            NewtypeStruct::new(string_id.clone())
-                .name("Wrapper")
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Marker".to_string(),
-            UnitStruct::new(serde_json::json!("marker"))
-                .name("Marker")
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Pair".to_string(),
-            TupleStruct::new()
-                .name("Pair")
-                .fields(vec![string_id.clone(), int_id.clone()])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "Named".to_string(),
-            TypeAlias::new(string_id.clone())
-                .name("Named")
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        type Named = String;
+    });
 
     let ts = builder.finalize(no_cycles).unwrap();
 
@@ -1900,23 +1669,11 @@ fn test_trait_impls() {
 #[test]
 fn test_trait_impls_conflict() {
     let settings = Settings::minimal().with_required_trait(typespace::TypespaceTrait::Eq);
-    let mut builder = TypespaceBuilder::new(settings);
-
-    let float_id = "float".to_string();
-    builder
-        .insert(float_id.clone(), Type::Float("f64".to_string()))
-        .unwrap();
-
-    builder
-        .insert(
-            "Holder".to_string(),
-            Struct::new()
-                .name("Holder")
-                .properties(vec![StructProperty::new("value", float_id)])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            value: f64,
+        }
+    });
 
     let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail with trait conflicts");
@@ -1927,10 +1684,10 @@ fn test_trait_impls_conflict() {
     let conflict = &conflicts[0];
     assert!(matches!(conflict.required, TypespaceTrait::Eq));
     assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
-    assert_eq!(conflict.offender, "float");
+    assert_eq!(conflict.offender, "f64");
     assert_eq!(
         conflict.to_string(),
-        "type `f64` (id `float`) cannot implement the required trait `Eq`\n    \
+        "type `f64` (id `f64`) cannot implement the required trait `Eq`\n    \
          required because `Holder` passes the requirement to its field `value`\n    \
          required because global settings require `Eq` of all types"
     );
@@ -2510,23 +2267,9 @@ fn test_never_tuple_struct() {
 // A `!` in a tuple struct's rest slot is rejected as a field is.
 #[test]
 fn test_never_tuple_struct_rest() {
-    let mut builder = TypespaceBuilder::new(never_settings());
-
-    builder.insert("never".to_string(), Type::Never).unwrap();
-    builder
-        .insert("u32".to_string(), Type::Integer("u32".to_string()))
-        .unwrap();
-    builder
-        .insert(
-            "RestTupleStruct".to_string(),
-            TupleStruct::new()
-                .name("RestTupleStruct")
-                .fields(vec!["u32".to_string()])
-                .rest("never".to_string())
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+    let builder = typespace_builder!(never_settings(), {
+        struct RestTupleStruct(u32, #[flatten] !);
+    });
 
     let Err(Error::NeverInValuePosition {
         position,
