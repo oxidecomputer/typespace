@@ -244,16 +244,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
         let name = name.as_deref().expect("validated type has a name");
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let name_ident = format_ident!("{name}");
-        let snake_name = heck::AsSnakeCase(name).to_string();
 
         let mut traits = traits.clone();
         let serde_derives = SerdeDerives::new(&traits);
 
         let rendered_properties = properties
             .iter()
-            .map(|prop| {
-                typespace.render_struct_property(prop, serde_derives, true, &snake_name, out)
-            })
+            .map(|prop| typespace.render_struct_property(prop, serde_derives, true, name, out))
             .collect::<Vec<_>>();
 
         if typespace.settings.struct_builder {

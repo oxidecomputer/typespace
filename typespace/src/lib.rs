@@ -1638,8 +1638,18 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     value,
                     type_id.clone(),
                 );
+                // Key the item by the CONTAINING TYPE, not by the
+                // function, which is what typify does
+                // (typify-impl/src/structs.rs, `add_item(Defaults,
+                // type_name, ..)`). A mod's items sort by key, so keying
+                // by the function would order the module alphabetically
+                // by function name; keying by the type groups each
+                // type's functions together, in property order, and
+                // orders the groups by type name. `context` is the
+                // containing type's path in CamelCase, the same string
+                // typify passes.
                 out.cs().get_root_mod().get_mod("defaults").add_item(
-                    &fn_name_str,
+                    context,
                     quote! {
                         pub(super) fn #fn_name_ident() -> #ty_for_fn {
                             #body

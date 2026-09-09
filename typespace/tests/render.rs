@@ -5860,3 +5860,59 @@ fn whole_type_default_value_populates_default_impl() {
         );
     }
 }
+
+/// The generated default functions group by their containing type, in
+/// type-name order, not in function-name order.
+///
+/// A mod's items sort by the key they were added under, and each
+/// default function is keyed by its containing type, so one type's
+/// functions stay together and the groups follow the type names. typify
+/// keys the same way, which is what makes the two agree.
+///
+/// The graph below is built so the two orderings disagree: by type name
+/// `Density` precedes `DensityDistributionNormal`, while by function
+/// name `density_distribution_normal_alpha` precedes `density_zeta`.
+/// The context also has to be the type name in both the struct and the
+/// enum-variant path, since a snake_case context on one side and a
+/// CamelCase one on the other would sort every enum variant's functions
+/// ahead of every struct's.
+#[test]
+fn test_default_fn_items_group_by_containing_type() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        struct Density {
+            #[default = 1.5]
+            zeta: f64,
+        }
+
+        enum DensityDistribution {
+            Normal {
+                #[default = 2.5]
+                alpha: f64,
+            },
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+
+    let density = rendered
+        .find("fn density_zeta")
+        .unwrap_or_else(|| panic!("no density_zeta in:\n{rendered}"));
+    let distribution = rendered
+        .find("fn density_distribution_normal_alpha")
+        .unwrap_or_else(|| panic!("no density_distribution_normal_alpha in:\n{rendered}"));
+
+    assert!(
+        density < distribution,
+        "`Density` sorts before `DensityDistributionNormal`, so its \
+         default function comes first; ordering by function name or \
+         mixing snake_case and CamelCase contexts would reverse it:\n{rendered}"
+    );
+}

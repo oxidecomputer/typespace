@@ -63,16 +63,16 @@ pub mod defaults {
     pub(super) fn property_defaults_blob() -> ::serde_json::Value {
         ::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}").unwrap()
     }
-    pub(super) fn property_defaults_count() -> super::Count {
-        7_u32
-    }
-    pub(super) fn property_defaults_maybe() -> ::std::option::Option<u32> {
-        ::std::option::Option::Some(5_u32)
-    }
     pub(super) fn property_defaults_weight() -> f64 {
         1.5_f64
     }
     pub(super) fn property_defaults_wrapped() -> super::Wrapped {
         super::Wrapped(7_u32)
+    }
+    pub(super) fn property_defaults_count() -> super::Count {
+        7_u32
+    }
+    pub(super) fn property_defaults_maybe() -> ::std::option::Option<u32> {
+        ::std::option::Option::Some(5_u32)
     }
 }

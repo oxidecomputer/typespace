@@ -93,26 +93,26 @@ impl ::std::convert::From<(u32, ::std::string::String)> for Untagged {
 }
 /// Generation of default values for serde.
 pub mod defaults {
-    pub(super) fn enum_defaults_adjacent_item() -> super::Adjacent {
-        super::Adjacent::Newtype(7_u32)
-    }
-    pub(super) fn enum_defaults_adjacent_struct() -> super::Adjacent {
-        super::Adjacent::Trio { x: 5_u32 }
-    }
-    pub(super) fn enum_defaults_adjacent_tuple() -> super::Adjacent {
-        super::Adjacent::Duo(3_u32, "hi".to_string())
-    }
     pub(super) fn enum_defaults_external_item() -> super::External {
         super::External::Newtype(7_u32)
-    }
-    pub(super) fn enum_defaults_external_struct() -> super::External {
-        super::External::Trio { x: 5_u32 }
     }
     pub(super) fn enum_defaults_external_tuple() -> super::External {
         super::External::Duo(3_u32, "hi".to_string())
     }
+    pub(super) fn enum_defaults_external_struct() -> super::External {
+        super::External::Trio { x: 5_u32 }
+    }
     pub(super) fn enum_defaults_internal_struct() -> super::Internal {
         super::Internal::Trio { x: 5_u32 }
+    }
+    pub(super) fn enum_defaults_adjacent_item() -> super::Adjacent {
+        super::Adjacent::Newtype(7_u32)
+    }
+    pub(super) fn enum_defaults_adjacent_tuple() -> super::Adjacent {
+        super::Adjacent::Duo(3_u32, "hi".to_string())
+    }
+    pub(super) fn enum_defaults_adjacent_struct() -> super::Adjacent {
+        super::Adjacent::Trio { x: 5_u32 }
     }
     pub(super) fn enum_defaults_untagged_item() -> super::Untagged {
         super::Untagged::AsNewtype(9_u32)

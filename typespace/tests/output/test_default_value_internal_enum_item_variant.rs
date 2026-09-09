@@ -30,10 +30,10 @@ pub struct Payload {
 }
 /// Generation of default values for serde.
 pub mod defaults {
-    pub(super) fn internal_item_default_solo() -> super::Internal {
-        super::Internal::Solo
-    }
     pub(super) fn internal_item_default_wrapped() -> super::Internal {
         super::Internal::Wrapped(super::Payload { y: 9_u32 })
+    }
+    pub(super) fn internal_item_default_solo() -> super::Internal {
+        super::Internal::Solo
     }
 }

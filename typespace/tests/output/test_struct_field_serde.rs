@@ -26,11 +26,11 @@ pub mod conflated_as_absent {
     }
     /// Generation of default values for serde.
     pub mod defaults {
-        pub(super) fn conflated_as_absent_peanut_option() -> Option<String> {
-            Some("peanuts".to_string())
-        }
         pub(super) fn conflated_as_absent_peanut_string() -> String {
             "peanuts".to_string()
+        }
+        pub(super) fn conflated_as_absent_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
     }
 }
@@ -57,11 +57,11 @@ pub mod conflated_as_null {
     }
     /// Generation of default values for serde.
     pub mod defaults {
-        pub(super) fn conflated_as_null_peanut_option() -> Option<String> {
-            Some("peanuts".to_string())
-        }
         pub(super) fn conflated_as_null_peanut_string() -> String {
             "peanuts".to_string()
+        }
+        pub(super) fn conflated_as_null_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
     }
 }
@@ -89,11 +89,11 @@ pub mod custom_type {
     }
     /// Generation of default values for serde.
     pub mod defaults {
-        pub(super) fn custom_type_peanut_option() -> Option<String> {
-            Some("peanuts".to_string())
-        }
         pub(super) fn custom_type_peanut_string() -> String {
             "peanuts".to_string()
+        }
+        pub(super) fn custom_type_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
     }
 }
@@ -125,11 +125,11 @@ pub mod double_option {
     }
     /// Generation of default values for serde.
     pub mod defaults {
-        pub(super) fn double_option_peanut_option() -> Option<String> {
-            Some("peanuts".to_string())
-        }
         pub(super) fn double_option_peanut_string() -> String {
             "peanuts".to_string()
+        }
+        pub(super) fn double_option_peanut_option() -> Option<String> {
+            Some("peanuts".to_string())
         }
     }
 }
