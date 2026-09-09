@@ -58,7 +58,6 @@ pub fn impls_of(file: &syn::File, type_name: &str) -> Vec<String> {
 
             let syn::PathSegment { ident, arguments } = trait_
                 .segments
-                .iter()
                 .last()
                 .expect("gotta be at least one segment to name a path");
 
@@ -81,7 +80,7 @@ pub fn impls_of(file: &syn::File, type_name: &str) -> Vec<String> {
                                 return None;
                             };
 
-                            Some(segments.iter().last().unwrap().ident.to_string())
+                            Some(segments.last().unwrap().ident.to_string())
                         })
                         .collect::<Vec<_>>()
                         .join(",");

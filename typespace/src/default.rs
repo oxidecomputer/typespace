@@ -218,7 +218,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         };
         let mut expansion_set = Vec::new();
 
-        let Some(Type::Enum(enum_info)) = types.get(&id) else {
+        let Some(Type::Enum(enum_info)) = types.get(id) else {
             unreachable!("this should only be called on an enum type")
         };
 
@@ -337,7 +337,7 @@ where
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        let ty = self.types.get(&id).unwrap();
+        let ty = self.types.get(id).unwrap();
         match ty {
             Type::Enum(enum_info) => self
                 .default_impl_enum(expansion_set, enum_info, value, id)
@@ -360,7 +360,7 @@ where
                 let inner =
                     self.expansion_guard_default_impl(expansion_set, &newtype_struct.inner, value)?;
                 Ok(inner.map(|inner| {
-                    let ident = self.render_ident(&id);
+                    let ident = self.render_ident(id);
                     quote! { #ident(#inner) }
                 }))
             }
@@ -380,7 +380,7 @@ where
                 // expect rather than unwrap?
                 let text = value.to_string();
                 Ok(self.generate(|| {
-                    let type_path = self.render_ident(&id);
+                    let type_path = self.render_ident(id);
                     quote! {
                         ::serde_json::from_str::<#type_path>(#text).unwrap()
                     }
@@ -391,7 +391,7 @@ where
             // also permitted as a value.
             Type::Option(type_id) => {
                 if value.is_null() {
-                    Ok(self.generate(|| self.render_option_variant(&id, "None")))
+                    Ok(self.generate(|| self.render_option_variant(id, "None")))
                 } else {
                     // We're not narrowing the value so check for cycles. This
                     // really could only happen if someone were attempting
@@ -399,7 +399,7 @@ where
                     // But people are weird and terrible.
                     let inner = self.expansion_guard_default_impl(expansion_set, type_id, value)?;
                     Ok(inner.map(|inner| {
-                        let some = self.render_option_variant(&id, "Some");
+                        let some = self.render_option_variant(id, "Some");
                         quote! { #some(#inner) }
                     }))
                 }
@@ -526,7 +526,7 @@ where
                 }))
             }
             Type::Tuple(items) => {
-                let elems = self.default_impl_tuple_items(expansion_set, items, value, &id)?;
+                let elems = self.default_impl_tuple_items(expansion_set, items, value, id)?;
                 Ok(elems.map(|elems| quote! { ( #( #elems ),* ) }))
             }
 
@@ -924,7 +924,7 @@ where
         )?;
 
         Ok(self.generate(|| {
-            let struct_ident = self.render_ident(&id);
+            let struct_ident = self.render_ident(id);
             quote! {
                 #struct_ident {
                     #( #rendered_properties, )*
@@ -992,7 +992,7 @@ where
             }
 
             let var_ident = format_ident!("{}", variant.rust_name);
-            let type_ident = self.render_ident(&id);
+            let type_ident = self.render_ident(id);
             Ok(self.generate(|| {
                 (
                     quote! { #type_ident::#var_ident },
@@ -1022,7 +1022,7 @@ where
             };
 
             let var_ident = format_ident!("{}", variant.rust_name);
-            let type_ident = self.render_ident(&id);
+            let type_ident = self.render_ident(id);
 
             match &variant.details {
                 VariantDetails::Unit => Err(Error::InvalidDefault {
@@ -1036,7 +1036,7 @@ where
                 }
                 VariantDetails::Tuple(items) => {
                     let elems =
-                        self.default_impl_tuple_items(expansion_set, items, var_value, &id)?;
+                        self.default_impl_tuple_items(expansion_set, items, var_value, id)?;
                     Ok(elems
                         .map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
                 }
@@ -1104,7 +1104,7 @@ where
         };
 
         let var_ident = format_ident!("{}", variant.rust_name);
-        let type_ident = self.render_ident(&id);
+        let type_ident = self.render_ident(id);
 
         // Everything but the tag belongs to the variant's own payload.
         let inner_value = serde_json::Value::Object(
@@ -1201,7 +1201,7 @@ where
             })?;
 
         let var_ident = format_ident!("{}", variant.rust_name);
-        let type_ident = self.render_ident(&id);
+        let type_ident = self.render_ident(id);
 
         match (&variant.details, content_value) {
             (VariantDetails::Unit, None) => Ok(self.generate(|| {
@@ -1216,7 +1216,7 @@ where
             }
             (VariantDetails::Tuple(items), Some(content_value)) => {
                 let elems =
-                    self.default_impl_tuple_items(expansion_set, items, content_value, &id)?;
+                    self.default_impl_tuple_items(expansion_set, items, content_value, id)?;
                 Ok(elems.map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
@@ -1249,7 +1249,7 @@ where
         value: &serde_json::Value,
         id: &Id,
     ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
-        let type_ident = self.render_ident(&id);
+        let type_ident = self.render_ident(id);
 
         // Untagged deserialization tries each variant in declaration
         // order and keeps the first whose shape fits; a default value
@@ -1286,7 +1286,7 @@ where
                             item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None))
                         }),
                     VariantDetails::Tuple(items) => self
-                        .default_impl_tuple_items(expansion_set, items, value, &id)
+                        .default_impl_tuple_items(expansion_set, items, value, id)
                         .ok()
                         .map(|elems| {
                             elems.map(|elems| {
@@ -1353,7 +1353,7 @@ where
             expansion_set,
             &tuple_struct.fields,
             &serde_json::Value::Array(head.to_vec()),
-            &id,
+            id,
         )?;
 
         // Anything past the fixed fields belongs to `rest` as a whole,
@@ -1376,7 +1376,7 @@ where
                 .into_iter();
             let rest_value = rest_value
                 .map(|value| value.expect("a value should be generated with Mode::Generate"));
-            let struct_ident = self.render_ident(&id);
+            let struct_ident = self.render_ident(id);
             quote! { #struct_ident( #( #field_values, )* #rest_value ) }
         }))
     }
@@ -1388,7 +1388,7 @@ where
         id: &Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         if value == &unit_struct.repr {
-            Ok(self.generate(|| self.render_ident(&id)))
+            Ok(self.generate(|| self.render_ident(id)))
         } else {
             Err(Error::InvalidDefault {
                 value: value.clone(),

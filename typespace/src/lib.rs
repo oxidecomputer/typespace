@@ -555,7 +555,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
             if let Some(common) = typ.common()
                 && let Some(JsonValue(default)) = &common.default
             {
-                self.check_default(&default, &type_id)?;
+                self.check_default(default, type_id)?;
             }
 
             match typ {
@@ -1628,7 +1628,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 let fn_name_ident = format_ident!("{}", fn_name_str);
 
                 let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
-                let body = self.generate_default(value, &type_id);
+                let body = self.generate_default(value, type_id);
                 // Key the item by the CONTAINING TYPE, not by the
                 // function, which is what typify does
                 // (typify-impl/src/structs.rs, `add_item(Defaults,

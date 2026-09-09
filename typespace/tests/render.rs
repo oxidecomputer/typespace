@@ -2,17 +2,14 @@
 
 use codespace::Codespace;
 use quote::{format_ident, quote};
-use typespace::{
-    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
-    build::{
-        Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct,
-        Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type,
-        TypeAlias, UnitStruct, VariantDetails,
-    },
-    error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin},
-    no_cycles,
-    settings::{ContainerType, OptionalNullable, Settings, Std},
+use typespace::build::{
+    Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct,
+    StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias,
+    UnitStruct, VariantDetails,
 };
+use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
+use typespace::settings::{ContainerType, OptionalNullable, Settings, Std};
+use typespace::{TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
 
 mod common;
@@ -3918,7 +3915,7 @@ fn test_default_other_struct_shapes() {
             import::TupleShape::default(),
             import::TupleShape(String::new(), 0)
         );
-        assert_eq!(import::UnitShape::default(), import::UnitShape);
+        assert_eq!(import::UnitShape, import::UnitShape);
         assert_eq!(
             import::NewtypeShape::from("x".to_string()),
             import::NewtypeShape("x".to_string())
