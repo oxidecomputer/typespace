@@ -64,22 +64,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// a JSON value) is prefixed with `&`. An `Option` and a tuple
     /// keep their own syntax and apply the rule to what they hold, so
     /// an `Option<String>` reads as `Option<&str>`.
-    pub fn parameter_ident(&self) -> TokenStream {
-        self.renderer().render_parameter_ident(self.id, None, None)
-    }
-
-    /// Like [`Type::parameter_ident`], with named types qualified by
-    /// the module `scope`.
-    pub fn parameter_ident_in(&self, scope: &str) -> TokenStream {
+    ///
+    /// A `scope` qualifies named types by that module, as
+    /// [`Type::ident_in`] does. A `lifetime` is named on every
+    /// reference the parameter introduces, and only those, so a
+    /// `String` reads as `&'a str` while a `bool` is unchanged. The
+    /// two are independent: pass either, neither, or both.
+    pub fn parameter_ident(&self, scope: Option<&str>, lifetime: Option<&str>) -> TokenStream {
         self.renderer()
-            .render_parameter_ident(self.id, Some(scope), None)
-    }
-
-    /// Like [`Type::parameter_ident`], with `lifetime` named on every
-    /// reference the parameter introduces.
-    pub fn parameter_ident_with_lifetime(&self, lifetime: &str) -> TokenStream {
-        self.renderer()
-            .render_parameter_ident(self.id, None, Some(lifetime))
+            .render_parameter_ident(self.id, scope, lifetime)
     }
 
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {

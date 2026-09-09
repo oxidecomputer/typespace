@@ -433,24 +433,19 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Types the caller owns cheaply pass by value and the rest are
     /// borrowed; see
     /// [`Type::parameter_ident`](crate::view::Type::parameter_ident)
-    /// for the rule.
+    /// for the rule, for what `scope` qualifies, and for where
+    /// `lifetime` is named.
     ///
     /// # Panics
     ///
     /// Panics under the same conditions as [`TypespaceBuilder::ident`].
-    pub fn parameter_ident(&self, id: &Id) -> TokenStream {
-        self.renderer().render_parameter_ident(id, None, None)
-    }
-
-    /// Like [`TypespaceBuilder::parameter_ident`], with named types
-    /// qualified by the module `scope`.
-    ///
-    /// # Panics
-    ///
-    /// Panics under the same conditions as [`TypespaceBuilder::ident`].
-    pub fn parameter_ident_in(&self, id: &Id, scope: &str) -> TokenStream {
-        self.renderer()
-            .render_parameter_ident(id, Some(scope), None)
+    pub fn parameter_ident(
+        &self,
+        id: &Id,
+        scope: Option<&str>,
+        lifetime: Option<&str>,
+    ) -> TokenStream {
+        self.renderer().render_parameter_ident(id, scope, lifetime)
     }
 
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {

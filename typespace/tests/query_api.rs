@@ -118,11 +118,11 @@ fn ident_produces_expected_tokens() {
     let struct_ident = struct_ti.ident();
     assert_eq!(struct_ident.to_string(), quote! { MyStruct }.to_string());
 
-    let param_ident = struct_ti.parameter_ident();
+    let param_ident = struct_ti.parameter_ident(None, None);
     assert_eq!(param_ident.to_string(), quote! { &MyStruct }.to_string());
 
     let bool_ti = ts.get_type(&"bool".to_string());
-    let bool_param = bool_ti.parameter_ident();
+    let bool_param = bool_ti.parameter_ident(None, None);
     assert_eq!(bool_param.to_string(), quote! { bool }.to_string());
 }
 
@@ -183,18 +183,27 @@ fn parameter_idents_borrow_by_rule() {
     for (id, expected) in &cases {
         let id = id.to_string();
         assert_eq!(
-            builder.parameter_ident(&id).to_string(),
+            builder.parameter_ident(&id, None, None).to_string(),
             expected.to_string(),
             "pre-finalize parameter_ident for {id}"
         );
     }
+
+    // Scope and lifetime are independent, and the builder answers
+    // the combination before finalization just as the view does after.
+    assert_eq!(
+        builder
+            .parameter_ident(&struct_id, Some("types"), Some("a"))
+            .to_string(),
+        quote! { &'a types::MyStruct }.to_string()
+    );
 
     let ts = builder.finalize(no_cycles).unwrap();
 
     for (id, expected) in &cases {
         let id = id.to_string();
         assert_eq!(
-            ts.get_type(&id).parameter_ident().to_string(),
+            ts.get_type(&id).parameter_ident(None, None).to_string(),
             expected.to_string(),
             "parameter_ident for {id}"
         );
@@ -203,19 +212,19 @@ fn parameter_idents_borrow_by_rule() {
     // A named type picks up the scope; the borrow sits outside it.
     assert_eq!(
         ts.get_type(&struct_id)
-            .parameter_ident_in("types")
+            .parameter_ident(Some("types"), None)
             .to_string(),
         quote! { &types::MyStruct }.to_string()
     );
     assert_eq!(
         ts.get_type(&opt_struct_id)
-            .parameter_ident_in("types")
+            .parameter_ident(Some("types"), None)
             .to_string(),
         quote! { Option<&types::MyStruct> }.to_string()
     );
     assert_eq!(
         ts.get_type(&unit_enum_id)
-            .parameter_ident_in("types")
+            .parameter_ident(Some("types"), None)
             .to_string(),
         quote! { types::UnitEnum }.to_string()
     );
@@ -224,27 +233,56 @@ fn parameter_idents_borrow_by_rule() {
     // only the references: a by-value parameter gains nothing.
     assert_eq!(
         ts.get_type(&struct_id)
-            .parameter_ident_with_lifetime("a")
+            .parameter_ident(None, Some("a"))
             .to_string(),
         quote! { &'a MyStruct }.to_string()
     );
     assert_eq!(
         ts.get_type(&str_id)
-            .parameter_ident_with_lifetime("a")
+            .parameter_ident(None, Some("a"))
             .to_string(),
         quote! { &'a str }.to_string()
     );
     assert_eq!(
         ts.get_type(&opt_str_id)
-            .parameter_ident_with_lifetime("a")
+            .parameter_ident(None, Some("a"))
             .to_string(),
         quote! { Option<&'a str> }.to_string()
     );
     assert_eq!(
         ts.get_type(&unit_enum_id)
-            .parameter_ident_with_lifetime("a")
+            .parameter_ident(None, Some("a"))
             .to_string(),
         quote! { UnitEnum }.to_string()
+    );
+
+    // Scope and lifetime are independent, so both together read as a
+    // scoped type behind a named borrow. A caller generating a method
+    // that borrows its arguments for the method's own lifetime asks
+    // for exactly this.
+    assert_eq!(
+        ts.get_type(&struct_id)
+            .parameter_ident(Some("types"), Some("a"))
+            .to_string(),
+        quote! { &'a types::MyStruct }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&opt_struct_id)
+            .parameter_ident(Some("types"), Some("a"))
+            .to_string(),
+        quote! { Option<&'a types::MyStruct> }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&tuple_id)
+            .parameter_ident(Some("types"), Some("a"))
+            .to_string(),
+        quote! { (u32, &'a str, &'a types::MyStruct) }.to_string()
+    );
+    assert_eq!(
+        ts.get_type(&unit_enum_id)
+            .parameter_ident(Some("types"), Some("a"))
+            .to_string(),
+        quote! { types::UnitEnum }.to_string()
     );
 }
 
@@ -566,15 +604,17 @@ fn scoped_and_prefinalize_idents() {
         quote! { Vec<types::MyStruct> }.to_string()
     );
     assert_eq!(
-        builder.parameter_ident(&struct_id).to_string(),
+        builder.parameter_ident(&struct_id, None, None).to_string(),
         quote! { &MyStruct }.to_string()
     );
     assert_eq!(
-        builder.parameter_ident_in(&vec_id, "types").to_string(),
+        builder
+            .parameter_ident(&vec_id, Some("types"), None)
+            .to_string(),
         quote! { &Vec<types::MyStruct> }.to_string()
     );
     assert_eq!(
-        builder.parameter_ident(&str_id).to_string(),
+        builder.parameter_ident(&str_id, None, None).to_string(),
         quote! { &str }.to_string()
     );
 
@@ -587,7 +627,7 @@ fn scoped_and_prefinalize_idents() {
     );
     let vi = ts.get_type(&vec_id);
     assert_eq!(
-        vi.parameter_ident_in("types").to_string(),
+        vi.parameter_ident(Some("types"), None).to_string(),
         quote! { &Vec<types::MyStruct> }.to_string()
     );
 }
