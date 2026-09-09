@@ -51,7 +51,10 @@ fn get_type_panics_for_unknown_id() {
 #[test]
 fn iter_types_covers_all_inserted_ids() {
     let ts = make_typespace();
-    let names: std::collections::BTreeSet<String> = ts.iter_types().map(|t| t.name()).collect();
+    let names = ts
+        .iter_types()
+        .map(|t| t.name().into_owned())
+        .collect::<std::collections::BTreeSet<String>>();
     assert!(names.contains("MyStruct"), "missing MyStruct in {names:?}");
     assert!(names.contains("MyEnum"), "missing MyEnum in {names:?}");
 }
@@ -77,6 +80,42 @@ fn struct_properties_via_get_type() {
 
     let label_prop = props.iter().find(|p| p.name == "label").unwrap();
     assert!(!label_prop.required);
+}
+
+// A name query hands back what the typespace stores, so the borrow
+// outlives the view it came through; only a type with no name of its
+// own pays for a string.
+#[test]
+fn name_queries_borrow_what_is_stored() {
+    let ts = make_typespace();
+
+    let name = match ts.get_type(&"MyStruct".to_string()).name() {
+        std::borrow::Cow::Borrowed(name) => name,
+        std::borrow::Cow::Owned(_) => panic!("a named type should not synthesize its name"),
+    };
+    assert_eq!(name, "MyStruct");
+
+    // An Option has no name of its own, so it renders its identifier
+    // and owns the result.
+    assert!(matches!(
+        ts.get_type(&"opt_str".to_string()).name(),
+        std::borrow::Cow::Owned(_)
+    ));
+
+    // Property names outlive the Struct view they were read through,
+    // which is what makes them borrows of the typespace rather than
+    // of the view.
+    let names = {
+        let ti = ts.get_type(&"MyStruct".to_string());
+        let view::TypeDetails::Struct(s) = ti.details() else {
+            panic!("expected Struct, got something else");
+        };
+        let from_properties = s.properties().map(|(name, _)| name).collect::<Vec<&str>>();
+        let from_properties_info = s.properties_info().map(|p| p.name).collect::<Vec<&str>>();
+        assert_eq!(from_properties, from_properties_info);
+        from_properties
+    };
+    assert_eq!(names, vec!["name", "count", "label"]);
 }
 
 #[test]

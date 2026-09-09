@@ -9,6 +9,7 @@
 //! [`build`] module: [`build::EnumVariant`] is the construction form
 //! and [`EnumVariant`] the finalized-view form of the same concept.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
@@ -25,15 +26,19 @@ pub struct Type<'a, Id> {
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// The name of this type, or its rendered token representation for unnamed
     /// types.
-    pub fn name(&self) -> String {
+    ///
+    /// A named type borrows the name it was built with. Every other
+    /// type has no name of its own, so its identifier is rendered and
+    /// the resulting string is owned.
+    pub fn name(&self) -> Cow<'a, str> {
         match self.typ {
-            build::Type::Enum(e) => e.common.built_name().to_string(),
-            build::Type::Struct(s) => s.common.built_name().to_string(),
-            build::Type::UnitStruct(u) => u.common.built_name().to_string(),
-            build::Type::TupleStruct(t) => t.common.built_name().to_string(),
-            build::Type::NewtypeStruct(n) => n.common.built_name().to_string(),
-            build::Type::TypeAlias(a) => a.common.built_name().to_string(),
-            _ => self.ident().to_string(),
+            build::Type::Enum(e) => Cow::Borrowed(e.common.built_name()),
+            build::Type::Struct(s) => Cow::Borrowed(s.common.built_name()),
+            build::Type::UnitStruct(u) => Cow::Borrowed(u.common.built_name()),
+            build::Type::TupleStruct(t) => Cow::Borrowed(t.common.built_name()),
+            build::Type::NewtypeStruct(n) => Cow::Borrowed(n.common.built_name()),
+            build::Type::TypeAlias(a) => Cow::Borrowed(a.common.built_name()),
+            _ => Cow::Owned(self.ident().to_string()),
         }
     }
 
@@ -232,17 +237,17 @@ pub struct Struct<'a, Id> {
 
 impl<'a, Id: Clone> Struct<'a, Id> {
     /// Iterate over `(property_name, type_id)` pairs.
-    pub fn properties(&'a self) -> impl Iterator<Item = (String, Id)> + 'a {
+    pub fn properties(&self) -> impl Iterator<Item = (&'a str, Id)> + 'a {
         self.inner
             .properties
             .iter()
-            .map(|p| (p.rust_name.to_string(), p.type_id.clone()))
+            .map(|p| (p.rust_name.as_str(), p.type_id.clone()))
     }
 
     /// Iterate over full property information.
-    pub fn properties_info(&'a self) -> impl Iterator<Item = StructProperty<'a, Id>> {
+    pub fn properties_info(&self) -> impl Iterator<Item = StructProperty<'a, Id>> + 'a {
         self.inner.properties.iter().map(|p| StructProperty {
-            name: p.rust_name.to_string(),
+            name: p.rust_name.as_str(),
             description: p.description.as_deref(),
             required: matches!(p.state, build::StructPropertyState::Required),
             type_id: p.type_id.clone(),
@@ -252,8 +257,8 @@ impl<'a, Id: Clone> Struct<'a, Id> {
 
 /// Information about a single struct property.
 pub struct StructProperty<'a, Id> {
-    /// The Rust field name as a string.
-    pub name: String,
+    /// The Rust field name.
+    pub name: &'a str,
     /// The description (doc comment source) for the property, if any.
     pub description: Option<&'a str>,
     /// `true` if the field must be present in the serialized form.
