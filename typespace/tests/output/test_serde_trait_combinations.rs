@@ -77,7 +77,7 @@ pub mod both {
         pub maybe_nullable: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub tags: Vec<String>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default)]
         pub flag: bool,
         #[serde(default)]
         pub nothing: (),
@@ -256,7 +256,7 @@ pub mod deserialize_only {
         pub maybe_nullable: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub tags: Vec<String>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default)]
         pub flag: bool,
         #[serde(default)]
         pub nothing: (),
@@ -497,7 +497,7 @@ pub mod serialize_only {
         pub maybe_nullable: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub tags: Vec<String>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default)]
         pub flag: bool,
         #[serde(default)]
         pub nothing: (),

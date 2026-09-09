@@ -1,6 +1,6 @@
 // Copyright 2026 Oxide Computer Company
 
-use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet, ALL_TRAITS};
+use crate::{ALL_TRAITS, TraitDisposition, TypespaceTrait, TypespaceTraitSet};
 
 /// An externally defined type emitted by its Rust path; construct one
 /// with [`Native::new`] or [`Native::new_string_like`].

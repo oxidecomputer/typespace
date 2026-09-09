@@ -1077,7 +1077,7 @@ fn test_compound_field_types() {
         let serialized = serde_json::to_value(&d).unwrap();
         assert_eq!(
             serialized,
-            serde_json::json!({"an_int": 0, "a_float": 0.0, "an_array": [0, 0, 0], "a_tuple": ["", 0]})
+            serde_json::json!({"a_bool": false, "an_int": 0, "a_float": 0.0, "an_array": [0, 0, 0], "a_tuple": ["", 0]})
         );
     }
 }

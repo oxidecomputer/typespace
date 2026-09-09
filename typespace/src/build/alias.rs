@@ -3,9 +3,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::TypespaceRenderer;
 use crate::build::{Type, TypeCommon};
 use crate::error::Error;
-use crate::TypespaceRenderer;
 
 /// A type alias (`pub type Name = Target;`).
 ///

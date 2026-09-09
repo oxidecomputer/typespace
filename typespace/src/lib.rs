@@ -1728,9 +1728,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // cause invalid code to be generated e.g. if the type is
                 // Box<bool>, and I'm fine with that.
 
-                serde_options.push(quote! {
-                    skip_serializing_if = "std::ops::Not::not"
-                });
+                // I've had second thoughts and am leaving this out of the
+                // code, but in as a reminder of crazier times...
+
+                // serde_options.push(quote! {
+                //     skip_serializing_if = "std::ops::Not::not"
+                // });
             }
 
             // There isn't an "is_zero()" so... we'll just leave it be.

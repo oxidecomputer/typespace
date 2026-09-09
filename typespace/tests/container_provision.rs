@@ -27,11 +27,11 @@
 //! it refuses would not have.
 
 use typespace::{
+    Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::{Native, NewtypeStruct, Type},
     error::{Error, OffenderReason, Relation, RequirementOrigin, TraitConflict},
     no_cycles,
     settings::{ContainerType, Settings, TraitProvision},
-    Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
 

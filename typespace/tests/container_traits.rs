@@ -3,11 +3,11 @@
 //! What a caller states about a container type, and what reads back.
 
 use typespace::{
+    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::{Native, Struct, StructProperty, Type},
     error::Error,
     no_cycles,
     settings::{ContainerType, Settings, TraitProvision},
-    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
 };
 
 fn set(traits: impl IntoIterator<Item = TypespaceTrait>) -> TypespaceTraitSet {

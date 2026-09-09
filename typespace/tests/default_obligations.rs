@@ -8,7 +8,7 @@
 //! asserts the outcome that follows from that rule, so a change that
 //! widens or narrows the obligation set fails here.
 
-use typespace::{no_cycles, settings::Settings, TypespaceTrait};
+use typespace::{TypespaceTrait, no_cycles, settings::Settings};
 use typespace_test_macro::typespace_builder;
 
 mod common;

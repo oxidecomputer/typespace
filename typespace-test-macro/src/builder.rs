@@ -41,10 +41,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    braced, bracketed, parenthesized,
+    Expr, ExprLit, Ident, Lit, LitFloat, LitInt, LitStr, Token, Type, braced, bracketed,
+    parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    Expr, ExprLit, Ident, Lit, LitFloat, LitInt, LitStr, Token, Type,
 };
 
 /// Entry point shared by the `#[proc_macro]` wrapper and by tests: parse

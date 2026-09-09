@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::{TypespaceTrait, TypespaceTraitSet, ALL_TRAITS};
+use crate::{ALL_TRAITS, TypespaceTrait, TypespaceTraitSet};
 
 // TODO 7/18/2025
 // I wanted to get this started to think through various settings that we might
@@ -690,7 +690,7 @@ impl TryFrom<ContainerTypeRepr> for ContainerType {
                 return Err("a container declaration states the family it behaves \
                             as with `like`, or states its own `path` and \
                             `obligations`"
-                    .to_string())
+                    .to_string());
             }
         };
 

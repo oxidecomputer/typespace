@@ -15,7 +15,7 @@ pub struct All {
 }
 #[derive(::serde::Deserialize, ::serde::Serialize)]
 pub struct Defaults {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub a_bool: bool,
     #[serde(default)]
     pub an_int: u32,

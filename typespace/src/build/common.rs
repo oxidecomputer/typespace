@@ -2,8 +2,8 @@
 
 use proc_macro2::{TokenStream, TokenTree};
 
-use crate::error::Error;
 use crate::TypespaceTraitSet;
+use crate::error::Error;
 
 /// A JSON value used as a default, with total (if vacuous) ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]

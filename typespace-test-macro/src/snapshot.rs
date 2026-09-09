@@ -8,8 +8,9 @@ use std::str::FromStr;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
+    Expr, ItemFn, LitStr, Token,
     parse::{Parse, ParseStream},
-    parse_macro_input, Expr, ItemFn, LitStr, Token,
+    parse_macro_input,
 };
 
 /// Panic message used when a snapshot file did not exist (or was empty)
