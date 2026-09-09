@@ -104,6 +104,26 @@ fn hash_lookup_traits() -> TypespaceTraitSet {
     .collect()
 }
 
+/// Traits no owning std container (`BTreeMap`, `BTreeSet`, `Vec`)
+/// implements at any parameter: `Display` and `FromStr`, which none of
+/// them render, and `Copy`, since each owns a heap-allocated buffer.
+const OWNING_NEVER: [TypespaceTrait; 3] = [
+    TypespaceTrait::Display,
+    TypespaceTrait::FromStr,
+    TypespaceTrait::Copy,
+];
+
+/// `OWNING_NEVER` plus the ordering traits: what a hash std container
+/// (`HashMap`, `HashSet`) has no impl for at any parameter.
+const HASHING_NEVER: [TypespaceTrait; 6] = [
+    TypespaceTrait::Display,
+    TypespaceTrait::FromStr,
+    TypespaceTrait::Copy,
+    TypespaceTrait::Ord,
+    TypespaceTrait::PartialOrd,
+    TypespaceTrait::Hash,
+];
+
 impl Settings {
     /// The container a map renders as absent configuration.
     fn default_map_type() -> ContainerType {
@@ -376,6 +396,11 @@ impl Settings {
 ///     ])
 ///     .with_provision(TypespaceTrait::Hash, TraitProvision::Never);
 /// ```
+///
+/// A container with no matching preset can state its whole table in
+/// one expression with [`ContainerType::declare`], rather than
+/// building it up one [`with_provision`](Self::with_provision) call at
+/// a time.
 #[derive(Clone, Deserialize)]
 #[serde(try_from = "ContainerTypeRepr")]
 pub struct ContainerType {
@@ -407,7 +432,9 @@ impl ContainerType {
     /// implement is added with
     /// [`with_provision`](Self::with_provision); until then a
     /// requirement for one is a conflict rather than generated code
-    /// that does not compile.
+    /// that does not compile. When more is known about the container
+    /// up front, [`with_provisions`](Self::with_provisions) states the
+    /// whole table as exceptions to forwarding.
     ///
     /// # Panics
     ///
@@ -418,36 +445,51 @@ impl ContainerType {
 
     /// [`ContainerType::new`] with the path already parsed.
     fn opaque(path: syn::Type, obligations: Vec<TypespaceTraitSet>) -> Self {
+        Self::from_parts(path, obligations, ProvisionTable::opaque())
+    }
+
+    /// Assemble a container from its full parts, with no prelude-path
+    /// shortcut; [`with_prelude`](Self::with_prelude) adds one
+    /// afterward for the containers that have one.
+    fn from_parts(
+        path: syn::Type,
+        obligations: Vec<TypespaceTraitSet>,
+        provisions: ProvisionTable,
+    ) -> Self {
         Self {
             path,
             prelude_path: None,
             obligations,
-            provisions: ProvisionTable::opaque(),
+            provisions,
         }
+    }
+
+    /// Set the prelude-path shortcut, rendered under [`Std::Unqualified`].
+    fn with_prelude(mut self, prelude_path: syn::Type) -> Self {
+        self.prelude_path = Some(prelude_path);
+        self
     }
 
     /// `::std::collections::BTreeMap` and containers that behave as it
     /// does: keys must be ordered, and every trait but `Display` and
     /// `FromStr` follows the parameters, with `Default` unconditional.
     pub fn btree_map() -> Self {
-        Self {
-            path: parse_path("::std::collections::BTreeMap"),
-            prelude_path: None,
-            obligations: vec![ordered_lookup_traits(), TypespaceTraitSet::empty()],
-            provisions: ProvisionTable::forwarding(),
-        }
+        Self::new(
+            "::std::collections::BTreeMap",
+            [ordered_lookup_traits(), TypespaceTraitSet::empty()],
+        )
+        .with_provisions(&[TypespaceTrait::Default], &OWNING_NEVER)
     }
 
     /// `::std::collections::HashMap` and containers that behave as it
     /// does: keys must be hashable, and the container has no `Ord`,
     /// `PartialOrd`, or `Hash` impl at any key or value type.
     pub fn hash_map() -> Self {
-        Self {
-            path: parse_path("::std::collections::HashMap"),
-            prelude_path: None,
-            obligations: vec![hash_lookup_traits(), TypespaceTraitSet::empty()],
-            provisions: ProvisionTable::hashing(),
-        }
+        Self::new(
+            "::std::collections::HashMap",
+            [hash_lookup_traits(), TypespaceTraitSet::empty()],
+        )
+        .with_provisions(&[TypespaceTrait::Default], &HASHING_NEVER)
     }
 
     /// `Vec` and containers that behave as it does: nothing is demanded
@@ -459,12 +501,9 @@ impl ContainerType {
     /// deduplication policy, not the container's need, and is stated
     /// with [`with_obligations`](Self::with_obligations).
     pub fn vec() -> Self {
-        Self {
-            path: parse_path("::std::vec::Vec"),
-            prelude_path: Some(parse_path("Vec")),
-            obligations: vec![TypespaceTraitSet::empty()],
-            provisions: ProvisionTable::forwarding(),
-        }
+        Self::new("::std::vec::Vec", [TypespaceTraitSet::empty()])
+            .with_provisions(&[TypespaceTrait::Default], &OWNING_NEVER)
+            .with_prelude(parse_path("Vec"))
     }
 
     /// `Option` and similar wrappers: nothing is demanded of the parameter,
@@ -472,43 +511,35 @@ impl ContainerType {
     /// follows the parameter, `Copy` included.
     ///
     /// This is the intended base for an
-    /// [`OptionalNullable::CustomType`](crate::settings::OptionalNullable::CustomType)
+    /// [`OptionalNullable::CustomType`]
     /// declaration: point it at the wrapper with
     /// [`with_path`](Self::with_path), then narrow any provision the
-    /// wrapper lacks.
+    /// wrapper lacks, or state the wrapper's own table with
+    /// [`ContainerType::new`] and
+    /// [`with_provisions`](Self::with_provisions) when several
+    /// provisions need narrowing at once.
     pub fn option() -> Self {
-        Self {
-            path: parse_path("::std::option::Option"),
-            prelude_path: Some(parse_path("Option")),
-            obligations: vec![TypespaceTraitSet::empty()],
-            provisions: ProvisionTable::new(
-                &[TypespaceTrait::Display, TypespaceTrait::FromStr],
+        Self::new("::std::option::Option", [TypespaceTraitSet::empty()])
+            .with_provisions(
                 &[TypespaceTrait::Default],
-            ),
-        }
+                &[TypespaceTrait::Display, TypespaceTrait::FromStr],
+            )
+            .with_prelude(parse_path("Option"))
     }
 
     /// `::std::collections::BTreeSet` and containers that behave as it
     /// does: elements must be ordered, and the provisions are `Vec`'s.
     pub fn btree_set() -> Self {
-        Self {
-            path: parse_path("::std::collections::BTreeSet"),
-            prelude_path: None,
-            obligations: vec![ordered_lookup_traits()],
-            provisions: ProvisionTable::forwarding(),
-        }
+        Self::new("::std::collections::BTreeSet", [ordered_lookup_traits()])
+            .with_provisions(&[TypespaceTrait::Default], &OWNING_NEVER)
     }
 
     /// `::std::collections::HashSet` and containers that behave as it
     /// does: elements must be hashable, and the container has no `Ord`,
     /// `PartialOrd`, or `Hash` impl at any element type.
     pub fn hash_set() -> Self {
-        Self {
-            path: parse_path("::std::collections::HashSet"),
-            prelude_path: None,
-            obligations: vec![hash_lookup_traits()],
-            provisions: ProvisionTable::hashing(),
-        }
+        Self::new("::std::collections::HashSet", [hash_lookup_traits()])
+            .with_provisions(&[TypespaceTrait::Default], &HASHING_NEVER)
     }
 
     /// The path the container renders as.
@@ -582,8 +613,38 @@ impl ContainerType {
         self
     }
 
-    /// Set what the container implements for several traits at once.
-    fn with_provisions(mut self, provides: BTreeMap<TypespaceTrait, TraitProvision>) -> Self {
+    /// Replace what the container implements, stated as exceptions:
+    /// traits in `always` have an impl whatever the parameters are,
+    /// traits in `never` have no impl at any parameter, and every
+    /// other trait typespace tracks follows the parameters.
+    ///
+    /// This replaces the whole table, so narrow individual traits with
+    /// [`with_provision`](Self::with_provision) after it, not before.
+    ///
+    /// ```
+    /// # use typespace::{
+    /// #     settings::ContainerType,
+    /// #     TypespaceTrait, TypespaceTraitSet,
+    /// # };
+    /// // A custom optional/nullable wrapper: `Default` always,
+    /// // `Display` and `FromStr` never, every other trait follows
+    /// // the parameter.
+    /// let wrapper = ContainerType::new("::my::Opt", [TypespaceTraitSet::empty()])
+    ///     .with_provisions(
+    ///         &[TypespaceTrait::Default],
+    ///         &[TypespaceTrait::Display, TypespaceTrait::FromStr],
+    ///     );
+    /// ```
+    pub fn with_provisions(mut self, always: &[TypespaceTrait], never: &[TypespaceTrait]) -> Self {
+        self.provisions = ProvisionTable::new(never, always);
+        self
+    }
+
+    /// Merge per-trait overrides into the table, for deserialization.
+    fn with_provision_overrides(
+        mut self,
+        provides: BTreeMap<TypespaceTrait, TraitProvision>,
+    ) -> Self {
         self.provisions = self.provisions.overridden(provides);
         self
     }
@@ -637,23 +698,23 @@ impl std::fmt::Debug for ContainerType {
 
 /// The deserialized form of [`ContainerType`].
 ///
-/// A declaration names the family it behaves as, in which case every
+/// A declaration names the preset it behaves as, in which case every
 /// other key adjusts that preset, or states its own `path` and
 /// `obligations` and claims only what rendering assumes.
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct ContainerTypeRepr {
-    /// The family the container behaves as; the preset it starts from.
+    /// The preset the container starts from.
     #[serde(default)]
     like: Option<ContainerFamily>,
-    /// The path the container renders as, replacing the family's.
+    /// The path the container renders as, replacing the preset's.
     #[serde(default)]
     path: Option<String>,
     /// What the container demands of each parameter, replacing the
-    /// family's.
+    /// preset's.
     #[serde(default)]
     obligations: Option<Vec<TypespaceTraitSet>>,
-    /// Per-trait answers replacing the family's.
+    /// Per-trait answers replacing the preset's.
     #[serde(default)]
     provides: BTreeMap<TypespaceTrait, TraitProvision>,
 }
@@ -671,7 +732,7 @@ enum ContainerFamily {
 }
 
 impl ContainerFamily {
-    /// The declaration the family names.
+    /// The declaration this name selects.
     fn preset(&self) -> ContainerType {
         match self {
             Self::BtreeMap => ContainerType::btree_map(),
@@ -703,10 +764,10 @@ impl TryFrom<ContainerTypeRepr> for ContainerType {
             .transpose()?;
 
         let declared = match (like, path, obligations) {
-            (Some(family), path, obligations) => {
+            (Some(chosen), path, obligations) => {
                 let with_path = match path {
-                    Some(path) => family.preset().with_parsed_path(path),
-                    None => family.preset(),
+                    Some(path) => chosen.preset().with_parsed_path(path),
+                    None => chosen.preset(),
                 };
                 match obligations {
                     Some(obligations) => with_path.with_obligations(obligations),
@@ -715,14 +776,14 @@ impl TryFrom<ContainerTypeRepr> for ContainerType {
             }
             (None, Some(path), Some(obligations)) => Self::opaque(path, obligations),
             (None, _, _) => {
-                return Err("a container declaration states the family it behaves \
+                return Err("a container declaration states the preset it behaves \
                             as with `like`, or states its own `path` and \
                             `obligations`"
                     .to_string());
             }
         };
 
-        Ok(declared.with_provisions(provides))
+        Ok(declared.with_provision_overrides(provides))
     }
 }
 
@@ -773,40 +834,6 @@ impl ProvisionTable {
                     (trait_, provision)
                 })
                 .collect(),
-        )
-    }
-
-    /// The table for the ordered std families (`BTreeMap`, `BTreeSet`)
-    /// and for `Vec`: every trait follows the parameters except
-    /// `Display` and `FromStr`, which these containers do not
-    /// implement, and `Copy`, which none of them has at any parameter
-    /// (each owns a heap-allocated buffer), and `Default`, which needs
-    /// nothing of them.
-    fn forwarding() -> Self {
-        Self::new(
-            &[
-                TypespaceTrait::Display,
-                TypespaceTrait::FromStr,
-                TypespaceTrait::Copy,
-            ],
-            &[TypespaceTrait::Default],
-        )
-    }
-
-    /// The table for the hash std families (`HashMap`, `HashSet`): the
-    /// forwarding table, less the ordering traits and `Hash`, for which
-    /// these containers have no impl at any parameter.
-    fn hashing() -> Self {
-        Self::new(
-            &[
-                TypespaceTrait::Display,
-                TypespaceTrait::FromStr,
-                TypespaceTrait::Copy,
-                TypespaceTrait::Ord,
-                TypespaceTrait::PartialOrd,
-                TypespaceTrait::Hash,
-            ],
-            &[TypespaceTrait::Default],
         )
     }
 
