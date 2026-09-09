@@ -232,11 +232,23 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Variant or tuple struct `#[tuple]`: keeps a single-type payload
 ///   from collapsing into the newtype form. Valid only at that arity,
 ///   since every other arity is already a tuple.
+/// - `///` on a struct, an enum, or a type alias: `.description(...)`.
+///   On a field or an enum variant: `.with_description(...)`. Not
+///   valid on a `native` item, which has no description slot, or on
+///   one of a tuple struct's own positional fields, which carry no
+///   metadata of their own--only the tuple struct itself does.
 ///
 /// `#[rename]` and `#[flatten]` are field-level only, valid wherever
 /// `#[default]` is, and mutually exclusive: `StructPropertySerde` holds one
 /// treatment of a property's name, so a field carrying both is a compile
 /// error.
+///
+/// A multi-line `///` comment desugars to one `#[doc = "line"]` per
+/// source line before this macro ever sees it; the lines are joined
+/// with `\n`, trimming one leading space from each first (the space
+/// rustdoc inserts after `///` when the line has one), so `/// A widget.`
+/// followed by `///` and `/// Has a name.` becomes
+/// `"A widget.\n\nHas a name."`.
 ///
 /// `#[derive]` and `#[attr]` are valid on every named type: any `struct` ,
 /// `enum`, or `type` alias. Each takes a nonempty list of string. These are in

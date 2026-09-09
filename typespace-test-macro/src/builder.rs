@@ -363,6 +363,10 @@ const KNOWN_ATTRS: &[(&str, &str)] = &[
     ("untagged", "an enum"),
     ("tag", "an enum"),
     ("content", "an enum"),
+    (
+        "doc",
+        "a struct, an enum, a type alias, a field, or an enum variant",
+    ),
 ];
 
 /// The attributes one context (an item, a field, a variant) has
@@ -383,6 +387,14 @@ fn claim_attrs<'a>(
         let name = attr.name.to_string();
         let Some(&key) = allowed.iter().find(|candidate| **candidate == name) else {
             return Err(match KNOWN_ATTRS.iter().find(|(known, _)| *known == name) {
+                // `doc` is typically not what the caller wrote; they wrote
+                // `///`, which the compiler already desugared by the time this
+                // sees it, so the message names the source syntax instead of
+                // the attribute it became.
+                Some((_, home)) if name == "doc" => syn::Error::new_spanned(
+                    &attr.name,
+                    format!("a doc comment is only valid on {home}"),
+                ),
                 Some((_, home)) => syn::Error::new_spanned(
                     &attr.name,
                     format!("`#[{name}]` is only valid on {home}"),
@@ -406,13 +418,58 @@ fn claim_attrs<'a>(
 }
 
 /// Consume every leading `#[...]` group before an item, field, or
-/// variant.
+/// variant, then fold any `doc` entries among them into one (see
+/// [`merge_doc_attrs`]).
 fn parse_attrs(input: ParseStream) -> syn::Result<Vec<AttrEntry>> {
     let mut entries = Vec::new();
     while input.peek(Token![#]) {
         entries.extend(parse_one_attr_group(input)?);
     }
-    Ok(entries)
+    merge_doc_attrs(entries)
+}
+
+/// Fold every `doc` entry in `entries` into a single one, so the rest of this
+/// module can look up a description the same way it looks up any other
+/// attribute: by claiming the one entry named `doc`, exactly as
+/// [`claim_attrs`] already claims `default`, `rename`, and the rest.
+///
+/// The compiler desugars a `///` doc comment into a `#[doc = "line"]`
+/// attribute per source line before this macro ever sees it, so a multi-line
+/// comment arrives as several same-named entries; we generally don't allow an
+/// attribute to be multiply specified (simplicity here and for the user), so
+/// need to make a special case here.
+///
+/// Each line is required to be a string (true of every `///` line;
+/// false only if someone writes `#[doc = 1]` by hand) and has at most
+/// one leading space trimmed--the space rustdoc always inserts after
+/// `///` when the comment itself starts with one, e.g. `/// foo` desugars
+/// to `#[doc = " foo"]`--then the lines are joined with `\n`, matching
+/// how a multi-line description reads when set directly through
+/// [`typespace::build`]'s own `description`/`with_description` methods.
+fn merge_doc_attrs(entries: Vec<AttrEntry>) -> syn::Result<Vec<AttrEntry>> {
+    let (docs, mut rest): (Vec<_>, Vec<_>) =
+        entries.into_iter().partition(|entry| entry.name == "doc");
+    let Some(first) = docs.first() else {
+        return Ok(rest);
+    };
+    let name = first.name.clone();
+    let lines = docs
+        .iter()
+        .map(|entry| match &entry.value {
+            Some(serde_json::Value::String(line)) => {
+                Ok(line.strip_prefix(' ').unwrap_or(line).to_string())
+            }
+            _ => Err(syn::Error::new_spanned(
+                &entry.name,
+                "`#[doc]` requires a string value",
+            )),
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    rest.push(AttrEntry {
+        name,
+        value: Some(serde_json::Value::String(lines.join("\n"))),
+    });
+    Ok(rest)
 }
 
 fn parse_one_attr_group(input: ParseStream) -> syn::Result<Vec<AttrEntry>> {
@@ -518,6 +575,24 @@ fn claimed_extra_list(
             let values = expect_string_list(entry)?;
             let method = format_ident!("{method}");
             Ok(quote! { .#method([ #(#values),* ]) })
+        }
+    }
+}
+
+/// A claimed doc comment rendered as `.#method(...)` (or nothing, if
+/// unclaimed). `method` is the builder setter name: `description` for a named
+/// type, `with_description` for a struct property or an enum variant.
+///
+/// [`merge_doc_attrs`] already guarantees the value is a string.
+fn claimed_description(claims: &Claims, method: &'static str) -> TokenStream {
+    match claims.get("doc").copied() {
+        None => TokenStream::new(),
+        Some(entry) => {
+            let Some(serde_json::Value::String(description)) = &entry.value else {
+                panic!("merge_doc_attrs guarantees a string value for `doc`");
+            };
+            let method = format_ident!("{method}");
+            quote! { .#method(#description) }
         }
     }
 }
@@ -1013,13 +1088,15 @@ fn lower_struct_properties(
         .iter()
         .map(|field| {
             let (type_id, base_state) = lower_field_type(&field.ty, lowering)?;
-            let claims = claim_attrs(&field.attrs, &["default", "rename", "flatten"])?;
+            let claims = claim_attrs(&field.attrs, &["default", "rename", "flatten", "doc"])?;
             reject_redundant_optional_with_default(&field.ty, &base_state, &claims)?;
             let state = field_state_override(&claims, base_state.tokens())?;
             let json_name = field_json_name(&claims)?;
+            let description_tokens = claimed_description(&claims, "with_description");
             let field_name = field.name.to_string();
             Ok(quote! {
                 ::typespace::build::StructProperty::new(#field_name, #type_id.to_string())
+                    #description_tokens
                     .with_state(#state)
                     #json_name
             })
@@ -1033,18 +1110,19 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
         // `default` is not valid here: a unit struct has one possible
         // value, so a default carries no information, and
         // `typespace::build::UnitStruct` has no such builder method.
-        StructBody::Unit => &["derive", "attr", "json"],
+        StructBody::Unit => &["derive", "attr", "json", "doc"],
         // `deny_unknown_fields` is only valid on the fields form:
         // `typespace::build::TupleStruct`/`NewtypeStruct`/`UnitStruct`
         // have no such builder method.
-        StructBody::Fields(_) => &["default", "derive", "attr", "deny_unknown_fields"],
-        StructBody::Tuple(_) => &["default", "derive", "attr", "tuple"],
+        StructBody::Fields(_) => &["default", "derive", "attr", "deny_unknown_fields", "doc"],
+        StructBody::Tuple(_) => &["default", "derive", "attr", "tuple", "doc"],
     };
     let claims = claim_attrs(&item.attrs, allowed)?;
     let default_tokens = claimed_default(&claims)?;
     // Every struct form is a named type, so every one carries the
-    // per-type derives and attributes.
+    // per-type derives and attributes, and a description.
     let extras_tokens = claimed_extras(&claims)?;
+    let description_tokens = claimed_description(&claims, "description");
     match &item.body {
         StructBody::Fields(fields) => {
             let props = lower_struct_properties(fields, lowering)?;
@@ -1054,6 +1132,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                     #name.to_string(),
                     ::typespace::build::Struct::<String>::new()
                         .name(#name)
+                        #description_tokens
                         #default_tokens
                         #extras_tokens
                         #deny_unknown_fields_tokens
@@ -1088,6 +1167,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             #name.to_string(),
                             ::typespace::build::TupleStruct::<String>::new()
                                 .name(#name)
+                                #description_tokens
                                 #default_tokens
                                 #extras_tokens
                                 .fields([ #field_id.to_string() ])
@@ -1103,6 +1183,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             #name.to_string(),
                             ::typespace::build::NewtypeStruct::new(#inner_id.to_string())
                                 .name(#name)
+                                #description_tokens
                                 #default_tokens
                                 #extras_tokens
                                 .build()
@@ -1131,6 +1212,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                             #name.to_string(),
                             ::typespace::build::TupleStruct::<String>::new()
                                 .name(#name)
+                                #description_tokens
                                 #default_tokens
                                 #extras_tokens
                                 .fields([ #(#ids.to_string()),* ])
@@ -1159,6 +1241,7 @@ fn lower_struct(item: &StructItem, lowering: &mut Lowering) -> syn::Result<()> {
                     #name.to_string(),
                     ::typespace::build::UnitStruct::new(#repr_tokens)
                         .name(#name)
+                        #description_tokens
                         #extras_tokens
                         .build::<String>()
                         .unwrap(),
@@ -1181,10 +1264,12 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
             "tag",
             "content",
             "deny_unknown_fields",
+            "doc",
         ],
     )?;
     let default_tokens = claimed_default(&claims)?;
     let extras_tokens = claimed_extras(&claims)?;
+    let description_tokens = claimed_description(&claims, "description");
     let tag_type_tokens = enum_tag_type(&claims)?;
     let deny_unknown_fields_tokens = claimed_deny_unknown_fields(&claims)?;
     let variant_tokens = item
@@ -1197,6 +1282,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
             #name.to_string(),
             ::typespace::build::Enum::<String>::new()
                 .name(#name)
+                #description_tokens
                 .tag_type(#tag_type_tokens)
                 #default_tokens
                 #extras_tokens
@@ -1210,7 +1296,7 @@ fn lower_enum(item: &EnumItem, lowering: &mut Lowering) -> syn::Result<()> {
 }
 
 fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<TokenStream> {
-    let claims = claim_attrs(&variant.attrs, &["json", "tuple"])?;
+    let claims = claim_attrs(&variant.attrs, &["json", "tuple", "doc"])?;
 
     // `#[tuple]` applies to the payload, so its arity check needs the
     // payload; a variant that has none cannot carry the attribute at
@@ -1255,11 +1341,13 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
         }
         None => None,
     };
+    let description_tokens = claimed_description(&claims, "with_description");
     // `with_rename` is `Option<TokenStream>`: quote!'s `ToTokens` impl
     // for `Option<T: ToTokens>` interpolates the contents when `Some`
     // and emits nothing at all when `None`, so this needs no branch.
     Ok(quote! {
         ::typespace::build::EnumVariant::new(#variant_name, #details_tokens)
+            #description_tokens
             #with_rename
     })
 }
@@ -1267,15 +1355,18 @@ fn lower_variant(variant: &VariantItem, lowering: &mut Lowering) -> syn::Result<
 fn lower_alias(item: &AliasItem, lowering: &mut Lowering) -> syn::Result<()> {
     let name = lowering.claim_named_item(&item.name)?;
     // A type alias renders as `type N = T;`, which Rust does not
-    // allow a derive on (E0774); attributes are legal there.
-    let claims = claim_attrs(&item.attrs, &["attr"])?;
+    // allow a derive on (E0774); attributes and a description are
+    // legal there.
+    let claims = claim_attrs(&item.attrs, &["attr", "doc"])?;
     let extras_tokens = claimed_extras(&claims)?;
+    let description_tokens = claimed_description(&claims, "description");
     let target_id = lower_type(&item.target, lowering)?;
     lowering.inserts.push(quote! {
         builder.insert(
             #name.to_string(),
             ::typespace::build::TypeAlias::<String>::new(#target_id.to_string())
                 .name(#name)
+                #description_tokens
                 #extras_tokens
                 .build()
                 .unwrap(),
@@ -2364,6 +2455,39 @@ mod tests {
             "tests/output/test_native_variant_field_serde_names.rs",
             &out,
         );
+    }
+
+    /// `///` reaches every position that has a description slot: a
+    /// named type (here a struct, an enum, and a type alias), a
+    /// struct property, and an enum variant. The struct and the alias
+    /// carry a multi-line comment, including a blank `///` line, to
+    /// exercise the per-line trim and the `\n` join together.
+    #[test]
+    fn test_description_positions() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                /// A widget.
+                ///
+                /// Has a name.
+                struct Widget {
+                    /// The widget's name.
+                    name: String,
+                }
+
+                /// One of a few shapes.
+                enum Shape {
+                    /// A circle.
+                    Circle(f64),
+                    Empty,
+                }
+
+                /// An alias for a widget's name.
+                ///
+                /// Just a `String` underneath.
+                type Label = String;
+            }
+        });
+        expectorate::assert_contents("tests/output/test_description_positions.rs", &out);
     }
 
     /// `#[flatten]` on a tuple struct's last field: the positional

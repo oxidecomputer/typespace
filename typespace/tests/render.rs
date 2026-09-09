@@ -4,8 +4,7 @@ use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::build::{
     Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct,
-    StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias,
-    VariantDetails,
+    StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
 use typespace::settings::{ContainerType, OptionalNullable, Settings, Std};
@@ -694,38 +693,18 @@ fn test_enum_variant_from_distinct_ids() {
 
 #[test]
 fn test_newtype_struct() {
-    let mut builder = TypespaceBuilder::new(
+    let builder = typespace_builder!(
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
             .with_std(Std::Unqualified),
+        {
+            /// A newtype wrapping String.
+            struct MyString(String);
+
+            struct MyInt(u32);
+        }
     );
-
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let int_id = "integer".to_string();
-    builder
-        .insert(int_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    builder
-        .insert(
-            "MyString".to_string(),
-            NewtypeStruct::new(string_id)
-                .name("MyString")
-                .description("A newtype wrapping String.".to_string())
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "MyInt".to_string(),
-            NewtypeStruct::new(int_id).name("MyInt").build().unwrap(),
-        )
-        .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
 
@@ -757,33 +736,12 @@ fn test_newtype_struct() {
 
 #[test]
 fn test_type_alias() {
-    let mut builder = TypespaceBuilder::new(Settings::minimal().with_std(Std::Unqualified));
+    let builder = typespace_builder!(Settings::minimal().with_std(Std::Unqualified), {
+        type MyAlias = String;
 
-    let string_id = "string".to_string();
-    builder.insert(string_id.clone(), Type::String).unwrap();
-
-    let vec_string_id = "vec_string".to_string();
-    builder
-        .insert(vec_string_id.clone(), Type::Vec(string_id.clone()))
-        .unwrap();
-
-    builder
-        .insert(
-            "MyAlias".to_string(),
-            TypeAlias::new(string_id).name("MyAlias").build().unwrap(),
-        )
-        .unwrap();
-
-    builder
-        .insert(
-            "StringList".to_string(),
-            TypeAlias::new(vec_string_id)
-                .name("StringList")
-                .description("A list of strings.".to_string())
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        /// A list of strings.
+        type StringList = Vec<String>;
+    });
 
     let ts = builder.finalize(no_cycles).unwrap();
 

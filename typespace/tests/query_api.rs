@@ -2,10 +2,10 @@
 
 use quote::quote;
 use typespace::{
-    TypeSpaceImpl, TypespaceBuilder,
+    TypeSpaceImpl,
     build::{
-        Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, StructPropertyState,
-        TupleStruct, Type, TypeAlias, UnitStruct, VariantDetails,
+        Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, TupleStruct, Type,
+        TypeAlias, UnitStruct, VariantDetails,
     },
     no_cycles,
     settings::Settings,
@@ -14,65 +14,29 @@ use typespace::{
 use typespace_test_macro::typespace_builder;
 
 fn make_typespace() -> typespace::Typespace<String> {
-    let mut builder = TypespaceBuilder::default();
+    let builder = typespace_builder!(Settings::typical(), {
+        // A struct with three properties.
+        /// A sample struct
+        struct MyStruct {
+            /// The name field
+            name: String,
+            count: u32,
+            label: Optional<String>,
+        }
 
-    let str_id = "str".to_string();
-    builder.insert(str_id.clone(), Type::String).unwrap();
+        // An enum with three variants: unit, single-item (Item), multi-item (Tuple).
+        /// A sample enum
+        enum MyEnum {
+            Nothing,
+            Single(String),
+            Pair(String, u32),
+        }
 
-    let u32_id = "u32".to_string();
-    builder
-        .insert(u32_id.clone(), Type::Integer("u32".to_string()))
-        .unwrap();
-
-    let bool_id = "bool".to_string();
-    builder.insert(bool_id.clone(), Type::Boolean).unwrap();
-
-    let opt_str_id = "opt_str".to_string();
-    builder
-        .insert(opt_str_id.clone(), Type::Option(str_id.clone()))
-        .unwrap();
-
-    // A struct with three properties.
-    let struct_id = "MyStruct".to_string();
-    builder
-        .insert(
-            struct_id.clone(),
-            Struct::new()
-                .name("MyStruct")
-                .description("A sample struct".to_string())
-                .properties(vec![
-                    StructProperty::new("name", str_id.clone())
-                        .with_description("The name field".to_string()),
-                    StructProperty::new("count", u32_id.clone()),
-                    StructProperty::new("label", opt_str_id.clone())
-                        .with_state(StructPropertyState::Optional),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
-
-    // An enum with three variants: unit, single-item (Item), multi-item (Tuple).
-    let enum_id = "MyEnum".to_string();
-    builder
-        .insert(
-            enum_id.clone(),
-            Enum::new()
-                .name("MyEnum")
-                .description("A sample enum".to_string())
-                .tag_type(EnumTagType::External)
-                .variants(vec![
-                    EnumVariant::new("Nothing", VariantDetails::Unit),
-                    EnumVariant::new("Single", VariantDetails::Item(str_id.clone())),
-                    EnumVariant::new(
-                        "Pair",
-                        VariantDetails::Tuple(vec![str_id.clone(), u32_id.clone()]),
-                    ),
-                ])
-                .build()
-                .unwrap(),
-        )
-        .unwrap();
+        // A plain primitive with no named type of its own, so
+        // `ident_produces_expected_tokens` has a bare type to query
+        // independent of MyStruct and MyEnum.
+        type Flag = bool;
+    });
 
     builder.finalize(no_cycles).unwrap()
 }

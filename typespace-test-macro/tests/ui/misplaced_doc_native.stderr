@@ -1,0 +1,5 @@
+error: a doc comment (`///`) is only valid on a struct, an enum, a type alias, a field, or an enum variant
+ --> tests/ui/misplaced_doc_native.rs:6:9
+  |
+6 |         /// A date.
+  |         ^^^^^^^^^^^
