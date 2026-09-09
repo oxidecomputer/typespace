@@ -1,4 +1,4 @@
-error: a doc comment (`///`) is only valid on a struct, an enum, a type alias, a field, or an enum variant
+error: a doc comment is only valid on a struct, an enum, a type alias, a field, or an enum variant
  --> tests/ui/misplaced_doc_tuple_field.rs:9:13
   |
 9 |             /// The width.
