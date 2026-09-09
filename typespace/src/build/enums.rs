@@ -8,11 +8,11 @@ use quote::{format_ident, quote};
 use crate::build::{
     JsonValue, StructProperty, Type, TypeCommon, TypeCommonBuilt, check_properties, validate_ident,
 };
-use crate::default::{EnumDefault, generate_default_enum};
+use crate::default::EnumDefault;
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
-use crate::{TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
+use crate::{TypespaceBuilder, TypespaceRenderer, TypespaceTrait, TypespaceTraitSet};
 
 /// An enum.
 ///
@@ -269,8 +269,7 @@ impl<Id> Enum<Id> {
 
     pub(crate) fn check_field_defaults(
         &self,
-        types: &BTreeMap<Id, Type<Id>>,
-        settings: &crate::settings::Settings,
+        typespace: &TypespaceBuilder<Id>,
     ) -> Result<(), Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -280,7 +279,7 @@ impl<Id> Enum<Id> {
             .try_for_each(|variant| match &variant.details {
                 VariantDetails::Struct(items) => items
                     .iter()
-                    .try_for_each(|prop| prop.check_defaults(types, settings)),
+                    .try_for_each(|prop| prop.check_defaults(typespace)),
                 _ => Ok(()),
             })
     }
@@ -389,12 +388,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     .as_ref()
                     .expect("validated type with Default among its impls must have a valid default")
                     .0;
-                let generated_default = generate_default_enum(
-                    typespace.types,
-                    typespace.settings,
-                    &default_value,
-                    id.clone(),
-                );
+                let generated_default = typespace.generate_default_enum(default_value, id);
 
                 match generated_default {
                     EnumDefault::Value(default_value) => {
@@ -526,23 +520,22 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .map(|variant| (format_ident!("{}", variant.rust_name), variant.json_name()))
             .unzip();
 
-        let display = derived_traits
-            .remove(TypespaceTrait::Display)
-            .then(|| {
-                // Display each variant as its serialized name.
-                quote! {
-                    impl ::std::fmt::Display for #name_ident {
-                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
-                            -> ::std::fmt::Result
-                        {
-                            match *self {
-                                #( Self::#variant_idents => f.write_str(#variant_names), )*
-                            }
+        let display = if derived_traits.remove(TypespaceTrait::Display) {
+            // Display each variant as its serialized name.
+            quote! {
+                impl ::std::fmt::Display for #name_ident {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>)
+                        -> ::std::fmt::Result
+                    {
+                        match *self {
+                            #( Self::#variant_idents => f.write_str(#variant_names), )*
                         }
                     }
                 }
-            })
-            .unwrap_or_default();
+            }
+        } else {
+            Default::default()
+        };
 
         let (from_str, try_from) = if derived_traits.remove(TypespaceTrait::FromStr) {
             // Parse each variant from its serialized name.
@@ -658,20 +651,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         } else {
             (TokenStream::new(), TokenStream::new())
         };
-        let display = derived_traits
-            .remove(TypespaceTrait::Display)
-            .then(|| {
-                quote! {
-                    impl ::std::fmt::Display for #name_ident {
-                        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                            match self {
-                                #(Self::#variant_idents(x) => x.fmt(f),)*
-                            }
+
+        let display = if derived_traits.remove(TypespaceTrait::Display) {
+            quote! {
+                impl ::std::fmt::Display for #name_ident {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        match self {
+                            #(Self::#variant_idents(x) => x.fmt(f),)*
                         }
                     }
                 }
-            })
-            .unwrap_or_default();
+            }
+        } else {
+            Default::default()
+        };
 
         EnumSpecialImpls {
             display,

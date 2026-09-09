@@ -92,7 +92,7 @@ use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
 };
-use crate::default::{SharedDefaultFn, check_default, shared_default_fn};
+use crate::default::{SharedDefaultFn, shared_default_fn};
 use crate::error::Error;
 use crate::output::Outputspace;
 use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
@@ -552,19 +552,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     fn check_type_defaults(&self) -> Result<(), Error<Id>> {
         for (type_id, typ) in &self.types {
-            if let Some(common) = typ.common() {
-                if let Some(default) = &common.default {
-                    check_default(&self.types, &self.settings, &default.0, type_id.clone())?;
-                }
+            if let Some(common) = typ.common()
+                && let Some(JsonValue(default)) = &common.default
+            {
+                self.check_default(&default, &type_id)?;
             }
 
             match typ {
-                Type::Struct(struct_info) => {
-                    struct_info.check_field_defaults(&self.types, &self.settings)?
-                }
-                Type::Enum(enum_info) => {
-                    enum_info.check_field_defaults(&self.types, &self.settings)?
-                }
+                Type::Struct(struct_info) => struct_info.check_field_defaults(self)?,
+                Type::Enum(enum_info) => enum_info.check_field_defaults(self)?,
                 _ => (),
             }
         }
@@ -1632,12 +1628,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 let fn_name_ident = format_ident!("{}", fn_name_str);
 
                 let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
-                let body = crate::default::generate_default(
-                    self.types,
-                    self.settings,
-                    value,
-                    type_id.clone(),
-                );
+                let body = self.generate_default(value, &type_id);
                 // Key the item by the CONTAINING TYPE, not by the
                 // function, which is what typify does
                 // (typify-impl/src/structs.rs, `add_item(Defaults,

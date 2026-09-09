@@ -1250,13 +1250,16 @@ where
 
             // JsonValue implements everything except for Ord,
             // PartialOrd, and Copy: it owns a String and a Vec.
-            Type::JsonValue => match (trait_name, settings.typify_compat) {
-                (TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy, _) => {
-                    false
-                }
-                (TypespaceTrait::FromStr | TypespaceTrait::Display, true) => false,
-                _ => true,
-            },
+            Type::JsonValue => !matches!(
+                (trait_name, settings.typify_compat),
+                // Never Ord, PartialOrd, or Copy.
+                (
+                    TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy,
+                    _
+                ) |
+                // Not FromStr or Display when under typify compat.
+                (TypespaceTrait::FromStr | TypespaceTrait::Display, true)
+            ),
         }
     }
 }
