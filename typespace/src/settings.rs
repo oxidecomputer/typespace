@@ -15,9 +15,20 @@ use crate::{ALL_TRAITS, TypespaceTrait, TypespaceTraitSet};
 ///
 /// Settings are supplied to
 /// [`TypespaceBuilder::new`](crate::TypespaceBuilder::new) and govern
-/// finalization and rendering. Start from [`Settings::default`] and
-/// adjust with the `with_` methods; the type also implements
-/// `Deserialize` so settings can come from configuration data.
+/// finalization and rendering. Start from one of the presets --
+/// [`Settings::minimal`], [`Settings::typical`], or
+/// [`Settings::maximal`] -- and adjust with the `with_` methods. There
+/// is deliberately no `Default`: which traits a typespace requires and
+/// which it merely desires changes what the generated code is, so the
+/// choice is named rather than inherited.
+///
+/// The type also implements `Deserialize`, so settings can come from
+/// configuration data. Every field has a default there, which means
+/// configuration that states nothing lands on the same value
+/// [`Settings::minimal`] produces; a consumer embedding `Settings` in
+/// its own deserializable configuration wants
+/// `#[serde(default = "Settings::minimal")]`, or whichever preset suits
+/// it, rather than a bare `#[serde(default)]`.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     /// How types in the `std` prelude are rendered; see [`Std`].
@@ -142,6 +153,15 @@ impl Settings {
         ContainerType::vec()
     }
 
+    /// Nothing asked of a generated type.
+    ///
+    /// No trait is required, none is desired, no extra derive or
+    /// attribute is added, and a struct gets no builder. Prelude types
+    /// render fully qualified ([`Std::FullyQualified`]) and the
+    /// containers are the built-in ones: a map is a `BTreeMap`, and a
+    /// set and a vec are both a `Vec`, with the set demanding
+    /// ordered lookup (`Eq`, `PartialEq`, `Ord`, `PartialOrd`) of its
+    /// elements.
     pub fn minimal() -> Self {
         Self {
             std: Std::FullyQualified,
@@ -158,6 +178,13 @@ impl Settings {
         }
     }
 
+    /// What generated code usually wants: the common traits and
+    /// struct builders.
+    ///
+    /// Requires `Clone`, `Debug`, `Serialize`, and `Deserialize` of
+    /// every named type, and generates a builder for each struct.
+    /// Nothing is desired beyond what is required. Everything else
+    /// follows [`Settings::minimal`].
     pub fn typical() -> Self {
         Self {
             required_traits: [
@@ -173,6 +200,15 @@ impl Settings {
         }
     }
 
+    /// Every trait typespace knows about, required or desired.
+    ///
+    /// Adds `JsonSchema` to what [`Settings::typical`] requires, and
+    /// desires the rest: `Display`, `FromStr`, `Eq`, `PartialEq`,
+    /// `Ord`, `PartialOrd`, `Hash`, `Default`, and `Copy`. A desired
+    /// trait is implemented for each type that can implement it and
+    /// skipped for the rest, so unlike a required trait it cannot
+    /// make finalization fail. Struct builders are on, as in
+    /// [`Settings::typical`].
     pub fn maximal() -> Self {
         Self {
             required_traits: [
