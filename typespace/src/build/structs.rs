@@ -255,7 +255,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             .map(|prop| typespace.render_struct_property(prop, serde_derives, true, name, out))
             .collect::<Vec<_>>();
 
-        if typespace.settings.struct_builder {
+        if typespace.has_builder(id) {
             // TODO 9/1/2026
             // for compat: some of these are unqualified and some are fully
             // qualified; resolve.
@@ -385,17 +385,19 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             typespace.add_error_mod(out);
         }
 
-        let builder_impl = typespace.settings.struct_builder.then(|| {
-            quote! {
-                impl #name_ident {
-                    pub fn builder() -> builder::#name_ident {
-                        // TODO 9/1/2026
-                        // TYPIFY COMPAT: Add std scope
-                        Default::default()
+        let builder_impl = typespace
+            .render_builder_ident(id, None)
+            .map(|builder_ident| {
+                quote! {
+                    impl #name_ident {
+                        pub fn builder() -> #builder_ident {
+                            // TODO 9/1/2026
+                            // TYPIFY COMPAT: Add std scope
+                            Default::default()
+                        }
                     }
                 }
-            }
-        });
+            });
 
         let default_impl = traits.contains(&TypespaceTrait::Default).then(|| {
             // If there's no whole-type default value and every property's

@@ -80,6 +80,19 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             .render_parameter_ident(self.id, scope, lifetime)
     }
 
+    /// The identifier of this type's generated builder, if it has
+    /// one.
+    ///
+    /// A builder is generated for a struct, and only when
+    /// [`Settings::with_struct_builder`](crate::settings::Settings::with_struct_builder)
+    /// is set; every other type answers `None`. Builders live in a
+    /// `builder` module alongside the types they build, so the
+    /// identifier is `builder::Name`, and `scope` qualifies it the way
+    /// [`Type::ident_in`] qualifies a type.
+    pub fn builder_ident(&self, scope: Option<&str>) -> Option<TokenStream> {
+        self.renderer().render_builder_ident(self.id, scope)
+    }
+
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
     }

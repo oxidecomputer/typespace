@@ -869,3 +869,106 @@ fn extra_derives_and_attrs_get_accessors_reflect_the_claim() {
     assert!(unnamed.extra_derives().is_empty());
     assert!(unnamed.extra_attrs().is_empty());
 }
+
+// A builder exists for a struct and only when the setting asks for
+// one, and the query answers from the same condition rendering uses,
+// so `Some` and a builder in the generated code go together.
+#[test]
+fn builder_ident_tracks_what_rendering_emits() {
+    let build = |settings: Settings| {
+        let mut builder = TypespaceBuilder::new(settings);
+
+        let str_id = "str".to_string();
+        builder.insert(str_id.clone(), Type::String).unwrap();
+
+        builder
+            .insert(
+                "MyStruct".to_string(),
+                Struct::new()
+                    .name("MyStruct")
+                    .properties(vec![StructProperty::new("name", str_id.clone())])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        builder
+            .insert(
+                "MyNewtype".to_string(),
+                NewtypeStruct::new(str_id.clone())
+                    .name("MyNewtype")
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        builder
+            .insert(
+                "MyEnum".to_string(),
+                Enum::new()
+                    .name("MyEnum")
+                    .tag_type(EnumTagType::External)
+                    .variants(vec![EnumVariant::new("Nothing", VariantDetails::Unit)])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+
+    // Whether the generated code puts a type of this name in the
+    // `builder` module.
+    let is_rendered = |ts: &typespace::Typespace<String>, name: &str| {
+        let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream())
+            .expect("generated code parses");
+        file.items.iter().any(|item| match item {
+            syn::Item::Mod(item) if item.ident == "builder" => item
+                .content
+                .iter()
+                .flat_map(|(_, items)| items)
+                .any(|item| matches!(item, syn::Item::Struct(item) if item.ident == name)),
+            _ => false,
+        })
+    };
+
+    let ts = build(Settings::minimal().with_struct_builder(true));
+
+    let struct_ti = ts.get_type(&"MyStruct".to_string());
+    assert_eq!(
+        struct_ti
+            .builder_ident(None)
+            .expect("a struct has a builder")
+            .to_string(),
+        quote! { builder::MyStruct }.to_string()
+    );
+    assert_eq!(
+        struct_ti
+            .builder_ident(Some("types"))
+            .expect("a struct has a builder")
+            .to_string(),
+        quote! { types::builder::MyStruct }.to_string()
+    );
+    assert!(is_rendered(&ts, "MyStruct"));
+
+    // Only a struct gets a builder.
+    for name in ["MyNewtype", "MyEnum", "str"] {
+        let id = name.to_string();
+        assert!(
+            ts.get_type(&id).builder_ident(None).is_none(),
+            "{name} should have no builder"
+        );
+        assert!(!is_rendered(&ts, name));
+    }
+
+    // With the setting off, nothing does.
+    let ts = build(Settings::minimal());
+    for name in ["MyStruct", "MyNewtype", "MyEnum", "str"] {
+        let id = name.to_string();
+        assert!(
+            ts.get_type(&id).builder_ident(None).is_none(),
+            "{name} should have no builder"
+        );
+        assert!(!is_rendered(&ts, name));
+    }
+}
