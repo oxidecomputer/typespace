@@ -150,24 +150,24 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
         }
     }
 
-    /// Returns whether this type has the given trait implementation.
+    /// Whether this type implements the given trait.
     ///
     /// A native type answers from what it is known to implement, so a
     /// trait its declaration cannot answer for is `false`. Child-free
     /// built-in types answer from the same leaf table trait resolution
     /// consults, so the two cannot disagree. A container (`Vec`,
     /// `Option`, `Map`, `Set`, `Box`, an array, a tuple) answers from
-    /// its children and, for the configurable containers, the same
+    /// its children and, for the configurable containers, from the
     /// declared container tables trait resolution consults, recursing
     /// into each child through this same method; a type alias forwards
-    /// to its target. A walk that reaches a type through itself with
-    /// no answering type between (an alias cycle through its own
-    /// wrappers) answers a conservative `false` for that revisit;
-    /// every other recursion terminates because a cycle in the type
-    /// graph runs through a named type
-    /// ([`check_anonymous_cycles`](crate::cycles::check_anonymous_cycles)),
-    /// and a named type other than an alias answers from its resolved
-    /// trait set without recursing further.
+    /// to its target.
+    ///
+    /// A walk that reaches a type through itself with no answering
+    /// type between (an alias cycle through its own wrappers) answers
+    /// a conservative `false` for that revisit. Every other recursion
+    /// terminates: finalization rejects a cycle that passes through no
+    /// named type, and a named type other than an alias answers from
+    /// its resolved trait set without recursing further.
     pub fn has_impl(&self, trait_: TypespaceTrait) -> bool {
         self.has_trait(trait_, &mut BTreeSet::new())
     }

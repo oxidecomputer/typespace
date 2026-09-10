@@ -45,13 +45,14 @@
 //!     `::json_serde::FlattenedSequenceSerializer` and
 //!     `::json_serde::FlattenedSequenceDeserializer`);
 //!   - an optional [`build::Type::Never`] (rendered as
-//!     `::json_serde::Absent`).
-//!   - a custom type to represent a field whose value may be absent, null, or
-//!     a type value, specified with [`settings::OptionalNullable::CustomType`]
+//!     `::json_serde::Absent`);
+//!   - a custom type to represent a field whose value may be absent,
+//!     null, or a type value, specified with
+//!     [`settings::OptionalNullable::CustomType`].
 //!
-//!   `Absent`'s use is independent of the trait set holds; the
-//!   rest ride on serde attributes and impls, so settings that require
-//!   neither serde trait leave them out.
+//!   `Absent` is emitted whatever the trait set holds; the rest ride on
+//!   serde attributes and impls, so settings that require neither serde
+//!   trait leave them out.
 //!
 //! Generated code also reproduces, verbatim, every type path the
 //! consumer supplies: the `name` of a [`build::Native`] (a converter
@@ -61,8 +62,8 @@
 //! behind those paths are dependencies chosen by the consumer that
 //! builds the typespace, not by typespace, and the consumer should
 //! document them the way typify documents `uuid`, `chrono`, and
-//! `regress`. typespace itself emits no reference to `regress` today;
-//! that changes when constraint validation rendering lands.
+//! `regress`. typespace itself emits no reference to `regress`; that
+//! changes when constraint validation rendering lands.
 
 pub mod build;
 pub(crate) mod cycles;
@@ -135,8 +136,8 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// `PartialOrd`, and so must every type it contains. Generated types
 /// absorb propagated requirements and emit the corresponding derives;
 /// a [`build::Native`] type must already declare the required traits
-/// among its `impls`, or leave them unknown. A requirement that a type cannot satisfy--`Ord`
-/// on a float, say--is a [`error::Error`].
+/// among its `impls`, or leave them unknown. A requirement that a type
+/// cannot satisfy--`Ord` on a float, say--is an [`error::Error`].
 
 // TODO 9/3/2026
 // The order of these turns out to be the output order; that's probably wrong
@@ -565,6 +566,48 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(deserialized)
     }
 
+    /// Per-type structural validation: rules a single type's own
+    /// declaration must satisfy, judged without reference to any other
+    /// type.
+    ///
+    /// This is the pass the Never-position and flatten rules both
+    /// belong to, per the direction that finalize wants general type
+    /// validation rather than a bespoke check per rule. It holds one
+    /// rule. Two more belong here as they land:
+    ///
+    /// - a flattened property's type must be an object, which is what
+    ///   makes flattening meaningful at all;
+    /// - the Never-position rules in `check_never_positions`, which are
+    ///   per-type in exactly this sense.
+    ///
+    /// Add rules here rather than as new `check_*` methods.
+    fn check_type_structure(&self) -> Result<(), Error<Id>> {
+        for typ in self.types.values() {
+            let Type::Struct(struct_info) = typ else {
+                continue;
+            };
+            if !struct_info.deny_unknown_fields {
+                continue;
+            }
+            // serde decides deny_unknown_fields in the outer struct's
+            // deserializer, which cannot know whether a flattened type
+            // claims a given key, so the pair has no implementable
+            // meaning. Naming the first flattened property in
+            // declaration order is enough to locate the problem.
+            if let Some(prop) = struct_info
+                .properties
+                .iter()
+                .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
+            {
+                return Err(Error::FlattenWithDenyUnknownFields {
+                    type_name: struct_info.common.built_name().to_string(),
+                    property: prop.rust_name.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Reject `Type::Never` in any position that requires a value.
     ///
     /// `Never` renders as `::json_serde::Absent`, a type that can be
@@ -602,48 +645,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// `type B = A` where `type A = !` bottoms out at a wrapper that
     /// directly contains `Never` (`A`), and that wrapper alone fails
     /// this check, which fails validation for the whole graph.
-    /// Per-type structural validation: rules a single type's own
-    /// declaration must satisfy, judged without reference to any other
-    /// type.
-    ///
-    /// This is the pass the Never-position and flatten rules both
-    /// belong to, per the direction that finalize wants general type
-    /// validation rather than a bespoke check per rule. It holds one
-    /// rule today. Two more belong here as they land:
-    ///
-    /// - a flattened property's type must be object shaped, which is
-    ///   what makes flattening meaningful at all;
-    /// - the Never-position rules in `check_never_positions`, which are
-    ///   per-type in exactly this sense.
-    ///
-    /// Add rules here rather than as new `check_*` methods.
-    fn check_type_structure(&self) -> Result<(), Error<Id>> {
-        for typ in self.types.values() {
-            let Type::Struct(struct_info) = typ else {
-                continue;
-            };
-            if !struct_info.deny_unknown_fields {
-                continue;
-            }
-            // serde decides deny_unknown_fields in the outer struct's
-            // deserializer, which cannot know whether a flattened type
-            // claims a given key, so the pair has no implementable
-            // meaning. Naming the first flattened property in
-            // declaration order is enough to locate the problem.
-            if let Some(prop) = struct_info
-                .properties
-                .iter()
-                .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
-            {
-                return Err(Error::FlattenWithDenyUnknownFields {
-                    type_name: struct_info.common.built_name().to_string(),
-                    property: prop.rust_name.clone(),
-                });
-            }
-        }
-        Ok(())
-    }
-
     fn check_never_positions(&self) -> Result<(), Error<Id>> {
         match self
             .types
