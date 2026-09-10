@@ -9,6 +9,8 @@
 //! [`build`] module: [`build::EnumVariant`] is the construction form
 //! and [`EnumVariant`] the finalized-view form of the same concept.
 
+use std::collections::BTreeSet;
+
 use proc_macro2::TokenStream;
 
 use crate::{TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait, build};
@@ -143,8 +145,19 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// A native type answers from what it is known to implement, so a
     /// trait its declaration cannot answer for is `false`. Child-free
     /// built-in types answer from the same leaf table trait resolution
-    /// consults, so the two cannot disagree; container types are not
-    /// answered here.
+    /// consults, so the two cannot disagree. A container (`Vec`,
+    /// `Option`, `Map`, `Set`, `Box`, an array, a tuple) answers from
+    /// its children and, for the configurable containers, the same
+    /// declared container tables trait resolution consults, recursing
+    /// into each child through this same method; a type alias forwards
+    /// to its target. A walk that reaches a type through itself with
+    /// no answering type between (an alias cycle through its own
+    /// wrappers) answers a conservative `false` for that revisit;
+    /// every other recursion terminates because a cycle in the type
+    /// graph runs through a named type
+    /// ([`check_anonymous_cycles`](crate::cycles::check_anonymous_cycles)),
+    /// and a named type other than an alias answers from its resolved
+    /// trait set without recursing further.
     pub fn has_impl(&self, impl_name: TypeSpaceImpl) -> bool {
         let trait_ = match impl_name {
             TypeSpaceImpl::Display => TypespaceTrait::Display,
@@ -153,7 +166,17 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             TypeSpaceImpl::Ord => TypespaceTrait::Ord,
             TypeSpaceImpl::Hash => TypespaceTrait::Hash,
         };
-        match self.typ {
+        self.has_trait(trait_, &mut BTreeSet::new())
+    }
+
+    /// The recursive worker behind [`Type::has_impl`]; `seen` holds
+    /// the ids on the walk's current path, and a revisit answers
+    /// `false`.
+    fn has_trait(&self, trait_: TypespaceTrait, seen: &mut BTreeSet<Id>) -> bool {
+        if !seen.insert(self.id.clone()) {
+            return false;
+        }
+        let answer = match self.typ {
             build::Type::Native(n) => n.impls.contains(&trait_),
             build::Type::Enum(e) => e
                 .common
@@ -170,9 +193,29 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
                 .built
                 .as_ref()
                 .is_some_and(|b| b.traits.contains(&trait_)),
-            typ => crate::trait_resolution::leaf_provides(typ, trait_, &self.typespace.settings)
-                .unwrap_or(false),
-        }
+            build::Type::UnitStruct(u) => u
+                .common
+                .built
+                .as_ref()
+                .is_some_and(|b| b.traits.contains(&trait_)),
+            build::Type::TupleStruct(t) => t
+                .common
+                .built
+                .as_ref()
+                .is_some_and(|b| b.traits.contains(&trait_)),
+            // A type alias has no impl site of its own; its answer is
+            // entirely its target's, exactly as required resolution
+            // treats it (see `Feasibility::Forward`).
+            build::Type::TypeAlias(a) => self.typespace.get_type(&a.target).has_trait(trait_, seen),
+            typ => crate::trait_resolution::unnamed_provides(
+                typ,
+                trait_,
+                &self.typespace.settings,
+                &mut |child_id| self.typespace.get_type(child_id).has_trait(trait_, seen),
+            ),
+        };
+        seen.remove(self.id);
+        answer
     }
 }
 

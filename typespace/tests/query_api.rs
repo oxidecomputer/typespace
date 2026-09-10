@@ -2,7 +2,7 @@
 
 use quote::quote;
 use typespace::{
-    TypeSpaceImpl,
+    TypeSpaceImpl, TypespaceBuilder,
     build::{
         Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, TupleStruct, Type,
         TypeAlias, UnitStruct, VariantDetails,
@@ -291,6 +291,130 @@ fn has_impl_answers_for_builtins() {
     assert!(!ratio.has_impl(TypeSpaceImpl::Eq));
     assert!(!ratio.has_impl(TypeSpaceImpl::Ord));
     assert!(!ratio.has_impl(TypeSpaceImpl::Hash));
+}
+
+/// Containers answer `has_impl` from their children and the declared
+/// container tables, exactly as trait resolution does: a `Vec<String>`
+/// and a `Map<String, u32>` (both over `BTreeMap`/`BTreeSet`, the
+/// default tables) pick up Eq, Ord, and Hash from their elements but
+/// never Display or FromStr; an `Option<String>` does the same, while
+/// an `Option<f64>` gets nothing because `f64` itself lacks Eq, Ord,
+/// and Hash.
+#[test]
+fn has_impl_answers_for_containers() {
+    let builder = typespace_builder!(Settings::typical(), {
+        struct Holder {
+            items: Vec<String>,
+            label: Nullable<String>,
+            ratio: Nullable<f64>,
+            counts: Map<String, u32>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    let holder = ts.get_type(&"Holder".to_string());
+    let view::TypeDetails::Struct(s) = holder.details() else {
+        panic!("Holder should be a struct");
+    };
+    let type_ids: std::collections::BTreeMap<String, String> = s.properties().collect();
+
+    for field in ["items", "label", "counts"] {
+        let ty = ts.get_type(type_ids.get(field).unwrap());
+        for impl_name in [TypeSpaceImpl::Eq, TypeSpaceImpl::Ord, TypeSpaceImpl::Hash] {
+            assert!(ty.has_impl(impl_name), "{field} lacks {impl_name:?}");
+        }
+        for impl_name in [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr] {
+            assert!(
+                !ty.has_impl(impl_name),
+                "{field} unexpectedly has {impl_name:?}"
+            );
+        }
+    }
+
+    let ratio = ts.get_type(type_ids.get("ratio").unwrap());
+    for impl_name in [
+        TypeSpaceImpl::Display,
+        TypeSpaceImpl::FromStr,
+        TypeSpaceImpl::Eq,
+        TypeSpaceImpl::Ord,
+        TypeSpaceImpl::Hash,
+    ] {
+        assert!(
+            !ratio.has_impl(impl_name),
+            "Option<f64> unexpectedly has {impl_name:?}"
+        );
+    }
+}
+
+/// A type alias answers from its target's whole truth, not from its
+/// own resolved set: an alias to `String` reports FromStr and Display
+/// even though nothing in the settings granted either.
+#[test]
+fn has_impl_forwards_an_alias_to_its_target() {
+    let builder = typespace_builder!(Settings::typical(), {
+        type Named = String;
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    let named = ts.get_type(&"Named".to_string());
+    for impl_name in [
+        TypeSpaceImpl::Display,
+        TypeSpaceImpl::FromStr,
+        TypeSpaceImpl::Eq,
+        TypeSpaceImpl::Ord,
+        TypeSpaceImpl::Hash,
+    ] {
+        assert!(named.has_impl(impl_name), "Named lacks {impl_name:?}");
+    }
+}
+
+/// Unit structs and tuple structs answer from their resolved sets like
+/// every other named type; under maximal settings both pick up the
+/// desired comparison traits, and neither has FromStr.
+#[test]
+fn has_impl_answers_for_unit_and_tuple_structs() {
+    let builder = typespace_builder!(Settings::maximal(), {
+        #[json = "nothing"]
+        struct Nothing;
+
+        struct Pair(u32, String);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    for id in ["Nothing", "Pair"] {
+        let ti = ts.get_type(&id.to_string());
+        assert!(ti.has_impl(TypeSpaceImpl::Eq), "{id} lacks Eq");
+        assert!(!ti.has_impl(TypeSpaceImpl::FromStr), "{id} claims FromStr");
+    }
+}
+
+// An alias whose target reaches back to it through a Box is the one
+// legal graph where the has_impl walk revisits an id: every cycle
+// holds a named type, but here the only named type is the alias, which
+// forwards rather than answering. The walk must answer a conservative
+// false instead of recursing forever. Built raw: the macro's
+// name-as-id grammar has no way to spell a Box, so the graph cannot be
+// written with it.
+#[test]
+fn has_impl_survives_an_alias_cycle_through_a_box() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert(
+            "A".to_string(),
+            TypeAlias::new("boxed".to_string())
+                .name("A")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    builder
+        .insert("boxed".to_string(), Type::Box("A".to_string()))
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    let a = ts.get_type(&"A".to_string());
+    assert!(!a.has_impl(TypeSpaceImpl::FromStr));
+    assert!(!a.has_impl(TypeSpaceImpl::Eq));
 }
 
 // Chunk-5 query additions on the build side: names, naming contexts,

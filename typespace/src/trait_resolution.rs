@@ -1348,6 +1348,80 @@ fn container_provides(
     }
 }
 
+/// What an unnamed (built-in or container) type provides for
+/// `trait_name`, given `child_has`.
+///
+/// This is the non-named branch of [`provides`], shared with
+/// [`view::Type::has_impl`](crate::view::Type::has_impl) so the two
+/// answer from one rule set. `provides` asks a child through its `has`
+/// map (what desired resolution has not yet stripped); the view asks a
+/// child by recursing into the finalized typespace. Either way: a
+/// configured container answers from its declaration, and the
+/// containers a consumer cannot configure forward a trait to their
+/// parameters, except that none has `Display` or `FromStr` and
+/// `Option` provides `Default` whatever it holds.
+pub(crate) fn unnamed_provides<Id>(
+    ty: &Type<Id>,
+    trait_name: TypespaceTrait,
+    settings: &Settings,
+    child_has: &mut dyn FnMut(&Id) -> bool,
+) -> bool {
+    let supported = !CONTAINER_UNSUPPORTED.contains(&trait_name);
+    let is_default = matches!(trait_name, TypespaceTrait::Default);
+
+    match ty {
+        Type::Enum(_)
+        | Type::Struct(_)
+        | Type::UnitStruct(_)
+        | Type::TupleStruct(_)
+        | Type::NewtypeStruct(_)
+        | Type::TypeAlias(_) => unreachable!(),
+
+        // Only a trait the native is known to implement is
+        // provided: granting a desired trait a declaration cannot
+        // answer for would emit a derive nobody asked for.
+        Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
+
+        // Pass the buck, minus Display and FromStr, which neither
+        // offers... except for Default, which Option<T> implements
+        // no matter what T is.
+        Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
+        // Box is never Copy, whatever it holds; every other trait
+        // follows the boxed type.
+        Type::Box(schema_ref) => {
+            supported && trait_name != TypespaceTrait::Copy && child_has(schema_ref)
+        }
+
+        // The configurable containers answer from what their
+        // declaration says they provide, the same table required
+        // resolution consults.
+        Type::Vec(schema_ref) => {
+            container_provides(&settings.vec_type, trait_name, || child_has(schema_ref))
+        }
+        Type::Set(schema_ref) => {
+            container_provides(&settings.set_type, trait_name, || child_has(schema_ref))
+        }
+        Type::Map(key_ref, value_ref) => container_provides(&settings.map_type, trait_name, || {
+            child_has(key_ref) && child_has(value_ref)
+        }),
+
+        // Arrays and tuples forward everything they can provide,
+        // Default included.
+        Type::Array(schema_ref, _) => supported && child_has(schema_ref),
+        Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
+
+        // Child-free built-ins answer from the shared leaf table.
+        Type::Integer(_)
+        | Type::Boolean
+        | Type::String
+        | Type::Unit
+        | Type::Never
+        | Type::Float(_)
+        | Type::JsonValue => leaf_provides(ty, trait_name, settings)
+            .expect("every arm above is a leaf the table answers"),
+    }
+}
+
 /// Whether `ty` provides `trait_name`, given `has`.
 ///
 /// `has` records what the types `ty` is built from still have. A
@@ -1355,12 +1429,8 @@ fn container_provides(
 /// trait is never provided, a derived or forwarded one needs every
 /// contained child, and a manually realized one needs only the targets
 /// that realization obligates--often none at all, as with an attached
-/// default value. Containers and built-in types answer with the rules
-/// required resolution applies to them, hop for hop: a configured
-/// container answers from its declaration, and the containers a
-/// consumer cannot configure forward a trait to their parameters,
-/// except that none has `Display` or `FromStr` and `Option` provides
-/// `Default` whatever it holds.
+/// default value. Every other type answers through
+/// [`unnamed_provides`].
 fn provides<Id>(
     types: &BTreeMap<Id, Type<Id>>,
     ty: &Type<Id>,
@@ -1371,7 +1441,7 @@ fn provides<Id>(
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
-    let child_has = |child: &Id| {
+    let mut child_has = |child: &Id| {
         has.get(child)
             .is_some_and(|traits| traits.contains(&trait_name))
     };
@@ -1397,62 +1467,7 @@ where
                 .all(|(_, obligated)| child_has(obligated)),
         }
     } else {
-        let supported = !CONTAINER_UNSUPPORTED.contains(&trait_name);
-        let is_default = matches!(trait_name, TypespaceTrait::Default);
-
-        match ty {
-            Type::Enum(_)
-            | Type::Struct(_)
-            | Type::UnitStruct(_)
-            | Type::TupleStruct(_)
-            | Type::NewtypeStruct(_)
-            | Type::TypeAlias(_) => unreachable!(),
-
-            // Only a trait the native is known to implement is
-            // provided: granting a desired trait a declaration cannot
-            // answer for would emit a derive nobody asked for.
-            Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
-
-            // Pass the buck, minus Display and FromStr, which neither
-            // offers... except for Default, which Option<T> implements
-            // no matter what T is.
-            Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
-            // Box is never Copy, whatever it holds; every other trait
-            // follows the boxed type.
-            Type::Box(schema_ref) => {
-                supported && trait_name != TypespaceTrait::Copy && child_has(schema_ref)
-            }
-
-            // The configurable containers answer from what their
-            // declaration says they provide, the same table required
-            // resolution consults.
-            Type::Vec(schema_ref) => {
-                container_provides(&settings.vec_type, trait_name, || child_has(schema_ref))
-            }
-            Type::Set(schema_ref) => {
-                container_provides(&settings.set_type, trait_name, || child_has(schema_ref))
-            }
-            Type::Map(key_ref, value_ref) => {
-                container_provides(&settings.map_type, trait_name, || {
-                    child_has(key_ref) && child_has(value_ref)
-                })
-            }
-
-            // Arrays and tuples forward everything they can provide,
-            // Default included.
-            Type::Array(schema_ref, _) => supported && child_has(schema_ref),
-            Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
-
-            // Child-free built-ins answer from the shared leaf table.
-            Type::Integer(_)
-            | Type::Boolean
-            | Type::String
-            | Type::Unit
-            | Type::Never
-            | Type::Float(_)
-            | Type::JsonValue => leaf_provides(ty, trait_name, settings)
-                .expect("every arm above is a leaf the table answers"),
-        }
+        unnamed_provides(ty, trait_name, settings, &mut child_has)
     }
 }
 
