@@ -3941,6 +3941,37 @@ fn test_default_value_native_unchecked() {
     assert!(builder.finalize(no_cycles).is_ok());
 }
 
+/// A default value for a native-typed position is constructed in
+/// generated code by deserializing it, so the value demands
+/// Deserialize of the native. A native declared without it must
+/// conflict at finalize rather than render a Default impl that cannot
+/// work.
+#[test]
+fn native_default_value_requires_deserialize() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::Default),
+        {
+            native chrono::NaiveDate: Clone + Debug + Serialize;
+
+            #[default = { "when": "2024-01-01" }]
+            struct Config {
+                when: chrono::NaiveDate,
+            }
+        }
+    );
+
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("a native default value demands Deserialize of the native");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Deserialize);
+    assert!(matches!(
+        &conflict.reason,
+        OffenderReason::NativeMissingImpl { type_name } if type_name == "chrono::NaiveDate"
+    ));
+}
+
 /// A float rejects a value that is not a number.
 #[test]
 fn test_default_value_float_rejects_non_number() {

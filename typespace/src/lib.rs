@@ -554,21 +554,39 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
-    fn check_type_defaults(&self) -> Result<(), Error<Id>> {
+    /// Check every attached default value, and collect the natives the
+    /// values reach.
+    ///
+    /// Generated code constructs a native-typed position of a default value by
+    /// deserializing it, so each collected native must implement
+    /// `Deserialize`. The map records each native against the type whose value
+    /// first reached it; trait resolution seeds the requirement from the map,
+    /// and reports a conflict when the native does not declare the trait.
+    fn check_type_defaults(&self) -> Result<BTreeMap<Id, Id>, Error<Id>> {
+        let mut deserialized = BTreeMap::new();
         for (type_id, typ) in &self.types {
+            let mut natives = BTreeSet::new();
             if let Some(common) = typ.common()
                 && let Some(JsonValue(default)) = &common.default
             {
-                self.check_default(default, type_id)?;
+                natives.extend(self.check_default(default, type_id)?);
             }
 
             match typ {
-                Type::Struct(struct_info) => struct_info.check_field_defaults(self)?,
-                Type::Enum(enum_info) => enum_info.check_field_defaults(self)?,
+                Type::Struct(struct_info) => {
+                    natives.extend(struct_info.check_field_defaults(self)?)
+                }
+                Type::Enum(enum_info) => natives.extend(enum_info.check_field_defaults(self)?),
                 _ => (),
             }
+
+            for native in natives {
+                deserialized
+                    .entry(native)
+                    .or_insert_with(|| type_id.clone());
+            }
         }
-        Ok(())
+        Ok(deserialized)
     }
 
     /// Reject `Type::Never` in any position that requires a value.
@@ -822,8 +840,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // unknown fields has no flattened property.
         self.check_type_structure()?;
 
-        // Check type defaults
-        self.check_type_defaults()?;
+        // Check type defaults. The walk also reports which natives the
+        // values reach; those are constructed by deserialization, and
+        // resolve_traits seeds the Deserialize requirement from them.
+        let deserialized_defaults = self.check_type_defaults()?;
 
         let Self {
             mut types,
@@ -838,7 +858,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // resolve_traits, because both required and desired resolution
         // consult `feasibility`, which reads the answer.
         trait_resolution::resolve_from_string_irrefutable(&mut types);
-        trait_resolution::resolve_traits(&mut types, &settings)?;
+        trait_resolution::resolve_traits(&mut types, &settings, &deserialized_defaults)?;
 
         Ok(Typespace { types, settings })
     }

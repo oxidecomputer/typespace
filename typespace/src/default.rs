@@ -158,7 +158,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         &self,
         value: &serde_json::Value,
         id: &Id,
-    ) -> Result<(), Error<Id>> {
+    ) -> Result<BTreeSet<Id>, Error<Id>> {
         let Self { types, settings } = self;
         check_default(types, settings, value, id)
     }
@@ -169,7 +169,7 @@ fn check_default<Id>(
     settings: &Settings,
     value: &serde_json::Value,
     id: &Id,
-) -> Result<(), Error<Id>>
+) -> Result<BTreeSet<Id>, Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -180,8 +180,9 @@ where
         scope: None,
         mode: Mode::Check,
     };
-    let mut expansion_set = Vec::new();
-    imp.default_impl(&mut expansion_set, id, value).map(|_| ())
+    let mut state = WalkState::new();
+    imp.default_impl(&mut state, id, value)?;
+    Ok(state.deserialized_natives)
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
@@ -202,8 +203,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             scope: None,
             mode: Mode::Generate,
         };
-        let mut expansion_set = Vec::new();
-        imp.default_impl(&mut expansion_set, id, value)
+        let mut state = WalkState::new();
+        imp.default_impl(&mut state, id, value)
             .expect("an error should not be possible post-validation")
             .expect("a value should be generated with Mode::Generate")
     }
@@ -216,14 +217,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             scope: None,
             mode: Mode::Generate,
         };
-        let mut expansion_set = Vec::new();
+        let mut state = WalkState::new();
 
         let Some(Type::Enum(enum_info)) = types.get(id) else {
             unreachable!("this should only be called on an enum type")
         };
 
         let enum_default = imp
-            .default_impl_enum(&mut expansion_set, enum_info, value, id)
+            .default_impl_enum(&mut state, enum_info, value, id)
             .expect("an error should not be possible post-validation")
             .expect("a value should be generated with Mode::Generate");
 
@@ -250,8 +251,8 @@ where
         scope: Some("super"),
         mode: Mode::Generate,
     };
-    let mut expansion_set = Vec::new();
-    imp.default_impl(&mut expansion_set, id, value)
+    let mut state = WalkState::new();
+    imp.default_impl(&mut state, id, value)
         .expect("an error should not be possible post-validation")
         .expect("a value should be generated with Mode::Generate")
 }
@@ -275,6 +276,27 @@ struct DefaultImpl<'a, Id> {
     /// typically `super::`.
     scope: Option<&'a str>,
     mode: Mode,
+}
+
+/// Mutable state for a default-value walk.
+struct WalkState<Id> {
+    /// The (id, value) pairs visited so far while expanding a default
+    /// value, used to detect and reject recursive expansion.
+    expansion_set: Vec<(Id, serde_json::Value)>,
+    /// The native types the walk reaches. A native-typed position is
+    /// constructed by deserializing its value, so each collected type
+    /// must implement Deserialize; `check_default` hands the set to
+    /// its caller and trait resolution seeds the requirement from it.
+    deserialized_natives: BTreeSet<Id>,
+}
+
+impl<Id> WalkState<Id> {
+    fn new() -> Self {
+        Self {
+            expansion_set: Vec::new(),
+            deserialized_natives: BTreeSet::new(),
+        }
+    }
 }
 
 impl<Id> DefaultImpl<'_, Id>
@@ -333,21 +355,19 @@ where
 
     fn default_impl(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         let ty = self.types.get(id).unwrap();
         match ty {
             Type::Enum(enum_info) => self
-                .default_impl_enum(expansion_set, enum_info, value, id)
+                .default_impl_enum(state, enum_info, value, id)
                 .map(|ok| ok.map(|some| some.0)),
-            Type::Struct(struct_info) => {
-                self.default_impl_struct(expansion_set, struct_info, value, id)
-            }
+            Type::Struct(struct_info) => self.default_impl_struct(state, struct_info, value, id),
             Type::UnitStruct(unit_struct) => self.default_impl_unit_struct(unit_struct, value, id),
             Type::TupleStruct(tuple_struct) => {
-                self.default_impl_tuple_struct(expansion_set, tuple_struct, value, id)
+                self.default_impl_tuple_struct(state, tuple_struct, value, id)
             }
             Type::NewtypeStruct(newtype_struct) => {
                 // TODO 9/4/2026
@@ -358,7 +378,7 @@ where
                 // indirectly), so we need to take care not to recur without
                 // narrowing the JSON value.
                 let inner =
-                    self.expansion_guard_default_impl(expansion_set, &newtype_struct.inner, value)?;
+                    self.expansion_guard_default_impl(state, &newtype_struct.inner, value)?;
                 Ok(inner.map(|inner| {
                     let ident = self.render_ident(id);
                     quote! { #ident(#inner) }
@@ -368,16 +388,19 @@ where
                 // A type alias may refer to itself (directly or indirectly),
                 // so we need to take care not to recur without narrowing the
                 // JSON value.
-                self.expansion_guard_default_impl(expansion_set, &type_alias.target, value)
+                self.expansion_guard_default_impl(state, &type_alias.target, value)
             }
 
             Type::Native(_) => {
                 // A native type's value is whatever its own Deserialize
                 // accepts, which we have no way to check here; a value that
                 // doesn't fit fails the unwrap() in the generated code.
-
                 // TODO 9/4/2026
                 // expect rather than unwrap?
+
+                if self.mode == Mode::Check {
+                    state.deserialized_natives.insert(id.clone());
+                }
                 let text = value.to_string();
                 Ok(self.generate(|| {
                     let type_path = self.render_ident(id);
@@ -397,7 +420,7 @@ where
                     // really could only happen if someone were attempting
                     // self-harm: an anonymous Option that contained itself.
                     // But people are weird and terrible.
-                    let inner = self.expansion_guard_default_impl(expansion_set, type_id, value)?;
+                    let inner = self.expansion_guard_default_impl(state, type_id, value)?;
                     Ok(inner.map(|inner| {
                         let some = self.render_option_variant(id, "Some");
                         quote! { #some(#inner) }
@@ -408,7 +431,7 @@ where
                 // As above with Option, a deliberately self-harming
                 // construction could cause infinite recursion without the
                 // guard.
-                let inner = self.expansion_guard_default_impl(expansion_set, type_id, value)?;
+                let inner = self.expansion_guard_default_impl(state, type_id, value)?;
                 // TODO 9/4/2026
                 // We need Settings to know what to render here...
                 Ok(inner.map(|inner| quote! { Box::new(#inner) }))
@@ -422,7 +445,7 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(expansion_set, elem_id, elem_value))
+                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -450,9 +473,8 @@ where
                         // make sense of it, exactly as it would any other
                         // string value.
                         let key_value = serde_json::Value::String(key.clone());
-                        let key = self.default_impl(expansion_set, key_id, &key_value)?;
-                        let entry_value =
-                            self.default_impl(expansion_set, value_id, entry_value)?;
+                        let key = self.default_impl(state, key_id, &key_value)?;
+                        let entry_value = self.default_impl(state, value_id, entry_value)?;
                         Ok((key, entry_value))
                     })
                     .collect::<Result<Vec<_>, Error<Id>>>()?;
@@ -491,7 +513,7 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(expansion_set, elem_id, elem_value))
+                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -516,7 +538,7 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(expansion_set, elem_id, elem_value))
+                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -526,7 +548,7 @@ where
                 }))
             }
             Type::Tuple(items) => {
-                let elems = self.default_impl_tuple_items(expansion_set, items, value, id)?;
+                let elems = self.default_impl_tuple_items(state, items, value, id)?;
                 Ok(elems.map(|elems| quote! { ( #( #elems ),* ) }))
             }
 
@@ -629,7 +651,7 @@ where
     /// component in turn.
     fn default_impl_tuple_items(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         items: &[Id],
         value: &serde_json::Value,
         id: &Id,
@@ -650,7 +672,7 @@ where
         let elems = items
             .iter()
             .zip(arr.iter())
-            .map(|(item_id, item_value)| self.default_impl(expansion_set, item_id, item_value))
+            .map(|(item_id, item_value)| self.default_impl(state, item_id, item_value))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(self.generate(|| {
@@ -668,7 +690,7 @@ where
     /// variant's, we wrap it in the variant's name.
     fn default_impl_struct_props(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         properties: &[StructProperty<Id>],
         deny_unknown_fields: bool,
         value: &serde_json::Value,
@@ -727,7 +749,7 @@ where
                     // particularly where we need to use the expansion guard.
                     (StructPropertyState::DefaultValue(prop_default_value), None) => {
                         let try_rendered_prop_value = self.expansion_guard_default_impl(
-                            expansion_set,
+                            state,
                             &prop_info.type_id,
                             &prop_default_value.0,
                         );
@@ -754,11 +776,11 @@ where
                                 // A simple Option<T> is sufficient.
                                 OptionalNullable::ConflateAsAbsent
                                 | OptionalNullable::ConflateAsNull => {
-                                    self.default_impl(expansion_set, prop_id, prop_value)?
+                                    self.default_impl(state, prop_id, prop_value)?
                                 }
                                 // Nest the option in a `Some`.
                                 OptionalNullable::DoubleOption => self
-                                    .default_impl(expansion_set, prop_id, prop_value)?
+                                    .default_impl(state, prop_id, prop_value)?
                                     .map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
@@ -767,18 +789,17 @@ where
                                 // Construct the custom type
                                 OptionalNullable::CustomType(_) => self
                                     .default_impl_custom_optional_nullable(
-                                        expansion_set,
+                                        state,
                                         option_inner_id,
                                         prop_value,
                                     )?,
                             }
                         } else {
-                            self.default_impl(expansion_set, prop_id, prop_value)?.map(
-                                |prop_value| {
+                            self.default_impl(state, prop_id, prop_value)?
+                                .map(|prop_value| {
                                     let some = self.render_option_variant2("Some");
                                     quote! { #some(#prop_value) }
-                                },
-                            )
+                                })
                         };
 
                         let prop_default = prop_default_value.map(|value| {
@@ -803,8 +824,7 @@ where
                     ) => {
                         let prop_id = &prop_info.type_id;
 
-                        let prop_default_value =
-                            self.default_impl(expansion_set, prop_id, prop_value)?;
+                        let prop_default_value = self.default_impl(state, prop_id, prop_value)?;
 
                         let prop_default = prop_default_value.map(|value| {
                             let prop_ident = format_ident!("{}", prop_info.rust_name);
@@ -857,10 +877,8 @@ where
                 if prop_info.state == StructPropertyState::Optional {
                     // Note that we ignore errors for Optional flattened fields
                     // intentionally.
-                    let prop_default = if let Some(prop_default) = self
-                        .default_impl(expansion_set, prop_id, &new_value)
-                        .ok()
-                        .flatten()
+                    let prop_default = if let Some(prop_default) =
+                        self.default_impl(state, prop_id, &new_value).ok().flatten()
                     {
                         let some = self.render_option_variant2("Some");
                         quote! {
@@ -878,9 +896,7 @@ where
                         });
                     }
                 } else {
-                    if let Some(prop_default) =
-                        self.default_impl(expansion_set, prop_id, &new_value)?
-                    {
+                    if let Some(prop_default) = self.default_impl(state, prop_id, &new_value)? {
                         let prop_ident = format_ident!("{}", prop_info.rust_name);
                         rendered_properties.push(quote! {
                             #prop_ident: #prop_default
@@ -912,13 +928,13 @@ where
 
     fn default_impl_struct(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         struct_info: &build::Struct<Id>,
         value: &serde_json::Value,
         id: &Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
         let rendered_properties = self.default_impl_struct_props(
-            expansion_set,
+            state,
             &struct_info.properties,
             struct_info.deny_unknown_fields,
             value,
@@ -937,23 +953,23 @@ where
 
     fn default_impl_enum(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
     ) -> Result<Option<(TokenStream, Option<String>)>, Error<Id>> {
         match enum_info.tag_type.as_ref().unwrap() {
             build::EnumTagType::External => {
-                self.default_impl_enum_external(expansion_set, enum_info, value, id)
+                self.default_impl_enum_external(state, enum_info, value, id)
             }
             build::EnumTagType::Internal { tag } => {
-                self.default_impl_enum_internal(expansion_set, enum_info, tag, value, id)
+                self.default_impl_enum_internal(state, enum_info, tag, value, id)
             }
             build::EnumTagType::Adjacent { tag, content } => {
-                self.default_impl_enum_adjacent(expansion_set, enum_info, tag, content, value, id)
+                self.default_impl_enum_adjacent(state, enum_info, tag, content, value, id)
             }
             build::EnumTagType::Untagged => {
-                self.default_impl_enum_untagged(expansion_set, enum_info, value, id)
+                self.default_impl_enum_untagged(state, enum_info, value, id)
             }
         }
     }
@@ -963,7 +979,7 @@ where
     /// for all other variant types.
     fn default_impl_enum_external(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1033,18 +1049,17 @@ where
                     reason: format!("unit variant {} carries no payload", variant_name),
                 }),
                 VariantDetails::Item(item_id) => {
-                    let item = self.default_impl(expansion_set, item_id, var_value)?;
+                    let item = self.default_impl(state, item_id, var_value)?;
                     Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
                 }
                 VariantDetails::Tuple(items) => {
-                    let elems =
-                        self.default_impl_tuple_items(expansion_set, items, var_value, id)?;
+                    let elems = self.default_impl_tuple_items(state, items, var_value, id)?;
                     Ok(elems
                         .map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
                 }
                 VariantDetails::Struct(props) => {
                     let rendered = self.default_impl_struct_props(
-                        expansion_set,
+                        state,
                         props,
                         enum_info.deny_unknown_fields,
                         var_value,
@@ -1071,7 +1086,7 @@ where
 
     fn default_impl_enum_internal(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         value: &serde_json::Value,
@@ -1128,12 +1143,12 @@ where
             // alongside the payload's own keys; walk the payload's type
             // against the tag-stripped object exactly as Struct does.
             VariantDetails::Item(item_id) => {
-                let item = self.default_impl(expansion_set, item_id, &inner_value)?;
+                let item = self.default_impl(state, item_id, &inner_value)?;
                 Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             VariantDetails::Struct(props) => {
                 let rendered = self.default_impl_struct_props(
-                    expansion_set,
+                    state,
                     props,
                     enum_info.deny_unknown_fields,
                     &inner_value,
@@ -1161,7 +1176,7 @@ where
 
     fn default_impl_enum_adjacent(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         content: &str,
@@ -1213,17 +1228,16 @@ where
                 )
             })),
             (VariantDetails::Item(item_id), Some(content_value)) => {
-                let item = self.default_impl(expansion_set, item_id, content_value)?;
+                let item = self.default_impl(state, item_id, content_value)?;
                 Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             (VariantDetails::Tuple(items), Some(content_value)) => {
-                let elems =
-                    self.default_impl_tuple_items(expansion_set, items, content_value, id)?;
+                let elems = self.default_impl_tuple_items(state, items, content_value, id)?;
                 Ok(elems.map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
                 let rendered = self.default_impl_struct_props(
-                    expansion_set,
+                    state,
                     props,
                     enum_info.deny_unknown_fields,
                     content_value,
@@ -1246,7 +1260,7 @@ where
 
     fn default_impl_enum_untagged(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1282,13 +1296,13 @@ where
                     // value so this opens the door for infinite recursion if
                     // we don't add the guard.
                     VariantDetails::Item(item_id) => self
-                        .expansion_guard_default_impl(expansion_set, item_id, value)
+                        .expansion_guard_default_impl(state, item_id, value)
                         .ok()
                         .map(|item| {
                             item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None))
                         }),
                     VariantDetails::Tuple(items) => self
-                        .default_impl_tuple_items(expansion_set, items, value, id)
+                        .default_impl_tuple_items(state, items, value, id)
                         .ok()
                         .map(|elems| {
                             elems.map(|elems| {
@@ -1297,7 +1311,7 @@ where
                         }),
                     VariantDetails::Struct(props) => self
                         .default_impl_struct_props(
-                            expansion_set,
+                            state,
                             props,
                             enum_info.deny_unknown_fields,
                             value,
@@ -1323,7 +1337,7 @@ where
 
     fn default_impl_tuple_struct(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         tuple_struct: &build::TupleStruct<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1352,7 +1366,7 @@ where
 
         let (head, tail) = arr.split_at(field_count);
         let field_values = self.default_impl_tuple_items(
-            expansion_set,
+            state,
             &tuple_struct.fields,
             &serde_json::Value::Array(head.to_vec()),
             id,
@@ -1364,11 +1378,7 @@ where
             .rest
             .as_ref()
             .map(|rest_id| {
-                self.default_impl(
-                    expansion_set,
-                    rest_id,
-                    &serde_json::Value::Array(tail.to_vec()),
-                )
+                self.default_impl(state, rest_id, &serde_json::Value::Array(tail.to_vec()))
             })
             .transpose()?;
 
@@ -1402,7 +1412,7 @@ where
 
     fn default_impl_custom_optional_nullable(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
@@ -1413,13 +1423,11 @@ where
                 }
             }))
         } else {
-            Ok(self
-                .default_impl(expansion_set, id, value)?
-                .map(|value_stream| {
-                    quote! {
-                        ::json_serde::OptionalNullable::value(#value_stream)
-                    }
-                }))
+            Ok(self.default_impl(state, id, value)?.map(|value_stream| {
+                quote! {
+                    ::json_serde::OptionalNullable::value(#value_stream)
+                }
+            }))
         }
     }
 
@@ -1427,7 +1435,7 @@ where
     /// expand--or insufficiently narrow--the input value.
     fn expansion_guard_default_impl(
         &self,
-        expansion_set: &mut Vec<(Id, serde_json::Value)>,
+        state: &mut WalkState<Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>>
@@ -1435,7 +1443,7 @@ where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         let key = (id.clone(), value.clone());
-        if expansion_set.contains(&key) {
+        if state.expansion_set.contains(&key) {
             let (id, value) = key;
             return Err(Error::InvalidDefault {
                 value,
@@ -1443,9 +1451,9 @@ where
                 reason: "property default value is recursive".to_string(),
             });
         }
-        expansion_set.push(key);
-        let result = self.default_impl(expansion_set, id, value);
-        expansion_set.pop();
+        state.expansion_set.push(key);
+        let result = self.default_impl(state, id, value);
+        state.expansion_set.pop();
 
         result
     }

@@ -421,6 +421,14 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                      implement `{required}`"
                 )
             }
+            RequirementOrigin::DefaultValue(id) => {
+                write!(
+                    f,
+                    "\n    required because the default value of `{id}` \
+                    needs to construct it; and generated code does so \
+                    by deserializing it"
+                )
+            }
             RequirementOrigin::GlobalSettings => {
                 write!(
                     f,
@@ -450,6 +458,10 @@ pub enum RequirementOrigin<Id> {
     /// The requirement applies to the type of a property of the type
     /// with this ID, because that property carries `#[serde(default)]`.
     PropertyDefault(Id),
+    /// Generated code constructs native types within defaults by
+    /// deserializing. This imposes the Deserialize requirement on a native
+    /// type. The default value of the given ID has created this requirement.
+    DefaultValue(Id),
     /// The requirement applies to every named type, via
     /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).
     GlobalSettings,

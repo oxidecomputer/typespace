@@ -83,13 +83,14 @@ fn classify_edges<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
 pub(crate) fn resolve_traits<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
+    deserialized_defaults: &BTreeMap<Id, Id>,
 ) -> Result<(), Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
     // First propagate required traits. A failure to satisfy a required trait
     // is an error.
-    required_resolution(types, settings)?;
+    required_resolution(types, settings, deserialized_defaults)?;
 
     // Then propagate desired traits to the types that support them.
     desired_resolution(types, settings);
@@ -603,6 +604,7 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
 fn required_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
+    deserialized_defaults: &BTreeMap<Id, Id>,
 ) -> Result<(), Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -721,6 +723,29 @@ where
             })
             .collect::<Vec<_>>()
     }));
+
+    // A native-typed position in a default value is constructed in
+    // generated code by deserializing it (default.rs's Type::Native
+    // arm), so the value requires Deserialize of the native. The
+    // default-value walk collected each such native during
+    // check_type_defaults, keyed by the type whose value first reached
+    // it; seed the requirement so an undeclared native conflicts here
+    // instead of failing in the consumer's build.
+    let deserialize_required = close_supertraits(
+        [TypespaceTrait::Deserialize]
+            .into_iter()
+            .collect::<TypespaceTraitSet>(),
+    );
+    work.extend(
+        deserialized_defaults
+            .iter()
+            .map(|(native_id, owner_id)| WorkItem {
+                target: native_id.clone(),
+                traits: deserialize_required.clone(),
+                origin: RequirementOrigin::DefaultValue(owner_id.clone()),
+                path: Vec::new(),
+            }),
+    );
 
     // Traits required via Settings::with_required_trait seed the trait
     // set of every named type. We route the seeds through the normal

@@ -123,13 +123,16 @@ impl<Id> Struct<Id> {
     pub(crate) fn check_field_defaults(
         &self,
         typespace: &TypespaceBuilder<Id>,
-    ) -> Result<(), Error<Id>>
+    ) -> Result<BTreeSet<Id>, Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         self.properties
             .iter()
-            .try_for_each(|prop| prop.check_defaults(typespace))
+            .try_fold(BTreeSet::new(), |mut natives, prop| {
+                natives.extend(prop.check_defaults(typespace)?);
+                Ok(natives)
+            })
     }
 
     /// The struct's name, if one has been set.
@@ -576,12 +579,15 @@ impl<Id> StructProperty<Id> {
         &self.type_id
     }
 
-    pub(crate) fn check_defaults(&self, typespace: &TypespaceBuilder<Id>) -> Result<(), Error<Id>>
+    pub(crate) fn check_defaults(
+        &self,
+        typespace: &TypespaceBuilder<Id>,
+    ) -> Result<BTreeSet<Id>, Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         let StructPropertyState::DefaultValue(JsonValue(value)) = &self.state else {
-            return Ok(());
+            return Ok(BTreeSet::new());
         };
 
         typespace.check_default(value, &self.type_id)
