@@ -1011,10 +1011,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
     /// Whether a type gets a generated builder.
     ///
-    /// A builder is generated for a struct, and only when
+    /// A builder is generated for structs when
     /// [`Settings::with_struct_builder`](settings::Settings::with_struct_builder)
-    /// is set. Rendering asks this before it emits one, so the query
-    /// and the generated code cannot disagree.
+    /// is set. Rendering asks this before it emits one, so the query and the
+    /// generated code cannot disagree.
     pub(crate) fn has_builder(&self, id: &Id) -> bool {
         self.settings.struct_builder
             && matches!(
@@ -1023,12 +1023,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             )
     }
 
-    /// Render the identifier of a type's generated builder, if the
-    /// type has one, optionally scoped to a module.
+    /// Render the identifier of a type's generated builder, if present,
+    /// optionally scoped to a module.
     ///
-    /// Builders live in a `builder` module alongside the types they
-    /// build, so the identifier is `builder::Name`, or
-    /// `scope::builder::Name` under a scope.
+    /// Builders live in a `mod builder`, so the identifier is `builder::Name`,
+    /// or `scope::builder::Name` under a scope.
     pub(crate) fn render_builder_ident(&self, id: &Id, scope: Option<&str>) -> Option<TokenStream> {
         self.has_builder(id).then(|| {
             let name_ident = format_ident!(

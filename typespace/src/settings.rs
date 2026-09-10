@@ -14,13 +14,13 @@ use crate::{ALL_TRAITS, TypespaceTrait, TypespaceTraitSet};
 /// Modify how types are processed and generated.
 ///
 /// Settings are supplied to
-/// [`TypespaceBuilder::new`](crate::TypespaceBuilder::new) and govern
-/// finalization and rendering. Start from one of the presets --
-/// [`Settings::minimal`], [`Settings::typical`], or
-/// [`Settings::maximal`] -- and adjust with the `with_` methods. There
-/// is deliberately no `Default`: which traits a typespace requires and
-/// which it merely desires changes what the generated code is, so the
-/// choice is named rather than inherited.
+/// [`TypespaceBuilder::new`](crate::TypespaceBuilder::new) and influence
+/// finalization and rendering. Start from one of the
+/// presets--[`Settings::minimal`], [`Settings::typical`], or
+/// [`Settings::maximal`]--and adjust with the `with_` methods. There is
+/// deliberately no `Default`: the traits a typespace requires and which it
+/// merely desires greatly impacts the generated code, so consumers should make
+/// a deliberate choice.
 ///
 /// The type also implements `Deserialize`, so settings can come from
 /// configuration data. Every field has a default there, which means

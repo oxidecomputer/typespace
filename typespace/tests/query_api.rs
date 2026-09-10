@@ -95,10 +95,10 @@ fn name_queries_borrow_what_is_stored() {
     };
     assert_eq!(name, "MyStruct");
 
-    // An Option has no name of its own, so it renders its identifier
+    // A built-in has no name of its own, so it renders its identifier
     // and owns the result.
     assert!(matches!(
-        ts.get_type(&"opt_str".to_string()).name(),
+        ts.get_type(&"bool".to_string()).name(),
         std::borrow::Cow::Owned(_)
     ));
 
@@ -203,6 +203,7 @@ fn parameter_idents_borrow_by_rule() {
     let opt_str_id = "Nullable<String>".to_string();
     let opt_struct_id = "Nullable<MyStruct>".to_string();
     let unit_enum_id = "UnitEnum".to_string();
+    let tuple_id = "(u32, String, MyStruct)".to_string();
 
     let cases = [
         ("u32", quote! { u32 }),
@@ -393,7 +394,7 @@ fn has_impl_answers_for_containers() {
     let view::TypeDetails::Struct(s) = holder.details() else {
         panic!("Holder should be a struct");
     };
-    let type_ids: std::collections::BTreeMap<String, String> = s.properties().collect();
+    let type_ids = s.properties().collect::<std::collections::BTreeMap<_, _>>();
 
     for field in ["items", "label", "counts"] {
         let ty = ts.get_type(type_ids.get(field).unwrap());
