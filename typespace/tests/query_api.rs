@@ -256,6 +256,43 @@ fn has_impl_false_for_plain_types() {
     assert!(!ti.has_impl(TypeSpaceImpl::FromStr));
 }
 
+/// Built-in types answer `has_impl` from what generated code really
+/// gets: a String position renders as `String`, and integers and bool
+/// implement everything tracked here. Floats parse and print but
+/// carry no Eq, Ord, or Hash.
+#[test]
+fn has_impl_answers_for_builtins() {
+    let builder = typespace_builder!(Settings::typical(), {
+        struct Holder {
+            name: String,
+            count: u32,
+            ratio: f64,
+            flag: bool,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    for id in ["String", "u32", "bool"] {
+        let ti = ts.get_type(&id.to_string());
+        for impl_name in [
+            TypeSpaceImpl::Display,
+            TypeSpaceImpl::FromStr,
+            TypeSpaceImpl::Eq,
+            TypeSpaceImpl::Ord,
+            TypeSpaceImpl::Hash,
+        ] {
+            assert!(ti.has_impl(impl_name), "{id} lacks {impl_name:?}");
+        }
+    }
+
+    let ratio = ts.get_type(&"f64".to_string());
+    assert!(ratio.has_impl(TypeSpaceImpl::Display));
+    assert!(ratio.has_impl(TypeSpaceImpl::FromStr));
+    assert!(!ratio.has_impl(TypeSpaceImpl::Eq));
+    assert!(!ratio.has_impl(TypeSpaceImpl::Ord));
+    assert!(!ratio.has_impl(TypeSpaceImpl::Hash));
+}
+
 // Chunk-5 query additions on the build side: names, naming contexts,
 // defaults, and enum analyses.
 #[test]

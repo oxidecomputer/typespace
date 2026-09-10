@@ -141,7 +141,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// Returns whether this type has the given trait implementation.
     ///
     /// A native type answers from what it is known to implement, so a
-    /// trait its declaration cannot answer for is `false`.
+    /// trait its declaration cannot answer for is `false`. Child-free
+    /// built-in types answer from the same leaf table trait resolution
+    /// consults, so the two cannot disagree; container types are not
+    /// answered here.
     pub fn has_impl(&self, impl_name: TypeSpaceImpl) -> bool {
         let trait_ = match impl_name {
             TypeSpaceImpl::Display => TypespaceTrait::Display,
@@ -167,7 +170,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
                 .built
                 .as_ref()
                 .is_some_and(|b| b.traits.contains(&trait_)),
-            _ => false,
+            typ => crate::trait_resolution::leaf_provides(typ, trait_, &self.typespace.settings)
+                .unwrap_or(false),
         }
     }
 }

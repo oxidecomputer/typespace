@@ -257,6 +257,53 @@ fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
 const CONTAINER_UNSUPPORTED: &[TypespaceTrait] =
     &[TypespaceTrait::Display, TypespaceTrait::FromStr];
 
+/// What a child-free built-in type provides for one trait, or `None`
+/// for a type whose answer involves children or resolution.
+///
+/// This is the leaf slice of [`provides`], shared with
+/// [`view::Type::has_impl`](crate::view::Type::has_impl) so the two
+/// answer from one table.
+pub(crate) fn leaf_provides<Id>(
+    ty: &Type<Id>,
+    trait_name: TypespaceTrait,
+    settings: &Settings,
+) -> Option<bool> {
+    match ty {
+        // Integers and booleans implement every trait we track.
+        Type::Integer(_) | Type::Boolean => Some(true),
+
+        // String implements every trait we track except Copy: an
+        // owned heap buffer can never be Copy.
+        Type::String => Some(trait_name != TypespaceTrait::Copy),
+
+        // The unit type and ::json_serde::Absent implement
+        // everything except Display and FromStr.
+        Type::Unit | Type::Never => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
+
+        // Floating-point types have no total ordering, no equality
+        // relation, and no hash.
+        Type::Float(_) => Some(!matches!(
+            trait_name,
+            TypespaceTrait::Ord | TypespaceTrait::Eq | TypespaceTrait::Hash
+        )),
+
+        // JsonValue implements everything except for Ord,
+        // PartialOrd, and Copy: it owns a String and a Vec.
+        Type::JsonValue => Some(!matches!(
+            (trait_name, settings.typify_compat),
+            // Never Ord, PartialOrd, or Copy.
+            (
+                TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy,
+                _
+            ) |
+            // Not FromStr or Display when under typify compat.
+            (TypespaceTrait::FromStr | TypespaceTrait::Display, true)
+        )),
+
+        _ => None,
+    }
+}
+
 /// What a named type can do about one required trait.
 ///
 /// The end-state answer for `(kind of type, trait)`--consulted once
@@ -1396,36 +1443,15 @@ where
             Type::Array(schema_ref, _) => supported && child_has(schema_ref),
             Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
 
-            // Integers and booleans implement every trait we track.
-            Type::Integer(_) | Type::Boolean => true,
-
-            // String implements every trait we track except Copy: an
-            // owned heap buffer can never be Copy.
-            Type::String => trait_name != TypespaceTrait::Copy,
-
-            // The unit type and ::json_serde::Absent implement
-            // everything except Display and FromStr.
-            Type::Unit | Type::Never => supported,
-
-            // Floating-point types have no total ordering, no equality
-            // relation, and no hash.
-            Type::Float(_) => !matches!(
-                trait_name,
-                TypespaceTrait::Ord | TypespaceTrait::Eq | TypespaceTrait::Hash
-            ),
-
-            // JsonValue implements everything except for Ord,
-            // PartialOrd, and Copy: it owns a String and a Vec.
-            Type::JsonValue => !matches!(
-                (trait_name, settings.typify_compat),
-                // Never Ord, PartialOrd, or Copy.
-                (
-                    TypespaceTrait::Ord | TypespaceTrait::PartialOrd | TypespaceTrait::Copy,
-                    _
-                ) |
-                // Not FromStr or Display when under typify compat.
-                (TypespaceTrait::FromStr | TypespaceTrait::Display, true)
-            ),
+            // Child-free built-ins answer from the shared leaf table.
+            Type::Integer(_)
+            | Type::Boolean
+            | Type::String
+            | Type::Unit
+            | Type::Never
+            | Type::Float(_)
+            | Type::JsonValue => leaf_provides(ty, trait_name, settings)
+                .expect("every arm above is a leaf the table answers"),
         }
     }
 }
