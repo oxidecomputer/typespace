@@ -777,7 +777,7 @@ impl UnitStruct {
         let repr_string = serde_json::to_string(repr).unwrap();
 
         let mut traits = traits.clone();
-        let serde_serialize = traits.remove(TypespaceTrait::Serialize).then(|| {
+        let serialize_impl = traits.remove(TypespaceTrait::Serialize).then(|| {
             quote! {
                 impl ::serde::Serialize for #name_ident {
                     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -790,7 +790,7 @@ impl UnitStruct {
             }
         });
 
-        let serde_deserialize = traits.remove(TypespaceTrait::Deserialize).then(|| {
+        let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
             quote! {
                 impl<'de> ::serde::Deserialize<'de> for #name_ident {
                     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -824,8 +824,8 @@ impl UnitStruct {
             #derive_attr
             pub struct #name_ident;
 
-            #serde_serialize
-            #serde_deserialize
+            #serialize_impl
+            #deserialize_impl
         }
     }
 }
@@ -1046,7 +1046,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         let expected = format!("a tuple of size {} or more", fields.len());
 
         let mut traits = traits.clone();
-        let serde_serialize = traits.remove(TypespaceTrait::Serialize).then(|| {
+        let serialize_impl = traits.remove(TypespaceTrait::Serialize).then(|| {
             quote! {
                 impl ::serde::Serialize for #name_ident {
                     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1068,7 +1068,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                 }
             }
         });
-        let serde_deserialize = traits.remove(TypespaceTrait::Deserialize).then(|| {
+        let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
             quote! {
                 impl<'de> ::serde::Deserialize<'de> for #name_ident {
                     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1260,8 +1260,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             );
 
             #default_impl
-            #serde_serialize
-            #serde_deserialize
+            #serialize_impl
+            #deserialize_impl
             #json_schema_impl
         }
     }

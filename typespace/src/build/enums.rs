@@ -295,9 +295,9 @@ impl<Id> Enum<Id> {
 /// instead of emitting them as one block.
 #[derive(Default)]
 struct EnumSpecialImpls {
-    display: TokenStream,
-    from_str: TokenStream,
-    try_from: TokenStream,
+    display_impl: TokenStream,
+    from_str_impl: TokenStream,
+    try_from_impl: TokenStream,
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
@@ -465,14 +465,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             serde.push(quote! { deny_unknown_fields });
         }
 
-        let derives_attr =
+        let derive_attr =
             typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let EnumSpecialImpls {
-            display: display_impl,
-            from_str: from_str_impl,
-            try_from: try_from_impl,
+            display_impl,
+            from_str_impl,
+            try_from_impl,
         } = special_impls;
 
         // Canonical item order: see build::mod.
@@ -480,7 +480,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             // TODO I want to have the original Id available
             #description
             #( #attrs )*
-            #derives_attr
+            #derive_attr
             #serde
             pub enum #name_ident {
                 #( #rendered_variants, )*
@@ -523,7 +523,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .map(|variant| (format_ident!("{}", variant.rust_name), variant.json_name()))
             .unzip();
 
-        let display = if derived_traits.remove(TypespaceTrait::Display) {
+        let display_impl = if derived_traits.remove(TypespaceTrait::Display) {
             // Display each variant as its serialized name.
             quote! {
                 impl ::std::fmt::Display for #name_ident {
@@ -540,11 +540,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             Default::default()
         };
 
-        let (from_str, try_from) = if derived_traits.remove(TypespaceTrait::FromStr) {
+        let (from_str_impl, try_from_impl) = if derived_traits.remove(TypespaceTrait::FromStr) {
             // Parse each variant from its serialized name.
             typespace.add_error_mod(out);
             let string_type = typespace.render_std_string();
-            let from_str = quote! {
+            let from_str_impl = quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;
 
@@ -558,7 +558,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     }
                 }
             };
-            let try_from = quote! {
+            let try_from_impl = quote! {
                 impl ::std::convert::TryFrom<&str> for #name_ident {
                     type Error = self::error::ConversionError;
 
@@ -578,15 +578,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     }
                 }
             };
-            (from_str, try_from)
+            (from_str_impl, try_from_impl)
         } else {
             (TokenStream::new(), TokenStream::new())
         };
 
         EnumSpecialImpls {
-            display,
-            from_str,
-            try_from,
+            display_impl,
+            from_str_impl,
+            try_from_impl,
         }
     }
 
@@ -609,9 +609,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             .map(|variant| format_ident!("{}", variant.rust_name))
             .collect::<Vec<_>>();
 
-        let (from_str, try_from) = if derived_traits.remove(TypespaceTrait::FromStr) {
+        let (from_str_impl, try_from_impl) = if derived_traits.remove(TypespaceTrait::FromStr) {
             typespace.add_error_mod(out);
-            let from_str = quote! {
+            let from_str_impl = quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;
 
@@ -630,7 +630,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     }
                 }
             };
-            let try_from = quote! {
+            let try_from_impl = quote! {
                 impl ::std::convert::TryFrom<&str> for #name_ident {
                     type Error = self::error::ConversionError;
 
@@ -650,12 +650,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     }
                 }
             };
-            (from_str, try_from)
+            (from_str_impl, try_from_impl)
         } else {
             (TokenStream::new(), TokenStream::new())
         };
 
-        let display = if derived_traits.remove(TypespaceTrait::Display) {
+        let display_impl = if derived_traits.remove(TypespaceTrait::Display) {
             quote! {
                 impl ::std::fmt::Display for #name_ident {
                     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -670,9 +670,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         };
 
         EnumSpecialImpls {
-            display,
-            from_str,
-            try_from,
+            display_impl,
+            from_str_impl,
+            try_from_impl,
         }
     }
 
