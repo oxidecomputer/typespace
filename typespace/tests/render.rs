@@ -5776,3 +5776,101 @@ fn test_optional_nullable_custom_default() {
         );
     }
 }
+
+// The remainder's element count is read by walking its type, and that
+// walk follows aliases and boxes, so it can reach an id it already
+// passed. `query_api`'s has_impl_survives_an_alias_cycle_through_a_box
+// builds the same loop and finalize accepts it. Without a guard the
+// walk never returns. No runtime coverage: `type A = Box<A>;` has no
+// finite Rust value, so the rendered code cannot compile.
+#[test]
+fn test_tuple_struct_rest_cycles_through_a_box() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema),
+        {
+            type A = Box<A>;
+            struct T(String, #[flatten] A);
+        }
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("finalize accepts the graph");
+    let rendered = ts.to_codespace().into_stream().to_string();
+
+    // The fixed field is still guaranteed; an unknown remainder count
+    // leaves the upper end open.
+    assert!(rendered.contains("min_items : Some (1u32)"));
+    assert!(!rendered.contains("max_items"));
+}
+
+// A remainder contributes its own element count to the tuple's bounds:
+// a fixed-length array contributes exactly, and a tuple struct
+// contributes its fields plus its own remainder.
+#[test]
+fn test_tuple_struct_rest_bounds() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::JsonSchema),
+        {
+            struct Fixed(u32, #[flatten] [u32; 3]);
+            struct Nested(String, #[flatten] Fixed);
+        }
+    );
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_tuple_struct_rest_bounds.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        let array = schemars::schema_for!(import::Fixed).schema.array.unwrap();
+        assert_eq!(array.min_items, Some(4));
+        assert_eq!(array.max_items, Some(4));
+
+        let array = schemars::schema_for!(import::Nested).schema.array.unwrap();
+        assert_eq!(array.min_items, Some(5));
+        assert_eq!(array.max_items, Some(5));
+    }
+}
+
+// A default value has to supply as many elements as the tuple accepts:
+// exactly the fields when there is no remainder, and within the
+// remainder's own bounds when there is one.
+#[test]
+fn test_tuple_struct_default_length_bounds() {
+    let too_long = typespace_builder!(Settings::minimal(), {
+        #[default = [1, 2, 3]]
+        struct Pair(u32, u32);
+    });
+    assert!(matches!(
+        too_long.finalize(no_cycles),
+        Err(Error::InvalidDefault { ref reason, .. })
+            if reason == "expected an array of length 2"
+    ));
+
+    let under = typespace_builder!(Settings::minimal(), {
+        #[default = [1, 2]]
+        struct Bounded(u32, #[flatten] [u32; 2]);
+    });
+    assert!(matches!(
+        under.finalize(no_cycles),
+        Err(Error::InvalidDefault { ref reason, .. })
+            if reason == "expected an array of length 3"
+    ));
+
+    let over = typespace_builder!(Settings::minimal(), {
+        #[default = [1, 2, 3, 4]]
+        struct Bounded(u32, #[flatten] [u32; 2]);
+    });
+    assert!(matches!(
+        over.finalize(no_cycles),
+        Err(Error::InvalidDefault { .. })
+    ));
+
+    let just_right = typespace_builder!(Settings::minimal(), {
+        #[default = [1, 2, 3]]
+        struct Bounded(u32, #[flatten] [u32; 2]);
+    });
+    assert!(just_right.finalize(no_cycles).is_ok());
+}

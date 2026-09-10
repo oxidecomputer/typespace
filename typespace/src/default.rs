@@ -1352,16 +1352,26 @@ where
             });
         };
 
-        // TODO 9/10/2026
-        // Needs to change with defaults
         let field_count = tuple_struct.fields.len();
-        if arr.len() < field_count {
+        let (min, max) = match tuple_struct.rest.as_ref() {
+            None => (field_count, Some(field_count)),
+            Some(rest_id) => match crate::array_bounds(self.types, rest_id) {
+                None => (field_count, None),
+                Some((rest_min, rest_max)) => (
+                    field_count + rest_min,
+                    rest_max.map(|rest_max| field_count + rest_max),
+                ),
+            },
+        };
+
+        if arr.len() < min || max.is_some_and(|max| arr.len() > max) {
             return Err(Error::InvalidDefault {
                 value: value.clone(),
                 id: id.clone(),
-                reason: match tuple_struct.rest {
-                    Some(_) => format!("expected an array of at least length {field_count}"),
-                    None => format!("expected an array of length {field_count}"),
+                reason: match max {
+                    Some(max) if max == min => format!("expected an array of length {min}"),
+                    Some(max) => format!("expected an array of length {min} to {max}"),
+                    None => format!("expected an array of at least length {min}"),
                 },
             });
         }

@@ -1785,6 +1785,122 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::Never => unreachable!("Never properties add no skip attribute"),
         }
     }
+
+    fn array_bounds<'b>(&'b self, id: &'b Id) -> Option<(usize, Option<usize>)> {
+        array_bounds(self.types, id)
+    }
+}
+
+/// How many array elements a type serializes to: an inclusive minimum
+/// and an optional maximum.
+///
+/// `None` means the count is unknown, which leaves a caller's schema
+/// unconstrained rather than wrong.
+pub(crate) fn array_bounds<'a, Id: Ord>(
+    types: &'a BTreeMap<Id, Type<Id>>,
+    id: &'a Id,
+) -> Option<(usize, Option<usize>)> {
+    array_bounds_seen(types, id, &mut BTreeSet::new())
+}
+
+/// array_bounds with the walk's visited ids threaded through, so a
+/// tuple struct's remainder shares one set with the walk that reached
+/// it.
+fn array_bounds_seen<'a, Id: Ord>(
+    types: &'a BTreeMap<Id, Type<Id>>,
+    id: &'a Id,
+    seen: &mut BTreeSet<&'a Id>,
+) -> Option<(usize, Option<usize>)> {
+    // A newtype, alias, or Box can reach one this walk already passed. That
+    // graph is legal: `break_cycles` puts a `Box` in every cycle, and a named
+    // type in the loop keeps it clear of `check_anonymous_cycles`. Revisiting
+    // an id answers "unknown" instead of walking it again.
+    let mut id = id;
+    loop {
+        if !seen.insert(id) {
+            return None;
+        }
+        let ty = types.get(id)?;
+        match ty {
+            // We could pick these types apart... but not now.
+            Type::Enum(_) | Type::UnitStruct(_) => {
+                return None;
+            }
+
+            // A struct serializes as an object, not an array.
+            Type::Struct(_) => {
+                return None;
+            }
+
+            // A tuple struct is its fixed fields plus whatever its own
+            // remainder contributes.
+            Type::TupleStruct(tuple_struct) => {
+                let fixed = tuple_struct.fields.len();
+                return match tuple_struct.rest.as_ref() {
+                    None => Some((fixed, Some(fixed))),
+                    Some(rest_id) => {
+                        let (rest_min, rest_max) = array_bounds_seen(types, rest_id, seen)?;
+                        Some((fixed + rest_min, rest_max.map(|max| fixed + max)))
+                    }
+                };
+            }
+
+            Type::NewtypeStruct(NewtypeStruct {
+                inner: inner_id, ..
+            })
+            | Type::TypeAlias(TypeAlias {
+                target: inner_id, ..
+            })
+            | Type::Box(inner_id) => {
+                id = inner_id;
+            }
+
+            // If we see a native type in this position, we just hope for
+            // the best in terms of the bounds.
+            //
+            // We could do something cute here, like export its schema and
+            // then--for tuples with flattened remainders--modify the
+            // schema at runtime... but that's pretty fragile since we have
+            // no idea of the structure of the output schema.
+            Type::Native(_) => {
+                return Some((0, None));
+            }
+
+            // Unbounded array
+            Type::Vec(_) | Type::Set(_) => {
+                return Some((0, None));
+            }
+
+            // Fixed-length array
+            Type::Array(_, size) => {
+                return Some((*size, Some(*size)));
+            }
+
+            // TODO 9/10/2026
+            // unsure; null can't be serialized so we should probably
+            // disallow?
+            Type::Option(_) => {
+                return None;
+            }
+
+            // A tuple serializes as an array of exactly its elements.
+            Type::Tuple(items) => {
+                return Some((items.len(), Some(items.len())));
+            }
+
+            // Not serialized as an array:
+            Type::Map(_, _)
+            | Type::Unit
+            | Type::Boolean
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String
+            | Type::JsonValue
+            | Type::Never => {
+                return None;
+            }
+        }
+    }
 }
 
 pub(crate) enum DefaultConstructor {

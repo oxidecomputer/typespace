@@ -1116,31 +1116,45 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         // TODO 9/10/2026
         // Do we only want to do this if `rest` is Some?
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
-            let (additional_items, min_items, max_items) =
-                if let Some(rest_ident) = rest_ident.as_ref() {
-                    let additional_items = quote! {
-                        additional_items: Some(Box::new(
-                            g.subschema_for::<#rest_ident>()
-                        )),
-                    };
-
-                    // TODO 9/9/2026
-                    // This isn't quite right; the rest field may also have some
-                    // minimum and maximum values.
-                    let len = fields.len() as u32;
-                    (
-                        additional_items,
-                        quote! { min_items: Some(#len), },
-                        quote! {},
-                    )
-                } else {
-                    let len = fields.len() as u32;
-                    (
-                        TokenStream::new(),
-                        quote! { min_items: Some(#len), },
-                        quote! { max_items: Some(#len), },
-                    )
+            let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
+                assert!(rest_ident.is_some());
+                let additional_items = quote! {
+                    additional_items: Some(::std::boxed::Box::new(
+                        g.subschema_for::<#rest_ident>()
+                    )),
                 };
+
+                let array_bounds = typespace.array_bounds(rest_id);
+                let len = fields.len();
+
+                let min = match array_bounds {
+                    Some((min, _)) => len + min,
+                    _ => len,
+                } as u32;
+                let max = match array_bounds {
+                    Some((_, Some(max))) => Some((len + max) as u32),
+                    _ => None,
+                };
+
+                let max_items = if let Some(max) = max {
+                    quote! { max_items: Some(#max), }
+                } else {
+                    TokenStream::new()
+                };
+
+                (
+                    additional_items,
+                    quote! { min_items: Some(#min), },
+                    max_items,
+                )
+            } else {
+                let len = fields.len() as u32;
+                (
+                    TokenStream::new(),
+                    quote! { min_items: Some(#len), },
+                    quote! { max_items: Some(#len), },
+                )
+            };
 
             let description = description.as_ref().map(|d| {
                 quote! {
@@ -1155,14 +1169,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
             quote! {
                 impl ::schemars::JsonSchema for #name_ident {
-                    fn schema_name() -> String {
+                    fn schema_name() -> ::std::string::String {
                         #name.to_string()
                     }
 
                     fn json_schema(
-                        g: &mut schemars::r#gen::SchemaGenerator,
-                    ) -> schemars::schema::Schema {
-
+                        g: &mut ::schemars::r#gen::SchemaGenerator,
+                    ) -> ::schemars::schema::Schema {
                         let fields = [
                             #(
                                 g.subschema_for::<#field_ident>(),
@@ -1170,24 +1183,34 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                         ]
                             .into_iter()
                             .collect();
-                        schemars::schema::SchemaObject {
-                            metadata: Some(Box::new(schemars::schema::Metadata {
-                                title: Some(#name.to_string()),
-                                #description
-                                #default
-                                ..Default::default()
-                            })),
-                            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
-                                schemars::schema::InstanceType::Array,
-                            ))),
-                            array: Some(Box::new(schemars::schema::ArrayValidation {
-                                items: Some(schemars::schema::SingleOrVec::Vec(fields)),
-                                #additional_items
-                                #max_items
-                                #min_items
-                                ..Default::default()
-                            })),
-                            ..Default::default()
+                        ::schemars::schema::SchemaObject {
+                            metadata: Some(::std::boxed::Box::new(
+                                ::schemars::schema::Metadata {
+                                    title: Some(#name.to_string()),
+                                    #description
+                                    #default
+                                    ..::std::default::Default::default()
+                                }
+                            )),
+                            instance_type: Some(
+                                ::schemars::schema::SingleOrVec::Single(
+                                    ::std::boxed::Box::new(
+                                        ::schemars::schema::InstanceType::Array,
+                                    )
+                                )
+                            ),
+                            array: Some(::std::boxed::Box::new(
+                                ::schemars::schema::ArrayValidation {
+                                    items: Some(
+                                        ::schemars::schema::SingleOrVec::Vec(fields)
+                                    ),
+                                    #additional_items
+                                    #max_items
+                                    #min_items
+                                    ..::std::default::Default::default()
+                                }
+                            )),
+                            ..::std::default::Default::default()
                         }
                         .into()
                     }

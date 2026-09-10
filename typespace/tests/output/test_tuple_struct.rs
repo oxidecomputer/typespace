@@ -61,39 +61,41 @@ impl<'de> ::serde::Deserialize<'de> for MyTupleStruct {
     }
 }
 impl ::schemars::JsonSchema for MyTupleStruct {
-    fn schema_name() -> String {
+    fn schema_name() -> ::std::string::String {
         "MyTupleStruct".to_string()
     }
     fn json_schema(
-        g: &mut schemars::r#gen::SchemaGenerator,
-    ) -> schemars::schema::Schema {
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
         let fields = [g.subschema_for::<String>(), g.subschema_for::<u32>()]
             .into_iter()
             .collect();
-        schemars::schema::SchemaObject {
+        ::schemars::schema::SchemaObject {
             metadata: Some(
-                Box::new(schemars::schema::Metadata {
+                ::std::boxed::Box::new(::schemars::schema::Metadata {
                     title: Some("MyTupleStruct".to_string()),
                     default: Some(
                         ::serde_json::from_str("[\"one\",2,\"three\",\"four\"]").unwrap(),
                     ),
-                    ..Default::default()
+                    ..::std::default::Default::default()
                 }),
             ),
             instance_type: Some(
-                schemars::schema::SingleOrVec::Single(
-                    Box::new(schemars::schema::InstanceType::Array),
+                ::schemars::schema::SingleOrVec::Single(
+                    ::std::boxed::Box::new(::schemars::schema::InstanceType::Array),
                 ),
             ),
             array: Some(
-                Box::new(schemars::schema::ArrayValidation {
-                    items: Some(schemars::schema::SingleOrVec::Vec(fields)),
-                    additional_items: Some(Box::new(g.subschema_for::<Vec<String>>())),
+                ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
+                    items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
+                    additional_items: Some(
+                        ::std::boxed::Box::new(g.subschema_for::<Vec<String>>()),
+                    ),
                     min_items: Some(2u32),
-                    ..Default::default()
+                    ..::std::default::Default::default()
                 }),
             ),
-            ..Default::default()
+            ..::std::default::Default::default()
         }
             .into()
     }
