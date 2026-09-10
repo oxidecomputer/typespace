@@ -3096,6 +3096,38 @@ fn test_copy_withheld_under_typify_compat() {
     );
 }
 
+// TYPIFY COMPAT: typify never skips serialization of a default-state
+// String, so imitation withholds the `is_empty` attribute; a Vec in
+// the same state keeps its skip, which typify also emits.
+#[test]
+fn test_string_default_skip_withheld_under_typify_compat() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_typify_compat(true),
+        {
+            struct Package {
+                #[default]
+                label: String,
+                #[default]
+                tags: Vec<String>,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let rendered = ts.to_codespace().into_stream().to_string();
+    assert!(
+        !rendered.contains("String::is_empty"),
+        "the String skip leaked under typify_compat"
+    );
+    assert!(
+        rendered.contains("is_empty"),
+        "the Vec skip was lost with it"
+    );
+}
+
 // Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
 // a desired Copy drops at a type holding either. Clone is required
 // directly, as in the String case above, so a surviving derive

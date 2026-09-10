@@ -1722,6 +1722,11 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 );
             }
 
+            // TYPIFY COMPAT. typify never skips serialization of a
+            // default-state String, so imitation withholds the skip;
+            // the attribute below returns when the flag goes.
+            Type::String if self.settings.typify_compat => {}
+
             Type::Vec(_) | Type::Map(_, _) | Type::Set(_) | Type::String => {
                 let ty_raw_ident = self.render_raw_type(ty_id);
                 let is_empty = format!("{}::is_empty", ty_raw_ident.token_print());
