@@ -802,15 +802,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     }
 }
 
+/// The serde tagging scheme an enum serializes under.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnumTagType {
-    /// serde external tagging (serde's default)
+    /// serde external tagging (serde's default).
     External,
-    /// serde internal tagging
+    /// serde internal tagging.
     Internal { tag: String },
-    /// serde adjacent tagging
+    /// serde adjacent tagging.
     Adjacent { tag: String, content: String },
-    /// serde untagged
+    /// serde untagged.
     Untagged,
 }
 
@@ -866,7 +867,7 @@ pub struct EnumVariant<Id> {
 }
 
 impl<Id> EnumVariant<Id> {
-    /// Create an enum variant named `rust_name` with the given shape of
+    /// Create an enum variant named `rust_name` carrying the given
     /// associated data.
     ///
     /// The variant serializes under its Rust name and has no
@@ -917,7 +918,7 @@ impl<Id> EnumVariant<Id> {
         self.description.as_deref()
     }
 
-    /// The shape of the variant's associated data.
+    /// The variant's associated data.
     pub fn details(&self) -> &VariantDetails<Id> {
         &self.details
     }
@@ -940,10 +941,15 @@ impl<Id: Clone> EnumVariant<Id> {
     }
 }
 
+/// The associated data of an [`EnumVariant`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VariantDetails<Id> {
+    /// A variant with no associated data.
     Unit,
+    /// A variant with one unnamed value of the given type.
     Item(Id),
+    /// A variant with several unnamed values of the given types.
     Tuple(Vec<Id>),
+    /// A variant with named fields.
     Struct(Vec<StructProperty<Id>>),
 }

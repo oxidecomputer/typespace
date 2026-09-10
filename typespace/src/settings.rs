@@ -19,7 +19,7 @@ use crate::{ALL_TRAITS, TypespaceTrait, TypespaceTraitSet};
 /// presets--[`Settings::minimal`], [`Settings::typical`], or
 /// [`Settings::maximal`]--and adjust with the `with_` methods. There is
 /// deliberately no `Default`: the traits a typespace requires and which it
-/// merely desires greatly impacts the generated code, so consumers should make
+/// merely desires greatly impact the generated code, so consumers should make
 /// a deliberate choice.
 ///
 /// The type also implements `Deserialize`, so settings can come from
@@ -62,7 +62,7 @@ pub struct Settings {
     #[serde(default)]
     pub(crate) required_traits: TypespaceTraitSet,
 
-    /// Traits desired for every type that's able to implement each.
+    /// Traits every type implements when it can.
     #[serde(default)]
     pub(crate) desired_traits: TypespaceTraitSet,
 
@@ -124,8 +124,8 @@ const OWNING_NEVER: [TypespaceTrait; 3] = [
     TypespaceTrait::Copy,
 ];
 
-/// `OWNING_NEVER` plus the ordering traits: what a hash std container
-/// (`HashMap`, `HashSet`) has no impl for at any parameter.
+/// `OWNING_NEVER` plus `Ord`, `PartialOrd`, and `Hash`: what a hash std
+/// container (`HashMap`, `HashSet`) has no impl for at any parameter.
 const HASHING_NEVER: [TypespaceTrait; 6] = [
     TypespaceTrait::Display,
     TypespaceTrait::FromStr,
@@ -136,19 +136,19 @@ const HASHING_NEVER: [TypespaceTrait; 6] = [
 ];
 
 impl Settings {
-    /// The container a map renders as absent configuration.
+    /// The container a map renders as when nothing is configured.
     fn default_map_type() -> ContainerType {
         ContainerType::btree_map()
     }
 
-    /// The container a set renders as absent configuration: a `Vec`,
-    /// which demands nothing of its elements, carrying the
+    /// The container a set renders as when nothing is configured: a
+    /// `Vec`, which demands nothing of its elements, carrying the
     /// ordered-lookup obligation that set deduplication policy imposes.
     fn default_set_type() -> ContainerType {
         ContainerType::vec().with_obligations([ordered_lookup_traits()])
     }
 
-    /// The container a vec renders as absent configuration.
+    /// The container a vec renders as when nothing is configured.
     fn default_vec_type() -> ContainerType {
         ContainerType::vec()
     }
@@ -290,7 +290,8 @@ impl Settings {
     /// [`Type::Set`](crate::build::Type).
     ///
     /// The default is a `Vec`, which does not enforce deduplication
-    /// but still demands the `Ord` family of its elements.
+    /// but still demands `Eq`, `PartialEq`, `Ord`, and `PartialOrd` of
+    /// its elements.
     /// Finalization imposes the container's element obligation on every
     /// set element.
     ///
@@ -409,11 +410,11 @@ impl Settings {
 /// type expects (two for a map, one for a set or a vec). Finalization produces
 /// an error if that's not the case.
 ///
-/// Finalization imposes an obligations on type parameters according to these
+/// Finalization imposes an obligation on type parameters according to these
 /// settings (and this may cascade to dependent traits i.e. `Ord` implies
-/// `PartialOrd`; `Eq`, and `PartialEq`).
+/// `PartialOrd`, `Eq`, and `PartialEq`).
 ///
-/// There are presets for common modalities:
+/// There are presets for the common containers:
 ///
 /// ```
 /// # use typespace::{
@@ -595,8 +596,8 @@ impl ContainerType {
     /// # Panics
     ///
     /// Panics if the container has no such parameter; finalization
-    /// checks a declaration's arity against the position it is
-    /// configured for.
+    /// checks how many parameters a declaration states against the
+    /// position it is configured for.
     pub fn obligation(&self, index: usize) -> &TypespaceTraitSet {
         &self.obligations[index]
     }
@@ -633,7 +634,7 @@ impl ContainerType {
     /// Set what the container demands of each of its type parameters,
     /// replacing the preset's obligations.
     ///
-    /// The number of entries is the container's arity.
+    /// There is one entry per type parameter the container takes.
     pub fn with_obligations(
         mut self,
         obligations: impl IntoIterator<Item = TypespaceTraitSet>,
@@ -958,7 +959,7 @@ pub enum OptionalNullable {
     /// and non-null.
     DoubleOption,
 
-    /// Use a custom tri-state, type `Opt` where `Opt:
+    /// Use a custom tri-state type `Opt` where `Opt:
     /// json_serde::OptionalNullable` (note that `OptionalNullable` implies
     /// `Default`). It should typically be an enum, generic over `T`, with
     /// variants for absent, null, and a `T` value.

@@ -106,7 +106,7 @@ pub use structs::*;
 // 9.15.2025
 // Little bit of a random thought: "Native" is actually kind of a catch-all for
 // which things like boolean, integer, unit, etc. could apply. I think we'll
-// eventually want more of a builder interface to construct types and and then
+// eventually want more of a builder interface to construct types and then
 // a finished interface to inspect them. I could imagine--for example--
 // "native" being used for any non-constructed type (so anything except for
 // generated structs, generated enums, and compound types such as tuples and
@@ -114,7 +114,7 @@ pub use structs::*;
 // maps and vecs? Maybe? Something to noodle on as we think about Typespace as
 // an interface.
 
-/// Represents a type in the Typespace.
+/// A type in a typespace.
 ///
 /// A type refers to other types by ID, never by containment; every ID
 /// used here must have its own entry in the
@@ -313,7 +313,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// with no context of their own (the contents of options and
     /// boxes) report an empty string.
     ///
-    /// The cardinality may be smaller than [`Type::children`]: a type
+    /// This may report fewer children than [`Type::children`]: a type
     /// alias and a native type's parameters confer no naming context
     /// and contribute nothing here.
     pub fn children_with_context(&self) -> Vec<(Id, String)> {

@@ -1,17 +1,16 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Trait resolution: determine the trait for each type.
+//! Trait resolution: settle the trait set of every type.
 //!
-//! Runs during finalization in
-//! two phases. Phase 1 resolves required traits: requirements (from
-//! settings and from use sites such as map keys and set elements)
-//! descend the type graph, each named type absorbs what it can
-//! satisfy, and every unsatisfiable requirement is collected into a
-//! [`TraitConflict`](crate::error::TraitConflict) that records the
-//! requirement's origin and the containment path to the offending
-//! type. Phase 2 resolves desired traits: each named type takes a
-//! desired trait exactly when it can realize it and every type it
-//! depends on has it; unsatisfiable desired traits are dropped
+//! Runs during finalization in two phases. Phase 1 resolves required
+//! traits: requirements (from settings and from use sites such as map
+//! keys and set elements) descend the type graph, each named type
+//! absorbs what it can satisfy, and every unsatisfiable requirement is
+//! collected into a [`TraitConflict`](crate::error::TraitConflict) that
+//! records the requirement's origin and the containment path to the
+//! offending type. Phase 2 resolves desired traits: each named type
+//! takes a desired trait exactly when it can realize it and every type
+//! it depends on has it; unsatisfiable desired traits are dropped
 //! silently. The resulting per-type trait set is authoritative: query
 //! answers and rendered derives both read it.
 
@@ -104,7 +103,7 @@ where
 /// and before [`resolve_traits`], which reads the answers through
 /// [`from_string_irrefutable`] as it consults [`feasibility`].
 ///
-/// One chain walk per named type: the walk is what costs anything, and
+/// One chain walk per named type: the walk is the expensive part, and
 /// the cache is what keeps `feasibility`, called once per type per
 /// trait, from repeating it.
 pub(crate) fn resolve_from_string_irrefutable<Id>(types: &mut BTreeMap<Id, Type<Id>>)
@@ -873,10 +872,10 @@ where
     // its feasibility for each newly-required trait, absorbing what
     // it can derive or manually realize, and pushing obligations onward. If
     // the type is **not** generated (native or otherwise external to our
-    // control), we need to check that is implements (or is capable of
+    // control), we need to check that it implements (or is capable of
     // implementing) the required traits; if it doesn't (or can't), we'll
     // produce an error. We don't stop on the first failure, but want to
-    // identify as many, distinct failures as is reasonable and as would be
+    // identify as many distinct failures as is reasonable and as would be
     // useful for a consumer.
     while let Some(WorkItem {
         target,
@@ -909,14 +908,13 @@ where
         };
 
         if ty.is_named() {
-            // Named types no longer absorb unconditionally: consult
-            // feasibility per required trait. Derivable and forwarded
-            // (alias) traits share one obligation set--every contained
-            // child, via contained_children_related--so we batch them
-            // and push once per child, exactly as unconditional
-            // absorption used to. Manually realized traits carry their
-            // own, often-empty, obligation list, so each gets its own
-            // push. Impossible traits become conflicts and are never
+            // A named type absorbs conditionally: consult feasibility
+            // per required trait. Derivable and forwarded (alias)
+            // traits share one obligation set--every contained child,
+            // via contained_children_related--so we batch them and push
+            // once per child. Manually realized traits carry their own,
+            // often-empty, obligation list, so each gets its own push.
+            // Impossible traits become conflicts and are never
             // absorbed.
             let mut derivable_new = TypespaceTraitSet::empty();
             let mut manual_pushes = Vec::<(TypespaceTrait, Vec<(Relation, Id)>)>::new();
@@ -1382,8 +1380,8 @@ pub(crate) fn unnamed_provides<Id>(
         // answer for would emit a derive nobody asked for.
         Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
 
-        // Pass the buck, minus Display and FromStr, which neither
-        // offers... except for Default, which Option<T> implements
+        // Pass the buck, minus Display and FromStr, which an Option
+        // never has... except for Default, which Option<T> implements
         // no matter what T is.
         Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
         // Box is never Copy, whatever it holds; every other trait

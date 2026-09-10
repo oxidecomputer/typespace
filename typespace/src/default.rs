@@ -687,7 +687,7 @@ where
     /// for each property, in declaration order.
     ///
     /// For structs, we wrap this in the struct's name; for struct enum
-    /// variant's, we wrap it in the variant's name.
+    /// variants, we wrap it in the variant's name.
     fn default_impl_struct_props(
         &self,
         state: &mut WalkState<Id>,

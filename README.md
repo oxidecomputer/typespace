@@ -13,7 +13,8 @@ code. It not only handles the basic construction of types, it also implements
 desired traits, deals with breaking containment cycles via boxing, propagates
 required traits, and identifies unsatisfiable constructions. Its intermediate
 representation of types can be queried ("does this type implement this
-trait?") or rendered as text or a `TokenStream` (via the `codespace` crate).
+trait?") or rendered as source code or a `TokenStream` (via the `codespace`
+crate).
 
 It fell out of the `typify` and `progenitor` crates. The former converts JSON
 Schema into Rust types; the latter generates SDKs from OpenAPI documents--for
@@ -33,7 +34,6 @@ a map key must be `Ord`).
 use typespace::{
     build::{Struct, StructProperty, Type},
     no_cycles,
-    settings::Settings,
     TypespaceBuilder,
 };
 

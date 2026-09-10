@@ -163,7 +163,7 @@ where
 /// type has no name to stop at, so a cycle made up entirely of anonymous types
 /// has no finite representation--rendering it would recur forever.
 /// [`break_cycles`] already ran, so this checks the post-boxing graph. Any
-/// added Box types merely change the cardinality of a cycle.
+/// added Box types merely make a cycle longer.
 ///
 /// Walks the subgraph induced on anonymous types: roots and children alike are
 /// filtered to those for which [`Type::is_named`] is false. Reaching a named

@@ -513,7 +513,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Verify that no two named types share a name.
     ///
     /// Names come from the consumer, which owns collision-free naming;
-    /// this backstops converter naming bugs. Typespace never renames.
+    /// this backstops converter naming bugs. typespace never renames.
     fn check_type_names(&self) -> Result<(), Error<Id>> {
         let mut names = BTreeMap::<&str, &Id>::new();
         for (type_id, typ) in &self.types {
@@ -782,7 +782,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         F: FnMut(&Id) -> Id,
     {
         // TODO 9/1/2026
-        // We've lost sight of this comment vvvvvvv and it's order; fix.
+        // We've lost sight of this comment vvvvvvv and its order; fix.
 
         // Basic steps:
         // 1. Break containment cycles with Box types
@@ -1465,7 +1465,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
         enum TypeOfInterest<Id> {
             // If the type is itself an Option (i.e. may be null), let's save
-            // the inner  type, which we may use i.e. if the field may be
+            // the inner type, which we may use i.e. if the field may be
             // absent and the consumer has specified a custom type for that
             // situation. In other cases, we need to know if the type is an
             // Option to add the appropriate serde annotations.
@@ -1702,7 +1702,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         std_opt_is_none: String,
     ) {
         match ty {
-            // Here we assume that the generated type for the field has a
+            // Here we assume that the generated type for the field has an
             // implementation of Default. There isn't a simple "is_default()"
             // that we can presume... so we'll just leave it.
             Type::Enum(_)

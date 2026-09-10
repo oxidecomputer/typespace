@@ -524,7 +524,8 @@ impl<Id> StructProperty<Id> {
         }
     }
 
-    /// Set the property's volitionality; see [`StructPropertyState`].
+    /// Set whether the property must be present; see
+    /// [`StructPropertyState`].
     pub fn with_state(mut self, state: StructPropertyState) -> Self {
         self.state = state;
         self
@@ -566,7 +567,8 @@ impl<Id> StructProperty<Id> {
         }
     }
 
-    /// The property's volitionality.
+    /// Whether the property must be present; see
+    /// [`StructPropertyState`].
     pub fn state(&self) -> &StructPropertyState {
         &self.state
     }
@@ -596,17 +598,24 @@ impl<Id> StructProperty<Id> {
     }
 }
 
+/// The serde treatment of a struct property's name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StructPropertySerde {
+    /// The property serializes under its Rust name.
     None,
+    /// The property serializes under the given name instead.
     Rename(String),
+    /// The property's own fields are spliced into the containing type's
+    /// serialized form.
     Flatten,
 }
 
-/// The volitionality of a struct property. Only `Optional` will translate into
-/// an `Option<T>` type; the others will be required in Rust. Conversely, only
-/// `Required` must be present during deserialization; the others may be
-/// omitted.
+/// Whether a struct property must be present, and what fills it in when
+/// it is absent.
+///
+/// Only `Optional` translates into an `Option<T>` type; the others are
+/// required in Rust. Conversely, only `Required` must be present during
+/// deserialization; the others may be omitted.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StructPropertyState {
     /// The field must be present.
@@ -1435,7 +1444,7 @@ impl<Id> NewtypeStruct<Id> {
 
 // TODO 3/7/2026
 // I'm ambivalent as to whether the constrained form of a newtype should be
-// it's own, fundamentally distinct entity. However for now I'm going to just
+// its own, fundamentally distinct entity. However for now I'm going to just
 // shove it into the existing newtype representation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

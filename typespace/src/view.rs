@@ -279,7 +279,7 @@ pub struct StructProperty<'a, Id> {
     pub type_id: Id,
 }
 
-// -- Enum view -----------------------------------------------------------------
+// -- Enum view ----------------------------------------------------------------
 
 /// A view of an enum type's variants.
 pub struct Enum<'a, Id> {
@@ -325,11 +325,11 @@ pub struct EnumVariant<'a, Id> {
     pub name: &'a str,
     /// The description (doc comment source) for the variant, if any.
     pub description: Option<&'a str>,
-    /// The shape of the variant's associated data.
+    /// The variant's associated data.
     pub details: VariantDetails<Id>,
 }
 
-/// The shape of an enum variant's associated data.
+/// The associated data of an enum variant.
 #[non_exhaustive]
 pub enum VariantDetails<Id> {
     /// A unit variant with no associated data.
@@ -340,7 +340,7 @@ pub enum VariantDetails<Id> {
     Struct(Vec<(String, Id)>),
 }
 
-// -- Newtype view --------------------------------------------------------------
+// -- Newtype view -------------------------------------------------------------
 
 /// A view of a newtype struct's inner type.
 pub struct NewtypeStruct<'a, Id> {

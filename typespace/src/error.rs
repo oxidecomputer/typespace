@@ -1,6 +1,6 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Errors reported for invalid type graphs, shapes, and settings.
+//! The error type, and the detail types its messages are built from.
 
 use crate::TypespaceTrait;
 
@@ -22,7 +22,7 @@ where
         type_id: Id,
     },
 
-    /// A shape ran to completion without a name.
+    /// A shape reached `build()` without a name.
     ///
     /// Every named type (struct, enum, newtype struct, unit struct,
     /// tuple struct, or type alias) must have a name before `build()`
@@ -193,8 +193,8 @@ where
     /// have a Never type as its payload.
     ///
     /// Each of these wrappers is transparent on the wire, so a `Never` wrapped
-    /// in one is wire-identical to a bare `Never` property. Rather than
-    /// handling this case, we explicitly disallow these constructions.
+    /// in one is wire-identical to a bare `Never` property, so typespace
+    /// rejects the construction rather than handling it.
     #[error(
         "the {wrapper} with id `{type_id}` wraps `Type::Never`, which \
          adds no meaning over `Type::Never` alone"
@@ -218,7 +218,8 @@ where
     ///
     /// Every other position demands a value that can never be produced,
     /// which makes the type holding it a type with no values at all.
-    /// Rather than generate such a type, we disallow the construction.
+    /// typespace rejects the construction rather than generate such a
+    /// type.
     #[error(
         "the {position} `{name}` of the type with id `{type_id}` is \
          `Type::Never`, which cannot provide the value the position \
@@ -247,10 +248,9 @@ where
     /// generation itself. Anonymous types may form cycles such that generating
     /// the code to represent them would be infinitely recursive.
     ///
-    /// `type_id` and `child_id` are one edge of
-    /// the offending cycle: `type_id` refers to `child_id`, and
-    /// `child_id` is reachable from itself through anonymous types
-    /// only.
+    /// `type_id` and `child_id` are one edge of the offending cycle:
+    /// `type_id` refers to `child_id`, and `child_id` is reachable from
+    /// itself through anonymous types only.
     #[error(
         "the anonymous type with id `{type_id}` refers to `{child_id}`, \
          closing a cycle that passes through no named type"
@@ -295,15 +295,16 @@ where
         kind: &'static str,
     },
 
-    /// TODO 9/4/2026
-    /// fix this up
+    /// A default value does not fit the type it is attached to.
+    // TODO 9/4/2026
+    // fix this up
     #[error("the value `{value}` does not fit the type `{id}`: {reason}")]
     InvalidDefault {
         /// The value that does not fit the type.
         value: serde_json::Value,
         /// The type the value does not fit.
         id: Id,
-        /// Why
+        /// How the value fails to fit.
         reason: String,
     },
 }
