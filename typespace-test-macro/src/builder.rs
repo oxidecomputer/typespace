@@ -48,9 +48,9 @@ use syn::{
 };
 
 /// Entry point shared by the `#[proc_macro]` wrapper and by tests: parse
-/// `input`, lower it, and return the builder-construction expression --
-/// or a block of `compile_error!`s standing in its place if anything
-/// about the input is invalid.
+/// `input`, lower it, and return the builder-construction expression--or
+/// a block of `compile_error!`s standing in its place if anything about
+/// the input is invalid.
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let parsed = match syn::parse2::<BuilderInput>(input) {
         Ok(parsed) => parsed,
@@ -125,8 +125,8 @@ struct FieldItem {
 }
 
 /// One element of a tuple struct's body: a type, with the attributes
-/// (currently only `#[flatten]`, and only on the last element) that
-/// give it non-default treatment.
+/// (only `#[flatten]`, and only on the last element) that give it
+/// non-default treatment.
 struct TupleField {
     attrs: Vec<AttrEntry>,
     ty: Type,
@@ -1376,7 +1376,7 @@ fn lower_alias(item: &AliasItem, lowering: &mut Lowering) -> syn::Result<()> {
 }
 
 fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
-    // No attributes are currently permitted for a native type.
+    // No attributes are permitted for a native type.
     let _ = claim_attrs(&item.attrs, &[])?;
     let path = native_path(&item.ty)?;
     let id = lowering.claim_native(path)?;
@@ -2178,7 +2178,7 @@ mod tests {
     // `tests/ui/`, which pin the error paths' messages and spans.
 
     #[test]
-    fn golden_optional_nullable_default() {
+    fn builder_optional_nullable_default() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 struct Inner {
@@ -2198,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_enum_tag_external() {
+    fn builder_enum_tag_external() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 enum Shape {
@@ -2211,7 +2211,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_enum_tag_untagged() {
+    fn builder_enum_tag_untagged() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 #[untagged]
@@ -2225,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_enum_tag_internal() {
+    fn builder_enum_tag_internal() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 #[tag = "kind"]
@@ -2239,7 +2239,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_enum_tag_adjacent() {
+    fn builder_enum_tag_adjacent() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 #[tag = "kind", content = "value"]
@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_unit_struct_json() {
+    fn builder_unit_struct_json() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 #[json = { kind: "widget", version: 1 }]
@@ -2265,7 +2265,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_nested_containers() {
+    fn builder_nested_containers() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 struct Item {
@@ -2282,7 +2282,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_type_alias() {
+    fn builder_type_alias() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 struct Item {
@@ -2296,7 +2296,7 @@ mod tests {
     }
 
     #[test]
-    fn golden_variant_shapes() {
+    fn builder_variant_shapes() {
         let out = expand_pretty(quote! {
             Settings::typical(), {
                 struct Point {

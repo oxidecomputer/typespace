@@ -524,15 +524,13 @@ impl<Id> StructProperty<Id> {
         }
     }
 
-    /// Set whether the property must be present; see
-    /// [`StructPropertyState`].
+    /// Set the property's volitionality.
     pub fn with_state(mut self, state: StructPropertyState) -> Self {
         self.state = state;
         self
     }
 
-    /// Set the serde treatment of the property's name; see
-    /// [`StructPropertySerde`].
+    /// Set the serde treatment of the property's name.
     pub fn with_json_name(mut self, json_name: StructPropertySerde) -> Self {
         self.json_name = json_name;
         self
@@ -567,8 +565,7 @@ impl<Id> StructProperty<Id> {
         }
     }
 
-    /// Whether the property must be present; see
-    /// [`StructPropertyState`].
+    /// The property's volitionality.
     pub fn state(&self) -> &StructPropertyState {
         &self.state
     }
@@ -605,17 +602,20 @@ pub enum StructPropertySerde {
     None,
     /// The property serializes under the given name instead.
     Rename(String),
-    /// The property's own fields are spliced into the containing type's
-    /// serialized form.
+    /// The property's own fields are flattened into the containing type's
+    /// serialized form; see [the serde
+    /// docs](https://serde.rs/attr-flatten.html).
     Flatten,
 }
 
-/// Whether a struct property must be present, and what fills it in when
-/// it is absent.
+/// The volitionality of a struct property.
 ///
 /// Only `Optional` translates into an `Option<T>` type; the others are
 /// required in Rust. Conversely, only `Required` must be present during
-/// deserialization; the others may be omitted.
+/// deserialization; the others may be omitted. Note that the rendering of an
+/// `Optional` property whose type is [`Type::Option`] is dictated by the
+/// value of
+/// [`Settings::optional_nullable`](crate::settings::Settings::optional_nullable).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StructPropertyState {
     /// The field must be present.

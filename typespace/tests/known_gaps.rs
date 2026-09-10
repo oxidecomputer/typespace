@@ -1,6 +1,6 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Tests for defects typespace has and has not yet fixed.
+//! Tests for defects typespace has not yet fixed.
 //!
 //! Every test here is `#[ignore]`d and asserts what SHOULD happen, so
 //! it starts passing when the defect does. `cargo test -- --ignored`
@@ -75,9 +75,9 @@ fn desired_eq_not_granted_over_unknown_hash_key() {
 // container, and Box is where the two part company: Box has no FromStr
 // at any parameter, but it does have a Display.
 //
-// The answer is conservative rather than wrong -- a trait that could
+// The answer is conservative rather than wrong--a trait that could
 // have been granted is dropped, and a required one is refused rather
-// than emitted -- so this is a refinement, on the list with the rest of
+// than emitted--so this is a refinement, on the list with the rest of
 // the fixed containers' per-trait behavior.
 #[test]
 #[ignore = "Box's per-trait forwarding is a pending refinement"]

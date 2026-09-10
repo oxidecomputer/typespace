@@ -62,7 +62,7 @@ pub struct Settings {
     #[serde(default)]
     pub(crate) required_traits: TypespaceTraitSet,
 
-    /// Traits every type implements when it can.
+    /// Traits every type implements when possible.
     #[serde(default)]
     pub(crate) desired_traits: TypespaceTraitSet,
 
@@ -136,19 +136,17 @@ const HASHING_NEVER: [TypespaceTrait; 6] = [
 ];
 
 impl Settings {
-    /// The container a map renders as when nothing is configured.
+    /// Default container map.
     fn default_map_type() -> ContainerType {
         ContainerType::btree_map()
     }
 
-    /// The container a set renders as when nothing is configured: a
-    /// `Vec`, which demands nothing of its elements, carrying the
-    /// ordered-lookup obligation that set deduplication policy imposes.
+    /// Default container set.
     fn default_set_type() -> ContainerType {
         ContainerType::vec().with_obligations([ordered_lookup_traits()])
     }
 
-    /// The container a vec renders as when nothing is configured.
+    /// Default container vec.
     fn default_vec_type() -> ContainerType {
         ContainerType::vec()
     }
@@ -289,11 +287,10 @@ impl Settings {
     /// Set the container type used to render
     /// [`Type::Set`](crate::build::Type).
     ///
-    /// The default is a `Vec`, which does not enforce deduplication
-    /// but still demands `Eq`, `PartialEq`, `Ord`, and `PartialOrd` of
-    /// its elements.
-    /// Finalization imposes the container's element obligation on every
-    /// set element.
+    /// The default is a `Vec`, which does not enforce deduplication but still
+    /// demands `Eq`, `PartialEq`, `Ord`, and `PartialOrd` of its elements.
+    /// Finalization imposes the container's element obligation on every set
+    /// element.
     ///
     /// The path is emitted verbatim with the element type as its single
     /// generic argument, so it must take one parameter and have an
@@ -414,7 +411,7 @@ impl Settings {
 /// settings (and this may cascade to dependent traits i.e. `Ord` implies
 /// `PartialOrd`, `Eq`, and `PartialEq`).
 ///
-/// There are presets for the common containers:
+/// There are presets for the common modalities:
 ///
 /// ```
 /// # use typespace::{
@@ -743,7 +740,7 @@ impl std::fmt::Debug for ContainerType {
 struct ContainerTypeRepr {
     /// The preset the container starts from.
     #[serde(default)]
-    like: Option<ContainerFamily>,
+    like: Option<ContainerKind>,
     /// The path the container renders as, replacing the preset's.
     #[serde(default)]
     path: Option<String>,
@@ -759,7 +756,7 @@ struct ContainerTypeRepr {
 /// The [`ContainerType`] presets, by name.
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum ContainerFamily {
+enum ContainerKind {
     BtreeMap,
     HashMap,
     Vec,
@@ -768,7 +765,7 @@ enum ContainerFamily {
     HashSet,
 }
 
-impl ContainerFamily {
+impl ContainerKind {
     /// The declaration this name selects.
     fn preset(&self) -> ContainerType {
         match self {
@@ -959,7 +956,7 @@ pub enum OptionalNullable {
     /// and non-null.
     DoubleOption,
 
-    /// Use a custom tri-state type `Opt` where `Opt:
+    /// Use a custom tri-state: type `Opt` where `Opt:
     /// json_serde::OptionalNullable` (note that `OptionalNullable` implies
     /// `Default`). It should typically be an enum, generic over `T`, with
     /// variants for absent, null, and a `T` value.

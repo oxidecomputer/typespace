@@ -1,5 +1,7 @@
 // Copyright 2026 Oxide Computer Company
 
+//! What a finalized typespace answers about the types it holds.
+
 use quote::quote;
 use typespace::{
     TypespaceBuilder, TypespaceTrait,
@@ -499,8 +501,7 @@ fn has_impl_survives_an_alias_cycle_through_a_box() {
     assert!(!a.has_impl(TypespaceTrait::Eq));
 }
 
-// Chunk-5 query additions on the build side: names, naming contexts,
-// defaults, and enum analyses.
+// Build-side queries: names, naming contexts, defaults, and enum analyses.
 #[test]
 fn build_side_queries() {
     let str_id = "str".to_string();
@@ -580,7 +581,7 @@ fn build_side_queries() {
     let renamed = EnumVariant::<String>::new("Alpha", VariantDetails::Unit).with_rename("alpha");
     assert_eq!(renamed.json_name(), "alpha");
 
-    // all_unit_variants: nonempty, tagged, all-unit enums only.
+    // all_tagged_unit_variants: nonempty, tagged, all-unit enums only.
     let simple = Enum::<String>::new()
         .name("E")
         .tag_type(EnumTagType::External)

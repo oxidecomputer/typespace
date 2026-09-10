@@ -18,7 +18,7 @@ mod snapshot;
 ///
 /// The annotated function is replaced by an inline block that:
 /// 1. Evaluates the expression, pretty-prints it, and compares against
-///    the snapshot file; updates + panics if different.
+///    the snapshot file; rewrites the file and panics if the two differ.
 /// 2. Embeds the snapshot file content as `mod import { ... }` (read at
 ///    macro expansion time).
 /// 3. Runs the original function body.
@@ -26,7 +26,7 @@ mod snapshot;
 /// The annotated function must have no parameters.
 ///
 /// Setting `TYPESPACE_SNAPSHOT_NO_INCLUDE` to any non-empty value skips
-/// step 2 and 3: the expression is evaluated and written to the snapshot
+/// steps 2 and 3: the expression is evaluated and written to the snapshot
 /// file as usual, but nothing is embedded and the function body is
 /// dropped, then the macro panics telling you to re-run. This is the
 /// escape hatch for when a previous run wrote a snapshot that does not
@@ -99,7 +99,7 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// | `struct N(Ty);`                      | `NewtypeStruct`            |
 /// | `#[tuple] struct N(Ty);`             | one-field `TupleStruct`    |
 /// | `struct N(Ty, Ty, ..);`              | `TupleStruct`              |
-/// | `struct N(Ty, .., #[flatten] Ty);`   | `TupleStruct` with `rest`) |
+/// | `struct N(Ty, .., #[flatten] Ty);`   | `TupleStruct` with `rest`  |
 /// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`       |
 /// | `enum N { .. }`                      | `Enum`                     |
 /// | `type N = Ty;`                       | `TypeAlias`                |
@@ -116,7 +116,7 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// output: `V(Ty)` converts from `Ty`, while `#[tuple] V(Ty)` renders
 /// as `V(Ty,)` and converts from `(Ty,)`. The marker carries the
 /// distinction because the syntax cannot: a trailing comma is
-/// insignificant to Rust, and rustfmt removes it from a parenthesised
+/// insignificant to Rust, and rustfmt removes it from a parenthesized
 /// macro invocation whose body parses.
 ///
 /// # Types
@@ -143,11 +143,11 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Non-Rust vocabulary for optionality and nullability:
 ///
-/// | Syntax                 | Where           | Meaning              |
-/// |------------------------|-----------------|-----------------------|
-/// | `Optional<T>`          | field top level | may be omitted        |
-/// | `Nullable<T>`          | anywhere        | may be `T` or `null`  |
-/// | `OptionalNullable<T>`  | field top level | omitted or `null`     |
+/// | Syntax                | Where           | Meaning              |
+/// |-----------------------|-----------------|----------------------|
+/// | `Optional<T>`         | field top level | may be omitted       |
+/// | `Nullable<T>`         | anywhere        | may be `T` or `null` |
+/// | `OptionalNullable<T>` | field top level | omitted or `null`    |
 ///
 /// `Option<T>`, and the bare (argument-less) forms `Optional`,
 /// `Nullable`, and `OptionalNullable`, are compile errors--each names
@@ -230,8 +230,8 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Tuple struct field `#[flatten]`: `.rest()`, splicing the sequence into
 ///   the containing tuple type.
 /// - Variant or tuple struct `#[tuple]`: keeps a single-type payload
-///   from collapsing into the newtype form. Valid only at that arity,
-///   since every other arity is already a tuple.
+///   from collapsing into the newtype form. Valid only on a payload of
+///   one type, since any other number of types is already a tuple.
 /// - `///` on a struct, an enum, or a type alias: `.description(...)`.
 ///   On a field or an enum variant: `.with_description(...)`. Not
 ///   valid on a `native` item, which has no description slot, or on
@@ -250,14 +250,14 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// followed by `///` and `/// Has a name.` becomes
 /// `"A widget.\n\nHas a name."`.
 ///
-/// `#[derive]` and `#[attr]` are valid on every named type: any `struct` ,
-/// `enum`, or `type` alias. Each takes a nonempty list of string. These are in
+/// `#[derive]` and `#[attr]` are valid on every named type: any `struct`,
+/// `enum`, or `type` alias. Each takes a nonempty list of strings. These are in
 /// addition to the builder-wide `Settings::with_derive` and
 /// `Settings::with_attr`. Nothing validates them.
 ///
 /// An attribute used somewhere other than the list above--an unknown
-/// name, or a real one in the wrong place (`#[untagged]` on a struct) --
-/// is a compile error naming the mistake, as is repeating one.
+/// name, or a real one in the wrong place (`#[untagged]` on a struct)--is
+/// a compile error naming the mistake, as is repeating one.
 ///
 /// `V` is JSON-ish: objects (`{ k: v, .. }`, unquoted-ident or
 /// string-literal keys), arrays, strings, numbers,

@@ -17,14 +17,14 @@ use syn::{
 /// and the macro wrote a fresh one.
 const MISSING_FILE_MESSAGE: &str = "snapshot file created, run tests again";
 
-/// Text rust-analyzer splices into the source at the cursor position
-/// when it computes completions: it reparses the edited source with
+/// The marker rust-analyzer splices into the source at the cursor
+/// position when it computes completions: it reparses the edited source with
 /// the marker inserted and re-expands proc macros so it can see what
 /// is available at that point. While someone is typing the filename
 /// argument of `check_and_include`, this fires on every keystroke,
 /// so `filename_str` momentarily contains a nonsense partial path with
-/// this marker embedded in it. A real `cargo build` never inserts this
-/// text anywhere, so seeing it here means we are being asked for
+/// this marker embedded in it. A real `cargo build` never inserts the
+/// marker anywhere, so seeing it here means we are being asked for
 /// completions, not compiling for real.
 const RA_COMPLETION_MARKER: &str = "raCompletionMarker";
 
@@ -211,7 +211,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     // See `RA_COMPLETION_MARKER`: rust-analyzer re-expands this macro on
     // every keystroke while the filename argument is being typed, with
     // the marker embedded in `filename_str` at the cursor position. We
-    // skip silently -- no `compile_error!` -- rather than flooding the
+    // skip silently--no `compile_error!`--rather than flooding the
     // editor with an error on every keystroke; this can never occur in
     // a real cargo build, so nothing is lost. Checked first, before any
     // of the path guards below, so a marker-bearing path never reaches
@@ -341,9 +341,9 @@ mod tests {
 
     #[test]
     fn test_expansion_ra_completion_stub() {
-        // Not an expectorate golden: this pins the invariants that
+        // Not an expectorate fixture: this pins the invariants that
         // matter (it parses, and it never mentions the snapshot path
-        // or `include_str!`) rather than the exact rendered text, so
+        // or `include_str!`) rather than the exact rendered output, so
         // there is no fixture file for this test to write.
         let expanded = expand_ra_completion_stub();
         let wrapped: syn::File = parse_quote! { fn wrapper() { #expanded } };
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_snapshot_path_accepts_call_site_shape() {
+    fn test_validate_snapshot_path_accepts_call_site_paths() {
         assert!(validate_snapshot_path("tests/output/my_test.rs").is_ok());
         assert!(validate_snapshot_path("tests/output/nested/dir/my_test.rs").is_ok());
     }
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_validate_snapshot_path_rejects_empty_stem() {
-        // This is the shape that a mid-edit path like
+        // This is the form that a mid-edit path like
         // `tests/output/.rs` produces: a directory but no file name.
         let err = validate_snapshot_path("tests/output/.rs").unwrap_err();
         assert!(err.contains("no file name before"), "{err}");

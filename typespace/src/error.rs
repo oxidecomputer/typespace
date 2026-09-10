@@ -22,7 +22,7 @@ where
         type_id: Id,
     },
 
-    /// A shape reached `build()` without a name.
+    /// A type reached `build()` without a name.
     ///
     /// Every named type (struct, enum, newtype struct, unit struct,
     /// tuple struct, or type alias) must have a name before `build()`
@@ -193,8 +193,8 @@ where
     /// have a Never type as its payload.
     ///
     /// Each of these wrappers is transparent on the wire, so a `Never` wrapped
-    /// in one is wire-identical to a bare `Never` property, so typespace
-    /// rejects the construction rather than handling it.
+    /// in one is wire-identical to a bare `Never` property; typespace
+    /// rejects these redundant constructions rather than handling them.
     #[error(
         "the {wrapper} with id `{type_id}` wraps `Type::Never`, which \
          adds no meaning over `Type::Never` alone"
@@ -248,7 +248,7 @@ where
     /// generation itself. Anonymous types may form cycles such that generating
     /// the code to represent them would be infinitely recursive.
     ///
-    /// `type_id` and `child_id` are one edge of the offending cycle:
+    /// `type_id` and `child_id` form one edge of the offending cycle:
     /// `type_id` refers to `child_id`, and `child_id` is reachable from
     /// itself through anonymous types only.
     #[error(
@@ -295,16 +295,14 @@ where
         kind: &'static str,
     },
 
-    /// A default value does not fit the type it is attached to.
-    // TODO 9/4/2026
-    // fix this up
+    /// A default value is not valid for the type it is attached to.
     #[error("the value `{value}` does not fit the type `{id}`: {reason}")]
     InvalidDefault {
-        /// The value that does not fit the type.
+        /// The invalid value.
         value: serde_json::Value,
-        /// The type the value does not fit.
+        /// The incompatible type.
         id: Id,
-        /// How the value fails to fit.
+        /// Details on the incompatibility.
         reason: String,
     },
 }

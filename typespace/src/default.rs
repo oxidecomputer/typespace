@@ -330,7 +330,7 @@ where
 
     /// Render one of `Option`'s variants.
     ///
-    /// `Some` and `None` are in the prelude, so the unqualified spelling
+    /// `Some` and `None` are in the prelude, so the unqualified form
     /// names the variant on its own.
     fn render_option_variant(&self, id: &Id, variant: &str) -> TokenStream {
         let variant = format_ident!("{}", variant);

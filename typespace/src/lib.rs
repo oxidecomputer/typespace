@@ -11,10 +11,9 @@
 //!
 //! # Dependencies of generated code
 //!
-//! Rendered code can reference crates that typespace itself does not
-//! depend on. Cargo cannot surface these requirements; the crate that
-//! contains the generated code must declare them. Which crates are
-//! needed depends on the constructs in the output:
+//! Rendered code can reference crates that typespace itself does not depend
+//! on. Crates containing generating code must declare them as dependencies.
+//! Which crates are needed depends on the constructs in the output:
 //!
 //! - [serde](https://crates.io/crates/serde), with the `derive`
 //!   feature: required by every generated struct, enum, newtype
@@ -31,6 +30,15 @@
 //!   function calls `::serde_json::from_str`), or a
 //!   [`build::UnitStruct`] (its `Deserialize` impl compares input
 //!   against the fixed JSON representation).
+//! - [regress](https://crates.io/crates/regress): required if the
+//!   output contains a [`build::NewtypeStruct`] whose
+//!   [`build::NewtypeConstraints::String`] carries a pattern. Each
+//!   pattern renders a `::regress::Regex` in a `LazyLock`, checked on
+//!   conversion.
+//! - [jsonschema](https://crates.io/crates/jsonschema): required if
+//!   the output contains a [`build::NewtypeStruct`] whose
+//!   [`build::NewtypeConstraints::JsonSchema`] carries a schema. The
+//!   conversion validates the value against that schema.
 //! - [json-serde](https://crates.io/crates/json-serde): required if
 //!   the output contains any of:
 //!   - a property with [`build::StructPropertyState::Optional`] whose
@@ -50,20 +58,14 @@
 //!     null, or a type value, specified with
 //!     [`settings::OptionalNullable::CustomType`].
 //!
-//!   `Absent` is emitted whatever the trait set holds; the rest ride on
-//!   serde attributes and impls, so settings that require neither serde
-//!   trait leave them out.
+//!   `Absent` is emitted (as needed) independent of what the trait set holds.
+//!   The rest are only used for `serde::Deserialize` and `serde::Serialize`.
 //!
-//! Generated code also reproduces, verbatim, every type path the
-//! consumer supplies: the `name` of a [`build::Native`] (a converter
-//! might inject `uuid::Uuid` or `chrono` types for string formats or
-//! `x-rust-type` extensions, as typify does) and the wrapper named by
-//! [`settings::OptionalNullable::CustomType`]. The crates
-//! behind those paths are dependencies chosen by the consumer that
-//! builds the typespace, not by typespace, and the consumer should
-//! document them the way typify documents `uuid`, `chrono`, and
-//! `regress`. typespace itself emits no reference to `regress`; that
-//! changes when constraint validation rendering lands.
+//! Generated code also reproduces, verbatim, every type path the consumer
+//! supplies: the `name` of a [`build::Native`]. For example, a converter might
+//! inject `uuid::Uuid` or `chrono` types. The crates behind those paths are
+//! dependencies chosen by the consumer that builds the typespace, not by
+//! typespace, and the consumer should document them.
 
 pub mod build;
 pub(crate) mod cycles;
@@ -131,13 +133,13 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// A trait that typespace tracks for generated and native types.
 ///
 /// Uses of a type impose trait requirements that
-/// [`TypespaceBuilder::finalize`] propagates through the graph: a type
-/// used as a map key must implement `Eq`, `PartialEq`, `Ord`, and
-/// `PartialOrd`, and so must every type it contains. Generated types
-/// absorb propagated requirements and emit the corresponding derives;
-/// a [`build::Native`] type must already declare the required traits
-/// among its `impls`, or leave them unknown. A requirement that a type
-/// cannot satisfy--`Ord` on a float, say--is an [`error::Error`].
+/// [`TypespaceBuilder::finalize`] propagates: a type used as a map key must
+/// implement `Eq`, `PartialEq`, `Ord`, and `PartialOrd` (and so must every
+/// type it contains). Generated types absorb propagated requirements and emit
+/// the corresponding derives; a [`build::Native`] type must already declare
+/// the required traits among its `impls` (or leave them unknown). A
+/// requirement that a type cannot satisfy--`Ord` on a float, say--produces an
+/// error.
 
 // TODO 9/3/2026
 // The order of these turns out to be the output order; that's probably wrong
@@ -512,8 +514,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Verify that no two named types share a name.
     ///
-    /// Names come from the consumer, which owns collision-free naming;
-    /// this backstops converter naming bugs. typespace never renames.
+    /// Names come from the consumer, which is responsible for collision-free
+    /// naming.
     fn check_type_names(&self) -> Result<(), Error<Id>> {
         let mut names = BTreeMap::<&str, &Id>::new();
         for (type_id, typ) in &self.types {
@@ -570,15 +572,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// declaration must satisfy, judged without reference to any other
     /// type.
     ///
-    /// This is the pass the Never-position and flatten rules both
-    /// belong to, per the direction that finalize wants general type
-    /// validation rather than a bespoke check per rule. It holds one
-    /// rule. Two more belong here as they land:
+    /// It holds one rule, that a struct cannot both deny unknown
+    /// fields and flatten a property. Two more belong here:
     ///
     /// - a flattened property's type must be an object, which is what
     ///   makes flattening meaningful at all;
-    /// - the Never-position rules in `check_never_positions`, which are
-    ///   per-type in exactly this sense.
+    /// - the Never-position rules, which `check_never_positions` holds
+    ///   separately though they are per-type in exactly this sense.
     ///
     /// Add rules here rather than as new `check_*` methods.
     fn check_type_structure(&self) -> Result<(), Error<Id>> {

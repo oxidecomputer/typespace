@@ -1,5 +1,7 @@
 // Copyright 2026 Oxide Computer Company
 
+//! Rendering tests for a variety of constructions.
+
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::build::{
@@ -1300,8 +1302,8 @@ fn test_fieldless_tuple_struct() {
 //
 // `build()` rejects a fieldless tuple struct before it can be
 // inserted at all, regardless of what its rest resolves to, so this
-// path can no longer be constructed through the builder API well
-// enough to reach `finalize()`, let alone overflow.
+// path cannot be constructed through the builder API well enough to
+// reach `finalize()`, let alone overflow.
 #[test]
 fn test_fieldless_tuple_struct_self_reference_would_have_overflowed() {
     // A tuple struct whose rest is itself.
@@ -1510,7 +1512,7 @@ fn test_named_cycle_finalizes() {
 }
 
 /// We check for containment cycles before checking for representation cycles,
-/// but insertion of a Box only changes the cardinality of an existing cycle.
+/// but insertion of a Box only makes an existing cycle longer.
 #[test]
 fn test_anonymous_cycle_after_boxing_rejected() {
     let mut builder = TypespaceBuilder::default();
@@ -3426,8 +3428,8 @@ fn test_default_impl_from_property_value() {
 }
 
 /// A property default value across every kind the walk in `default.rs`
-/// currently handles: native, JSON value, float, newtype, type alias,
-/// `NonZero` integer, and option.
+/// handles: native, JSON value, float, newtype, type alias, `NonZero`
+/// integer, and option.
 ///
 /// `test_default_impl_from_property_value` above already covers a
 /// plain integer; this rounds out the rest from the property side.
@@ -4170,9 +4172,9 @@ fn test_default_value_configured_containers() {
 }
 
 /// A map's key type need not be `String`: a JSON object key is always
-/// text, but that text is wrapped and walked as a value of the key
-/// type, whatever it is, exactly as `Map`'s reference implementation
-/// does.
+/// a string, but that string is wrapped and walked as a value of the
+/// key type, whatever it is, exactly as `Map`'s reference
+/// implementation does.
 #[test]
 fn test_default_value_map_key_type() {
     let builder = typespace_builder!(default_settings(), {
@@ -4238,7 +4240,7 @@ fn test_default_value_tuple_struct_kinds() {
 }
 
 /// A property default value across the enum tag/payload combinations
-/// the walk now handles: external, internal, and adjacent tagging with
+/// the walk handles: external, internal, and adjacent tagging with
 /// a newtype-, tuple-, or struct-shaped payload, and untagged picking
 /// between a newtype- and a tuple-shaped variant.
 #[test]
@@ -5274,7 +5276,7 @@ fn untagged_enum_over_string_newtypes_loses_from_str() {
         assert!(!traits.contains(&TypespaceTrait::FromStr));
 
         // Each newtype keeps the irrefutable FromStr of its own that
-        // costs the enum its FromStr.
+        // denies the enum its FromStr.
         assert_eq!("#/x".parse::<Reference>().unwrap().0, "#/x");
         assert_eq!("plain".parse::<Literal>().unwrap().0, "plain");
 

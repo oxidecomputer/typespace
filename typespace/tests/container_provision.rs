@@ -84,8 +84,8 @@ fn claimed(declaration: &ContainerType) -> (TypespaceTraitSet, TypespaceTraitSet
 
 // `u32` has every trait typespace tracks, `Copy` included, which is
 // what makes it the parameter the propagation matrix reaches for when
-// it wants one that blocks nothing; `String` no longer qualifies once
-// `Copy` is tracked, since an owned heap buffer can never be `Copy`.
+// it wants one that blocks nothing; `String` does not qualify, since an
+// owned heap buffer can never be `Copy`.
 // Asking the probes about it also states that a probe exists per
 // trait: a trait added to the vocabulary without one would leave a
 // hole here rather than quietly narrowing every check below.
@@ -176,7 +176,7 @@ fn vec_matches_std() {
 // Option and Box are not consumer-configurable: their answers live in
 // trait_resolution's own arms, and nothing installs a declaration for
 // them. Stating those answers in the declaration vocabulary anyway lets
-// the same checks drive them -- neither has Display or FromStr, Option
+// the same checks drive them--neither has Display or FromStr, Option
 // has Default whatever it holds, Option forwards Copy but Box never has
 // it (a box heap-allocates), and everything else follows the parameter.
 fn option_rules() -> ContainerType {
@@ -316,9 +316,9 @@ impl Position {
 /// What stands in one of the container's parameter positions.
 #[derive(Debug, Clone, Copy)]
 enum Parameter {
-    /// An integer, which has every trait typespace tracks -- `Copy`
-    /// included -- and so blocks nothing. `String` no longer serves
-    /// here: it cannot be `Copy`.
+    /// An integer, which has every trait typespace tracks--`Copy`
+    /// included--and so blocks nothing. `String` does not serve here:
+    /// it cannot be `Copy`.
     Everything,
     /// A native declaring every trait but one.
     AllBut(TypespaceTrait),
@@ -850,7 +850,7 @@ fn vec_element_obligation_is_imposed() {
 // supertraits it rests on, so a container re-closes what it forwards.
 #[test]
 fn a_forwarded_set_stays_closed() {
-    // The set demands the Ord family of its element, the map. The map
+    // The set demands the ordering traits of its element, the map. The map
     // claims PartialEq unconditionally, so PartialEq is not forwarded,
     // and without the re-closure the map's value would absorb Eq, Ord,
     // and PartialOrd with no PartialEq and derive code that does not
@@ -932,7 +932,7 @@ fn comparison_settings() -> Settings {
 }
 
 // The ordered containers provide every comparison trait, so the derives
-// land, and the snapshot -- which is compiled and run -- says they were
+// land, and the snapshot--which is compiled and run--says they were
 // derives the containers could carry.
 #[test]
 fn ordered_containers_render_what_they_provide() {

@@ -95,10 +95,10 @@ fn a_declaration_answers_every_trait() {
     assert_eq!(provisions(&ContainerType::hash_set()), expected);
 }
 
-// The hash and ordered families differ in exactly the traits std's hash
-// containers have no impl for, and in what they demand of the key.
+// The hash and the ordered presets differ in exactly the traits std's
+// hash containers have no impl for, and in what they demand of the key.
 #[test]
-fn the_families_differ_where_std_differs() {
+fn the_presets_differ_where_std_differs() {
     let btree = ContainerType::btree_map();
     let hash = ContainerType::hash_map();
 
@@ -121,9 +121,9 @@ fn the_families_differ_where_std_differs() {
     assert_eq!(hash.obligation(0), &hash_lookup());
 }
 
-// A container outside the std families states the whole truth: an
-// obligation the family preset does not carry, one on the value
-// position, and a per-trait answer that departs from the preset.
+// A container outside the std presets states the whole truth: an
+// obligation the preset does not carry, one on the value position, and
+// a per-trait answer that departs from the preset.
 #[test]
 fn an_exotic_map_declaration_reads_back_as_written() {
     let settings = Settings::minimal().with_map_type(
@@ -222,10 +222,10 @@ fn a_vec_states_an_element_obligation() {
     );
 }
 
-// A preset at another path declares the same behavior as the family it
+// A preset at another path declares the same behavior as the preset it
 // came from: the path is what changed.
 #[test]
-fn a_preset_at_another_path_keeps_the_family_behavior() {
+fn a_preset_at_another_path_keeps_its_behavior() {
     let settings =
         Settings::minimal().with_map_type(ContainerType::hash_map().with_path("CustomMap"));
 
@@ -236,7 +236,7 @@ fn a_preset_at_another_path_keeps_the_family_behavior() {
     );
 }
 
-// A container that belongs to no family claims only what rendering
+// A container that matches no preset claims only what rendering
 // assumes of any container, so a requirement it could in fact satisfy
 // is a conflict rather than generated code that does not compile.
 #[test]
@@ -257,7 +257,7 @@ fn an_opaque_container_claims_only_the_rendering_baseline() {
     }
 }
 
-// A declaration in settings data names the family it behaves as and
+// A declaration in settings data names the preset it behaves as and
 // lists what differs from it.
 #[test]
 fn declarations_deserialize_from_settings_data() {
@@ -289,7 +289,7 @@ fn declarations_deserialize_from_settings_data() {
 
     assert_eq!(settings.set_type(), &ContainerType::btree_set());
 
-    // No family named: the container states its own path and
+    // No preset named: the container states its own path and
     // obligations, and claims only the rendering baseline.
     assert_eq!(
         settings.vec_type(),
@@ -301,7 +301,7 @@ fn declarations_deserialize_from_settings_data() {
     );
 }
 
-// A declaration in settings data states a family or states its own path
+// A declaration in settings data states a preset or states its own path
 // and obligations, and cannot carry a key the declaration has no place
 // for.
 #[test]
@@ -331,8 +331,7 @@ fn a_deserialized_declaration_is_whole() {
 
 // A declaration states what the container demands of each parameter the
 // position renders, so a one-parameter declaration configured as the
-// map type is rejected--silently wrong before the obligations became a
-// list.
+// map type is rejected rather than silently misapplied.
 #[test]
 fn cardinality_mismatch_is_rejected_at_finalization() {
     let settings = Settings::minimal()

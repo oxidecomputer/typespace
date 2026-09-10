@@ -802,7 +802,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     }
 }
 
-/// The serde tagging scheme an enum serializes under.
+/// The serde tagging scheme; see [the serde
+/// docs](https://serde.rs/enum-representations.html).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnumTagType {
     /// serde external tagging (serde's default).
@@ -867,11 +868,10 @@ pub struct EnumVariant<Id> {
 }
 
 impl<Id> EnumVariant<Id> {
-    /// Create an enum variant named `rust_name` carrying the given
-    /// associated data.
+    /// Create an enum variant named `rust_name`.
     ///
-    /// The variant serializes under its Rust name and has no
-    /// description; adjust with the `with_` methods.
+    /// The variant serializes under its Rust name; adjust with the `with_`
+    /// methods.
     pub fn new(rust_name: impl Into<String>, details: VariantDetails<Id>) -> Self {
         Self {
             rust_name: rust_name.into(),
@@ -948,7 +948,10 @@ pub enum VariantDetails<Id> {
     Unit,
     /// A variant with one unnamed value of the given type.
     Item(Id),
-    /// A variant with several unnamed values of the given types.
+    /// A variant with tuple fields.
+    ///
+    /// There must be more than one to avoid confusion with the `Item`
+    /// variant.
     Tuple(Vec<Id>),
     /// A variant with named fields.
     Struct(Vec<StructProperty<Id>>),

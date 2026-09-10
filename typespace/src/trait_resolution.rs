@@ -1,17 +1,17 @@
 // Copyright 2026 Oxide Computer Company
 
-//! Trait resolution: settle the trait set of every type.
+//! Trait resolution: determine the trait set for every type.
 //!
-//! Runs during finalization in two phases. Phase 1 resolves required
-//! traits: requirements (from settings and from use sites such as map
-//! keys and set elements) descend the type graph, each named type
-//! absorbs what it can satisfy, and every unsatisfiable requirement is
-//! collected into a [`TraitConflict`](crate::error::TraitConflict) that
-//! records the requirement's origin and the containment path to the
-//! offending type. Phase 2 resolves desired traits: each named type
-//! takes a desired trait exactly when it can realize it and every type
-//! it depends on has it; unsatisfiable desired traits are dropped
-//! silently. The resulting per-type trait set is authoritative: query
+//! Runs during finalization in two phases. Phase 1 resolves required traits:
+//! requirements (from settings and from use sites such as map keys and set
+//! elements) descend the type graph, each named type absorbs what it can
+//! satisfy, and every unsatisfiable requirement is collected into a
+//! [`TraitConflict`](crate::error::TraitConflict) that records the
+//! requirement's origin and the containment path to the offending type (and
+//! fails). Phase 2 resolves desired traits: each named type takes a desired
+//! trait exactly when it can realize it and every type it depends on has it;
+//! unsatisfiable desired traits are dropped silently (it's a desire, not a
+//! constraint). The resulting per-type trait set is authoritative: query
 //! answers and rendered derives both read it.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1380,9 +1380,8 @@ pub(crate) fn unnamed_provides<Id>(
         // answer for would emit a derive nobody asked for.
         Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
 
-        // Pass the buck, minus Display and FromStr, which an Option
-        // never has... except for Default, which Option<T> implements
-        // no matter what T is.
+        // Pass the buck, minus Display and FromStr, which an Option<T> never
+        // implements, and Default, which Option<T> always implements.
         Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
         // Box is never Copy, whatever it holds; every other trait
         // follows the boxed type.
@@ -1556,7 +1555,7 @@ where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
     // Every member of the request closure has to be evaluated, whether
-    // or not it was desired directly, since a family survives only if
+    // or not it was desired directly, since a closure survives only if
     // all of it does.
     let desired = close_supertraits(settings.desired_traits.clone());
     if desired.is_empty() {
@@ -1566,9 +1565,9 @@ where
     // Each desired trait paired with the supertraits its request
     // closure adds. A closure member is not desired on its own
     // account--it is there so that a granted derive compiles--so a
-    // family is granted or dropped whole: a type that cannot have Eq
+    // closure is granted or dropped whole: a type that cannot have Eq
     // has no use for the PartialEq that Eq's closure asked for.
-    let families = settings
+    let closures = settings
         .desired_traits
         .iter()
         .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
@@ -1628,17 +1627,17 @@ where
     }
 
     // A named type's built set is what required resolution absorbed
-    // plus the desired families that survived whole.
+    // plus the desired request closures that survived whole.
     for (type_id, ty) in types.iter_mut() {
         if let Some(common) = ty.common_mut() {
             let survivors = state.has.remove(type_id).unwrap();
             let built = common.built.as_mut().unwrap();
-            for family in &families {
-                if family
+            for closure in &closures {
+                if closure
                     .iter()
                     .all(|trait_name| survivors.contains(trait_name))
                 {
-                    for trait_name in family.iter() {
+                    for trait_name in closure.iter() {
                         built.traits.add(*trait_name);
                     }
                 }
@@ -2020,8 +2019,8 @@ mod tests {
     }
 
     /// A trait an Option genuinely provides still passes through to the
-    /// element and is satisfied there: the default set-element traits
-    /// (the Ord family) reach Color through the Option and land on it.
+    /// element and is satisfied there: the default set-element traits reach
+    /// Color through the Option and land on it.
     #[test]
     fn option_forwards_supported_trait_to_element() {
         let builder = typespace_builder!(Settings::minimal(), {
@@ -2145,7 +2144,7 @@ mod tests {
     }
 
     /// Requiring a trait requires its supertraits: Ord alone expands
-    /// to the full comparison family, or the emitted derive would not
+    /// to every comparison trait, or the emitted derive would not
     /// compile.
     #[test]
     fn supertrait_closure_expands_ord() {
@@ -2271,7 +2270,7 @@ mod tests {
         );
     }
 
-    /// Desiring `Ord` alone desires the whole comparison family: the
+    /// Desiring `Ord` alone desires every comparison trait: the
     /// supertrait closure runs over the desired demand set as well, or
     /// a granted `Ord` would render a derive that does not compile.
     #[test]
@@ -2393,10 +2392,10 @@ mod tests {
 
     /// A container whose parameter blocks a desired trait blocks it for
     /// the type holding the container: an `f64` element, an `f64` map
-    /// value, and an `f64` inside an `Option` each cost `Eq` while
+    /// value, and an `f64` inside an `Option` each deny `Eq` while
     /// leaving `Clone` alone. A set is absent here because a set
     /// element that cannot be `Eq` is a phase-1 conflict (the default
-    /// set element requirements are the `Ord` family), so the blocked
+    /// set element requirements are the ordering traits), so the blocked
     /// set case is pinned by `desired_blocked_by_set_element` instead.
     #[test]
     fn desired_blocked_by_container_parameter() {
@@ -2432,7 +2431,7 @@ mod tests {
     /// point: stripping is per trait, not a blanket rejection of the
     /// type.
     #[test]
-    fn float_field_strips_ordering_family_keeps_rest() {
+    fn float_field_strips_ordering_traits_keeps_rest() {
         let builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
@@ -2472,7 +2471,7 @@ mod tests {
     /// `PartialOrd` strips `Ord` a second way; `Eq` and `Hash` survive
     /// because the value really does implement them.
     #[test]
-    fn json_value_field_strips_ordering_family() {
+    fn json_value_field_strips_ordering_traits() {
         let builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
@@ -2632,7 +2631,7 @@ mod tests {
     }
 
     /// Optimism on a cycle is not credulity: one `f64` anywhere in the
-    /// cycle costs `Eq` for every member of it, including the member
+    /// cycle denies `Eq` to every member of it, including the member
     /// that holds no float itself. `A` reaches the float only by going
     /// around the cycle, so a strip that stopped at the type nearest
     /// the blocker would leave `A` wrongly holding `Eq`.
@@ -2798,7 +2797,7 @@ mod tests {
         );
     }
 
-    /// An optional property the default value leaves out costs
+    /// An optional property the default value leaves out denies
     /// nothing: it renders as an `Option`, whose `Default` is `None`
     /// whatever the property's own type is. `S` keeps `Default` even
     /// though the omitted property's `Color` cannot implement it.
@@ -2894,7 +2893,7 @@ mod tests {
     /// `Ord` everywhere reaches a native that declares only `Clone` and
     /// `Debug`; the native is not in conflict, finalization succeeds,
     /// and the struct holding it simply goes without the comparison
-    /// family. A required `Ord` in the same graph would be
+    /// traits. A required `Ord` in the same graph would be
     /// `OffenderReason::NativeMissingImpl`.
     #[test]
     fn desired_imposes_no_requirement_on_native() {
@@ -2936,9 +2935,9 @@ mod tests {
     }
 
     /// A required trait a native's declaration cannot answer for
-    /// passes. The native is asked for the `Ord` family and leaves all
-    /// four unknown, so nothing conflicts and the struct holding it
-    /// derives the family.
+    /// passes. The native is asked for the ordering traits and leaves
+    /// all four unknown, so nothing conflicts and the struct holding it
+    /// derives them.
     #[test]
     fn required_trait_passes_native_unknown() {
         let builder = typespace_builder!(
@@ -3081,9 +3080,9 @@ mod tests {
         ));
     }
 
-    /// A set element that cannot realize a desired trait costs the
+    /// A set element that cannot realize a desired trait denies the
     /// holder that trait and nothing else. The native declares the
-    /// `Ord` family the default set element requirements demand, so
+    /// ordering traits the default set element requirements demand, so
     /// phase 1 is satisfied, and it declares no `Hash`, so the desired
     /// `Hash` is dropped.
     #[test]
@@ -3294,9 +3293,9 @@ mod tests {
         assert_eq!(built_traits(&typespace, "Outer"), expected);
     }
 
-    /// A required trait outlives a desired strip in the same family.
+    /// A required trait outlives a desired strip in the same closure.
     #[test]
-    fn required_trait_survives_desired_strip_in_same_family() {
+    fn required_trait_survives_desired_strip_in_same_closure() {
         let mut builder = typespace_builder!(
             Settings::minimal()
                 .with_required_trait(TypespaceTrait::Eq)
@@ -3575,9 +3574,9 @@ mod tests {
         );
     }
 
-    /// A container forwards one trait of a family without the rest.
+    /// A container forwards one trait of a closure without the rest.
     #[test]
-    fn desired_partial_family_survives_float_in_vec() {
+    fn desired_partial_closure_survives_float_in_vec() {
         let builder = typespace_builder!(
             minimal_with_desired([TypespaceTrait::PartialEq, TypespaceTrait::Eq]),
             {
@@ -3996,7 +3995,7 @@ mod tests {
         assert_eq!(built_traits(&typespace, "B"), only_clone);
     }
 
-    /// One blocker in a three-member cycle costs all three.
+    /// One blocker in a three-member cycle denies all three.
     #[test]
     fn three_member_cycle_strips_every_member() {
         let builder = typespace_builder!(
