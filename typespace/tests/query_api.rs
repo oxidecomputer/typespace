@@ -2,7 +2,7 @@
 
 use quote::quote;
 use typespace::{
-    TypeSpaceImpl, TypespaceBuilder,
+    TypespaceBuilder, TypespaceTrait,
     build::{
         Enum, EnumTagType, EnumVariant, NewtypeStruct, Struct, StructProperty, TupleStruct, Type,
         TypeAlias, UnitStruct, VariantDetails,
@@ -252,8 +252,8 @@ fn parameter_idents_borrow_by_rule() {
 fn has_impl_false_for_plain_types() {
     let ts = make_typespace();
     let ti = ts.get_type(&"MyStruct".to_string());
-    assert!(!ti.has_impl(TypeSpaceImpl::Display));
-    assert!(!ti.has_impl(TypeSpaceImpl::FromStr));
+    assert!(!ti.has_impl(TypespaceTrait::Display));
+    assert!(!ti.has_impl(TypespaceTrait::FromStr));
 }
 
 /// Built-in types answer `has_impl` from what generated code really
@@ -275,22 +275,22 @@ fn has_impl_answers_for_builtins() {
     for id in ["String", "u32", "bool"] {
         let ti = ts.get_type(&id.to_string());
         for impl_name in [
-            TypeSpaceImpl::Display,
-            TypeSpaceImpl::FromStr,
-            TypeSpaceImpl::Eq,
-            TypeSpaceImpl::Ord,
-            TypeSpaceImpl::Hash,
+            TypespaceTrait::Display,
+            TypespaceTrait::FromStr,
+            TypespaceTrait::Eq,
+            TypespaceTrait::Ord,
+            TypespaceTrait::Hash,
         ] {
             assert!(ti.has_impl(impl_name), "{id} lacks {impl_name:?}");
         }
     }
 
     let ratio = ts.get_type(&"f64".to_string());
-    assert!(ratio.has_impl(TypeSpaceImpl::Display));
-    assert!(ratio.has_impl(TypeSpaceImpl::FromStr));
-    assert!(!ratio.has_impl(TypeSpaceImpl::Eq));
-    assert!(!ratio.has_impl(TypeSpaceImpl::Ord));
-    assert!(!ratio.has_impl(TypeSpaceImpl::Hash));
+    assert!(ratio.has_impl(TypespaceTrait::Display));
+    assert!(ratio.has_impl(TypespaceTrait::FromStr));
+    assert!(!ratio.has_impl(TypespaceTrait::Eq));
+    assert!(!ratio.has_impl(TypespaceTrait::Ord));
+    assert!(!ratio.has_impl(TypespaceTrait::Hash));
 }
 
 /// Containers answer `has_impl` from their children and the declared
@@ -320,10 +320,14 @@ fn has_impl_answers_for_containers() {
 
     for field in ["items", "label", "counts"] {
         let ty = ts.get_type(type_ids.get(field).unwrap());
-        for impl_name in [TypeSpaceImpl::Eq, TypeSpaceImpl::Ord, TypeSpaceImpl::Hash] {
+        for impl_name in [
+            TypespaceTrait::Eq,
+            TypespaceTrait::Ord,
+            TypespaceTrait::Hash,
+        ] {
             assert!(ty.has_impl(impl_name), "{field} lacks {impl_name:?}");
         }
-        for impl_name in [TypeSpaceImpl::Display, TypeSpaceImpl::FromStr] {
+        for impl_name in [TypespaceTrait::Display, TypespaceTrait::FromStr] {
             assert!(
                 !ty.has_impl(impl_name),
                 "{field} unexpectedly has {impl_name:?}"
@@ -333,11 +337,11 @@ fn has_impl_answers_for_containers() {
 
     let ratio = ts.get_type(type_ids.get("ratio").unwrap());
     for impl_name in [
-        TypeSpaceImpl::Display,
-        TypeSpaceImpl::FromStr,
-        TypeSpaceImpl::Eq,
-        TypeSpaceImpl::Ord,
-        TypeSpaceImpl::Hash,
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+        TypespaceTrait::Eq,
+        TypespaceTrait::Ord,
+        TypespaceTrait::Hash,
     ] {
         assert!(
             !ratio.has_impl(impl_name),
@@ -358,11 +362,11 @@ fn has_impl_forwards_an_alias_to_its_target() {
 
     let named = ts.get_type(&"Named".to_string());
     for impl_name in [
-        TypeSpaceImpl::Display,
-        TypeSpaceImpl::FromStr,
-        TypeSpaceImpl::Eq,
-        TypeSpaceImpl::Ord,
-        TypeSpaceImpl::Hash,
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+        TypespaceTrait::Eq,
+        TypespaceTrait::Ord,
+        TypespaceTrait::Hash,
     ] {
         assert!(named.has_impl(impl_name), "Named lacks {impl_name:?}");
     }
@@ -383,8 +387,8 @@ fn has_impl_answers_for_unit_and_tuple_structs() {
 
     for id in ["Nothing", "Pair"] {
         let ti = ts.get_type(&id.to_string());
-        assert!(ti.has_impl(TypeSpaceImpl::Eq), "{id} lacks Eq");
-        assert!(!ti.has_impl(TypeSpaceImpl::FromStr), "{id} claims FromStr");
+        assert!(ti.has_impl(TypespaceTrait::Eq), "{id} lacks Eq");
+        assert!(!ti.has_impl(TypespaceTrait::FromStr), "{id} claims FromStr");
     }
 }
 
@@ -413,8 +417,8 @@ fn has_impl_survives_an_alias_cycle_through_a_box() {
     let ts = builder.finalize(no_cycles).unwrap();
 
     let a = ts.get_type(&"A".to_string());
-    assert!(!a.has_impl(TypeSpaceImpl::FromStr));
-    assert!(!a.has_impl(TypeSpaceImpl::Eq));
+    assert!(!a.has_impl(TypespaceTrait::FromStr));
+    assert!(!a.has_impl(TypespaceTrait::Eq));
 }
 
 // Chunk-5 query additions on the build side: names, naming contexts,

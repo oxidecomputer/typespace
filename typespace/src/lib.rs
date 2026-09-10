@@ -336,25 +336,6 @@ pub enum TraitDisposition {
     Unknown,
 }
 
-/// Identifies a trait implementation that typespace is aware of.
-///
-/// This is the query vocabulary for
-/// [`view::Type::has_impl`](crate::view::Type::has_impl). The
-/// comparison and hashing entries let a consumer ask whether a type is
-/// usable as a map key--and let converters declare that capability for
-/// native types (via [`build::Native`] impls) so that a native type
-/// used as a map key without declaring `Ord` is a reportable conflict
-/// rather than a mystery.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TypeSpaceImpl {
-    Display,
-    FromStr,
-    Eq,
-    Ord,
-    Hash,
-}
-
 /// Accumulates the type graph prior to finalization.
 ///
 /// Create one from [`settings::Settings`] with

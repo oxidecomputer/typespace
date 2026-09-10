@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
 
-use crate::{TypeSpaceImpl, Typespace, TypespaceRenderer, TypespaceTrait, build};
+use crate::{Typespace, TypespaceRenderer, TypespaceTrait, build};
 
 /// A view of a type in a finalized [`Typespace`].
 pub struct Type<'a, Id> {
@@ -158,14 +158,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// ([`check_anonymous_cycles`](crate::cycles::check_anonymous_cycles)),
     /// and a named type other than an alias answers from its resolved
     /// trait set without recursing further.
-    pub fn has_impl(&self, impl_name: TypeSpaceImpl) -> bool {
-        let trait_ = match impl_name {
-            TypeSpaceImpl::Display => TypespaceTrait::Display,
-            TypeSpaceImpl::FromStr => TypespaceTrait::FromStr,
-            TypeSpaceImpl::Eq => TypespaceTrait::Eq,
-            TypeSpaceImpl::Ord => TypespaceTrait::Ord,
-            TypeSpaceImpl::Hash => TypespaceTrait::Hash,
-        };
+    pub fn has_impl(&self, trait_: TypespaceTrait) -> bool {
         self.has_trait(trait_, &mut BTreeSet::new())
     }
 
