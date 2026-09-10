@@ -33,6 +33,28 @@ impl<'de> ::serde::Deserialize<'de> for ConstrainedString {
             .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
     }
 }
+impl ::schemars::JsonSchema for ConstrainedString {
+    fn schema_name() -> ::std::string::String {
+        "ConstrainedString".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <::std::string::String as ::schemars::JsonSchema>::json_schema(
+                g,
+            )
+            .into_object();
+        schema.enum_values = ::std::option::Option::Some(
+            [
+                ::serde_json::from_str("\"tomax\"").unwrap(),
+                ::serde_json::from_str("\"xamot\"").unwrap(),
+            ]
+                .into_iter()
+                .collect(),
+        );
+        schema.into()
+    }
+}
 /// Error types.
 pub mod error {
     /// Error from a `TryFrom` or `FromStr` implementation.

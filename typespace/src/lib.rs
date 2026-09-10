@@ -928,7 +928,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::TupleStruct(t) => {
                     let name = t.common.built_name().to_string();
-                    out.cs().add_item(name, t.render(self));
+                    out.cs().add_item(name, t.render(id, self));
                 }
                 Type::NewtypeStruct(n) => {
                     let name = n.common.built_name().to_string();

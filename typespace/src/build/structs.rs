@@ -983,13 +983,17 @@ impl<Id> TupleStruct<Id> {
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
-    pub(crate) fn render(&self, typespace: &TypespaceRenderer<'_, Id>) -> proc_macro2::TokenStream {
+    pub(crate) fn render(
+        &self,
+        id: &Id,
+        typespace: &TypespaceRenderer<'_, Id>,
+    ) -> proc_macro2::TokenStream {
         let Self {
             common:
                 TypeCommon {
                     name,
                     description,
-                    default: _,
+                    default,
                     built:
                         Some(TypeCommonBuilt {
                             traits,
@@ -1011,11 +1015,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         let field_ident = fields
             .iter()
-            .map(|field_id| typespace.render_ident(field_id));
-        let rest_ident = rest
-            .as_ref()
-            .map(|rest_id| typespace.render_ident(rest_id))
-            .into_iter();
+            .map(|field_id| typespace.render_ident(field_id))
+            .collect::<Vec<_>>();
+        let rest_ident = rest.as_ref().map(|rest_id| typespace.render_ident(rest_id));
 
         let field_index = (0..fields.len()).map(syn::Index::from);
         let rest_index = rest
@@ -1080,11 +1082,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                             where
                                 A: ::serde::de::SeqAccess<'de>,
                             {
-                                // Strictly speaking, we don't need to
-                                // store each tuple element in a
-                                // variable, but as a practical matter,
-                                // it makes the generated code much
-                                // easier to follow and less indented.
+                                // Strictly speaking, we don't need to store
+                                // each tuple element in a variable, but as a
+                                // practical matter, it makes the generated
+                                // code much easier to follow and less deeply
+                                // indented.
                                 #(
                                     let #field_var = seq
                                         .next_element()?
@@ -1111,10 +1113,109 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
 
+        // TODO 9/10/2026
+        // Do we only want to do this if `rest` is Some?
+        let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+            let (additional_items, min_items, max_items) =
+                if let Some(rest_ident) = rest_ident.as_ref() {
+                    let additional_items = quote! {
+                        additional_items: Some(Box::new(
+                            g.subschema_for::<#rest_ident>()
+                        )),
+                    };
+
+                    // TODO 9/9/2026
+                    // This isn't quite right; the rest field may also have some
+                    // minimum and maximum values.
+                    let len = fields.len() as u32;
+                    (
+                        additional_items,
+                        quote! { min_items: Some(#len), },
+                        quote! {},
+                    )
+                } else {
+                    let len = fields.len() as u32;
+                    (
+                        TokenStream::new(),
+                        quote! { min_items: Some(#len), },
+                        quote! { max_items: Some(#len), },
+                    )
+                };
+
+            let description = description.as_ref().map(|d| {
+                quote! {
+                    description: Some(#d.to_string()),
+                }
+            });
+
+            let default = default.as_ref().map(|JsonValue(value)| {
+                let as_str = value.to_string();
+                quote! { default: Some(::serde_json::from_str(#as_str).unwrap()), }
+            });
+
+            quote! {
+                impl ::schemars::JsonSchema for #name_ident {
+                    fn schema_name() -> String {
+                        #name.to_string()
+                    }
+
+                    fn json_schema(
+                        g: &mut schemars::r#gen::SchemaGenerator,
+                    ) -> schemars::schema::Schema {
+
+                        let fields = [
+                            #(
+                                g.subschema_for::<#field_ident>(),
+                            )*
+                        ]
+                            .into_iter()
+                            .collect();
+                        schemars::schema::SchemaObject {
+                            metadata: Some(Box::new(schemars::schema::Metadata {
+                                title: Some(#name.to_string()),
+                                #description
+                                #default
+                                ..Default::default()
+                            })),
+                            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                                schemars::schema::InstanceType::Array,
+                            ))),
+                            array: Some(Box::new(schemars::schema::ArrayValidation {
+                                items: Some(schemars::schema::SingleOrVec::Vec(fields)),
+                                #additional_items
+                                #max_items
+                                #min_items
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }
+                        .into()
+                    }
+                }
+            }
+        });
+
+        let default_impl = if let Some(JsonValue(value)) = default
+            && traits.remove(TypespaceTrait::Default)
+        {
+            let default_value = typespace.generate_default_value_for_impl(value, id);
+            quote! {
+                impl ::std::default::Default for #name_ident {
+                    fn default() -> Self {
+                        #default_value
+                    }
+                }
+            }
+        } else {
+            TokenStream::new()
+        };
+
         // A tuple struct is neither of typify's comparison-derive
         // exceptions, so it is never exempt.
         let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
+
+        let rest_ident_iter = rest_ident.into_iter();
 
         // Canonical item order: see build::mod.
         quote! {
@@ -1123,11 +1224,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             #derive_attr
             pub struct #name_ident(
                 #( pub #field_ident, )*
-                #( pub #rest_ident, )*
+                #( pub #rest_ident_iter, )*
             );
 
+            #default_impl
             #serde_serialize
             #serde_deserialize
+            #json_schema_impl
         }
     }
 
@@ -1584,11 +1687,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             }
 
                             fn json_schema(
-                                gen: &mut ::schemars::gen::SchemaGenerator
+                                g: &mut ::schemars::r#gen::SchemaGenerator
                             ) -> ::schemars::schema::Schema {
                                 let mut schema =
                                     <#inner_ident as ::schemars::JsonSchema>
-                                        ::json_schema(gen)
+                                        ::json_schema(g)
                                         .into_object();
                                 #body
                                 schema.into()

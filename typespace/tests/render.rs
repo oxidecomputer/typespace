@@ -271,9 +271,12 @@ fn test_tuple_struct() {
     let builder = typespace_builder!(
         Settings::minimal()
             .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::Default)
             .with_required_trait(TypespaceTrait::Deserialize)
-            .with_required_trait(TypespaceTrait::Serialize),
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::JsonSchema),
         {
+            #[default = ["one", 2, "three", "four"]]
             struct MyTupleStruct(String, u32, #[flatten] Vec<String>);
         }
     );
@@ -310,6 +313,41 @@ fn test_tuple_struct() {
 
         assert!(serde_json::from_str::<import::MyTupleStruct>(r#"[]"#).is_err());
         assert!(serde_json::from_str::<import::MyTupleStruct>(r#"["hello"]"#).is_err());
+
+        let schema = schemars::schema_for!(import::MyTupleStruct);
+        let schema = serde_json::to_value(&schema).unwrap();
+        let expected = serde_json::json!(
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "title": "MyTupleStruct",
+                "default": ["one", 2, "three", "four"],
+                "type": "array",
+                "items": [
+                    {
+                        "type": "string"
+                    },
+                    {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0.0
+                    }
+                ],
+                "additionalItems": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "minItems": 2
+            }
+        );
+
+        assert_eq!(
+            schema,
+            expected,
+            "{}",
+            serde_json::to_string_pretty(&schema).unwrap(),
+        );
     }
 }
 
@@ -4808,40 +4846,32 @@ fn test_render_constrained_newtype_string() {
     }
 }
 
-// Builds an allow-list newtype under `settings` and returns the
-// finalized typespace, so the two tests below can render the same type
-// with and without JsonSchema.
-fn allow_list_typespace(settings: Settings) -> typespace::Typespace<String> {
-    let mut builder = TypespaceBuilder::new(settings);
-
-    builder.insert("string".to_string(), Type::String).unwrap();
-
-    builder
-        .insert(
-            "constrained string".to_string(),
-            Type::NewtypeStruct(
-                NewtypeStruct::new("string".to_string())
-                    .name("ConstrainedString")
-                    .constraints(typespace::build::NewtypeConstraints::AllowList(vec![
-                        JsonValue(serde_json::json! { "tomax" }),
-                        JsonValue(serde_json::json! { "xamot" }),
-                    ])),
-            ),
-        )
-        .unwrap();
-
-    builder.finalize(no_cycles).unwrap()
-}
-
-// The settings here stop short of `Settings::maximal` because they omit
-// JsonSchema: the impl rendered for it names its parameter `gen`, which
-// this crate's edition reserves, so a snapshot containing it cannot be
-// compiled here. `test_render_constrained_newtype_allow_list_json_schema`
-// below checks that impl without compiling it.
 #[test]
 fn test_render_constrained_newtype_allow_list() {
-    let settings = Settings::typical().with_desired_trait(TypespaceTrait::PartialEq);
-    let ts = allow_list_typespace(settings);
+    let settings = Settings::typical()
+        .with_desired_trait(TypespaceTrait::PartialEq)
+        .with_desired_trait(TypespaceTrait::JsonSchema);
+    let ts = {
+        let mut builder = TypespaceBuilder::new(settings);
+
+        builder.insert("string".to_string(), Type::String).unwrap();
+
+        builder
+            .insert(
+                "constrained string".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("ConstrainedString")
+                        .constraints(typespace::build::NewtypeConstraints::AllowList(vec![
+                            JsonValue(serde_json::json! { "tomax" }),
+                            JsonValue(serde_json::json! { "xamot" }),
+                        ])),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
     let out = ts.to_codespace().into_stream();
 
     #[check_and_include("tests/output/test_render_constrained_newtype_allow_list.rs", out)]
@@ -4859,32 +4889,6 @@ fn test_render_constrained_newtype_allow_list() {
         );
         serde_json::from_str::<ConstrainedString>("\"zartan\"").expect_err("not on the list");
     }
-}
-
-// TYPIFY COMPAT: typify 1 names the `json_schema` parameter `gen` and
-// reaches the generator through `::schemars::gen`. Edition 2024 reserves
-// `gen`, so this output cannot be spliced into this crate and compiled;
-// the rendered tokens are checked directly instead.
-#[test]
-fn test_render_constrained_newtype_allow_list_json_schema() {
-    let ts = allow_list_typespace(Settings::maximal());
-    let rendered = ts.to_codespace().into_stream().to_string();
-
-    let expected = quote! {
-        fn json_schema(
-            gen: &mut ::schemars::gen::SchemaGenerator
-        ) -> ::schemars::schema::Schema
-    }
-    .to_string();
-
-    assert!(
-        rendered.contains(&expected),
-        "no typify 1 `json_schema` signature in:\n{rendered}"
-    );
-    assert!(
-        rendered.contains(&quote! { ::json_schema(gen) }.to_string()),
-        "the JsonSchema impl does not forward the generator:\n{rendered}"
-    );
 }
 
 // `feasibility` in `trait_resolution.rs` answers `ManuallyRealizable`

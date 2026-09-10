@@ -1335,6 +1335,8 @@ where
             })
     }
 
+    // TODO 9/10/2026
+    // Why is this not used for tuple variants?
     fn default_impl_tuple_struct(
         &self,
         state: &mut WalkState<Id>,
@@ -1342,18 +1344,18 @@ where
         value: &serde_json::Value,
         id: &Id,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
-            value: value.clone(),
-            id: id.clone(),
-            reason: "expected a JSON array".to_string(),
-        })?;
-
-        let field_count = tuple_struct.fields.len();
-        let has_enough = match tuple_struct.rest {
-            Some(_) => arr.len() >= field_count,
-            None => arr.len() == field_count,
+        let Some(arr) = value.as_array() else {
+            return Err(Error::InvalidDefault {
+                value: value.clone(),
+                id: id.clone(),
+                reason: "expected a JSON array".to_string(),
+            });
         };
-        if !has_enough {
+
+        // TODO 9/10/2026
+        // Needs to change with defaults
+        let field_count = tuple_struct.fields.len();
+        if arr.len() < field_count {
             return Err(Error::InvalidDefault {
                 value: value.clone(),
                 id: id.clone(),
@@ -1364,21 +1366,20 @@ where
             });
         }
 
-        let (head, tail) = arr.split_at(field_count);
+        let (fields_arr, rest_arr) = arr.split_at(field_count);
         let field_values = self.default_impl_tuple_items(
             state,
             &tuple_struct.fields,
-            &serde_json::Value::Array(head.to_vec()),
+            &serde_json::Value::Array(fields_arr.to_vec()),
             id,
         )?;
 
-        // Anything past the fixed fields belongs to `rest` as a whole,
-        // walked as a value of its own array-shaped type.
+        // Anything past the fixed fields belongs to `rest`.
         let rest_value = tuple_struct
             .rest
             .as_ref()
             .map(|rest_id| {
-                self.default_impl(state, rest_id, &serde_json::Value::Array(tail.to_vec()))
+                self.default_impl(state, rest_id, &serde_json::Value::Array(rest_arr.to_vec()))
             })
             .transpose()?;
 
