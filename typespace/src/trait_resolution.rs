@@ -1554,20 +1554,21 @@ fn desired_resolution<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Setting
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
-    // Every member of the request closure has to be evaluated, whether
-    // or not it was desired directly, since a closure survives only if
-    // all of it does.
+    // Poison tracking covers each desired trait's supertraits as well,
+    // not just the traits settings named, since a trait is granted
+    // below only when every supertrait it needs survived too: granting
+    // Ord without PartialEq renders a derive that does not compile.
     let desired = close_supertraits(settings.desired_traits.clone());
     if desired.is_empty() {
         return;
     }
 
-    // Each desired trait paired with the supertraits its request
-    // closure adds. A closure member is not desired on its own
-    // account--it is there so that a granted derive compiles--so a
-    // closure is granted or dropped whole: a type that cannot have Eq
-    // has no use for the PartialEq that Eq's closure asked for.
-    let closures = settings
+    // Each desired trait paired with the supertraits it needs. A
+    // supertrait is not desired on its own account--it is there so
+    // that a granted derive compiles--so a group is granted or dropped
+    // whole: a type that cannot have Eq has no use for the PartialEq
+    // that Eq pulled in.
+    let grant_groups = settings
         .desired_traits
         .iter()
         .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
@@ -1627,17 +1628,17 @@ where
     }
 
     // A named type's built set is what required resolution absorbed
-    // plus the desired request closures that survived whole.
+    // plus the desired groups that survived whole.
     for (type_id, ty) in types.iter_mut() {
         if let Some(common) = ty.common_mut() {
             let survivors = state.has.remove(type_id).unwrap();
             let built = common.built.as_mut().unwrap();
-            for closure in &closures {
-                if closure
+            for group in &grant_groups {
+                if group
                     .iter()
                     .all(|trait_name| survivors.contains(trait_name))
                 {
-                    for trait_name in closure.iter() {
+                    for trait_name in group.iter() {
                         built.traits.add(*trait_name);
                     }
                 }
@@ -2258,8 +2259,8 @@ mod tests {
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
-        // Desiring Eq desires PartialEq: the request closure applies to
-        // desired demands exactly as it does to required ones.
+        // Desiring Eq desires PartialEq: supertrait expansion applies
+        // to desired demands exactly as it does to required ones.
         assert_eq!(
             built_traits(&typespace, "S"),
             trait_set([
@@ -3183,7 +3184,7 @@ mod tests {
     }
 
     // Desired-phase cases beyond the batch above: the seam between a
-    // trait desired in its own right and one the request closure added,
+    // trait desired in its own right and one a supertrait pulled in,
     // a phase-1 grant meeting a phase-2 removal, the container and leaf
     // answers the desired phase reads, untagged enums, cycles entered
     // from any member, the causal chain the skip log carries, and the
@@ -3195,13 +3196,13 @@ mod tests {
     fn desired_supertrait_survives_only_when_desired_directly() {
         // PartialEq reaches the demand set only as Eq's supertrait, so
         // a struct that cannot have Eq has no use for it.
-        let closure_only = typespace_builder!(minimal_with_desired([TypespaceTrait::Eq]), {
+        let supertrait_only = typespace_builder!(minimal_with_desired([TypespaceTrait::Eq]), {
             struct S {
                 weight: f64,
             }
         });
 
-        let typespace = closure_only.finalize(no_cycles).unwrap();
+        let typespace = supertrait_only.finalize(no_cycles).unwrap();
         assert_eq!(built_traits(&typespace, "S"), TypespaceTraitSet::empty());
 
         // Desired in its own right, PartialEq stands whether or not Eq
@@ -3293,9 +3294,9 @@ mod tests {
         assert_eq!(built_traits(&typespace, "Outer"), expected);
     }
 
-    /// A required trait outlives a desired strip in the same closure.
+    /// A required trait outlives a desired strip in the same group.
     #[test]
-    fn required_trait_survives_desired_strip_in_same_closure() {
+    fn required_trait_survives_desired_strip_in_same_group() {
         let mut builder = typespace_builder!(
             Settings::minimal()
                 .with_required_trait(TypespaceTrait::Eq)
@@ -3574,9 +3575,9 @@ mod tests {
         );
     }
 
-    /// A container forwards one trait of a closure without the rest.
+    /// A container forwards one trait of a group without the rest.
     #[test]
-    fn desired_partial_closure_survives_float_in_vec() {
+    fn desired_partial_group_survives_float_in_vec() {
         let builder = typespace_builder!(
             minimal_with_desired([TypespaceTrait::PartialEq, TypespaceTrait::Eq]),
             {
