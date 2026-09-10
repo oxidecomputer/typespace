@@ -398,9 +398,9 @@ impl Settings {
 /// ```
 ///
 /// A container with no matching preset can state its whole table in
-/// one expression with [`ContainerType::declare`], rather than
-/// building it up one [`with_provision`](Self::with_provision) call at
-/// a time.
+/// one expression with [`ContainerType::new`] and
+/// [`with_provisions`](Self::with_provisions), rather than building it
+/// up one [`with_provision`](Self::with_provision) call at a time.
 #[derive(Clone, Deserialize)]
 #[serde(try_from = "ContainerTypeRepr")]
 pub struct ContainerType {
