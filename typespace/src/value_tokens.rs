@@ -25,10 +25,17 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
                     ::serde_json::Value::Number(::serde_json::Number::from(#n))
                 }
             } else if let Some(n) = number.as_f64() {
+                // The unwrap in the emitted code cannot fire: from_f64
+                // returns None only for a non-finite input, and a
+                // serde_json::Number cannot hold one, so any f64 read
+                // out of a Number converts back.
                 quote! {
-                    ::serde_json::Value::Number(::serde_json::Number::from_f64(#n))
+                    ::serde_json::Value::Number(::serde_json::Number::from_f64(#n).unwrap())
                 }
             } else {
+                // A number that is none of i64, u64, or f64 (possible
+                // only under serde_json's arbitrary_precision feature)
+                // has no literal form here.
                 panic!("Invalid number")
             }
         }

@@ -268,6 +268,39 @@ fn test_unit_struct() {
     }
 }
 
+// A non-integer number in a unit struct's representation goes through
+// Number::from_f64 in the emitted Serialize and Deserialize impls; the
+// emitted call carries the unwrap it needs to yield a Number rather
+// than an Option, and the unwrap cannot fire since a serde_json Number
+// is always finite.
+#[test]
+fn test_unit_struct_float_repr() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize),
+        {
+            #[json = 1.5]
+            struct FloatUnitStruct;
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_unit_struct_float_repr.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        let value = import::FloatUnitStruct;
+        assert_eq!(serde_json::to_string(&value).unwrap(), "1.5");
+
+        assert!(serde_json::from_str::<import::FloatUnitStruct>("1.5").is_ok());
+        assert!(serde_json::from_str::<import::FloatUnitStruct>("1.25").is_err());
+        assert!(serde_json::from_str::<import::FloatUnitStruct>("null").is_err());
+    }
+}
+
 #[test]
 fn test_tuple_struct() {
     let builder = typespace_builder!(
