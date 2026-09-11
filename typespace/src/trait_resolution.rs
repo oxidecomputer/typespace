@@ -2,17 +2,190 @@
 
 //! Trait resolution: determine the trait set for every type.
 //!
-//! Runs during finalization in two phases. Phase 1 resolves required traits:
-//! requirements (from settings and from use sites such as map keys and set
-//! elements) descend the type graph, each named type absorbs what it can
-//! satisfy, and every unsatisfiable requirement is collected into a
-//! [`TraitConflict`](crate::error::TraitConflict) that records the
-//! requirement's origin and the containment path to the offending type (and
-//! fails). Phase 2 resolves desired traits: each named type takes a desired
-//! trait exactly when it can realize it and every type it depends on has it;
-//! unsatisfiable desired traits are dropped silently (it's a desire, not a
-//! constraint). The resulting per-type trait set is authoritative: query
-//! answers and rendered derives both read it.
+//! A typespace holds a graph of types that refer to one another by ID.
+//! Whether a type can implement a trait depends on what its children
+//! implement, so no type can be finalized independently. This module
+//! propagates trait information to each type with the results landing in each
+//! named type's `TypeCommonBuilt`. Rendering emits code according to that set
+//! of traits (either via `derive` or a custom `impl`).
+//! [`Type::has_impl`](crate::view::Type::has_impl) answers consumer queries
+//! from it (generated code and the answers about it cannot disagree). Unnamed
+//! types (built-ins, Box, Map, etc.) don't store a trait set directly; a query
+//! (re-)computes the answer (but with the significant benefit of the trait
+//! sets stored in named types).
+//!
+//! Consumers express traits in two main ways. A REQUIRED trait must be
+//! available for all named types (that is, all generated types excepting
+//! anonymous types such as anonymous tuples). Failing to apply one results in
+//! [`Error::TraitConflicts`]. A DESIRED trait is applied where it is
+//! compatible and dropped--without error--where it is not. A consumer might,
+//! for example, REQUIRE `serde::Serialize` and `serde::Deserialize` of all
+//! types, but DESIRE convenience traits such as `Hash` and `Eq` where they can
+//! be generated. Each gets its own traversal of the type graph.
+//!
+//! In addition, trait requirements may spawn from container types. For example,
+//! a `BTreeSet` creates a requirement of the `Ord` trait on its type parameter
+//! (which in turn creates requirements for `PartialOrd`, `Eq`, and
+//! `PartialEq`; see "Supertrait dependencies" below).
+//!
+//! ## Phase 1: required traits flow down to children
+//!
+//! [`required_resolution`] initializes its traversal with every place a
+//! REQUIREMENT originates:
+//!
+//! - [`Settings::with_required_trait`] at every named type.
+//! - container obligations--what Map, Set, Vec, and a declared
+//!   optional-nullable wrapper require of their type parameters (if
+//!   anything).
+//! - properties rendered with `#[serde(default)]`; these are populated via a
+//!   call to `Default::default()` so their types must implement `Default`.
+//! - native types inside an explicit default value; generated code constructs
+//!   these native types by deserializing, so the value demands `Deserialize`.
+//!
+//! We descend the type graph with a work queue rather than recursion. Each
+//! item in the work queue represents a required work set, a target type; it
+//! also includes the origin of the REQUIREMENT and the path walked so far for
+//! coherent error reporting. Traversal flows from a type to the children it
+//! contains.
+//!
+//! - A named type consults [`feasibility`] for each trait. It applies the
+//!   traits that are compatible. Any conflict is an error.
+//! - Each container effectively has a disposition for each trait: always
+//!   provided, never provided, or provided if all type parameters also provide
+//!   the trait. Configurable containers encode this in [`TraitProvision`];
+//!   fixed containers (Option, Box, arrays, tuples) hard-code these.
+//! - A leaf type (a type with no children) satisfies the demand or conflicts,
+//!   per [`leaf_provides`].
+//! - Each native type declares a similar table of trait capabilities
+//!   (supported, unsupported, unknown). It conflicts on traits known to be
+//!   unsupported; a trait whose support is unknown is given the benefit of the
+//!   doubt. If this turns out to be wrong, the generated code may result in a
+//!   compilation-time failure that states both the type and trait requirement.
+//!   TODO can native and container types be unified?
+//!
+//! Conflicts accumulate instead of stopping the pass; a consumer
+//! fixing a schema wants every failure at once.
+//!
+//! ```text
+//!     BTreeMap<Color, _>   origin: the map demands Ord of its key
+//!            | Ord
+//!            v
+//!    struct Color { .. }   named: absorbs Ord, re-pushes to its fields
+//!            | Ord
+//!            v
+//!        Vec<f64>          container: declared Ord follows its type parameter
+//!            | Ord
+//!            v
+//!           f64            leaf: no Ord; the conflict names the
+//!                          origin, the path, f64, and the reason
+//! ```
+//!
+//! ## Phase 2: desired trait incompatibilities poison parent types
+//!
+//! Rather than propagating *requirements* from parent to child, for DESIRED
+//! traits, we propagate *incompatibilities* from child to parent.
+//! [`desired_resolution`] grants every desired trait to every type, then
+//! initializes a work queue with the types that are known to be incompatible
+//! with any of the DESIRED traits (e.g. `f64` and the `Eq` trait). Each
+//! incompatibility poisons the types that refer to it (e.g. a `struct` with an
+//! `f64` field). Each newly discovered incompatibility spawns a new work queue
+//! item; a type can only be poisoned for a trait once (losing the given
+//! trait). This walks the graph, but in reverse:
+//!
+//! ```text
+//!           f64             no Ord: poisoning starts at the leaf
+//!            ^
+//!            |
+//!        Vec<f64>           loses Ord: the container forwards it
+//!            ^
+//!            |
+//!   struct Color { .. }     loses Ord: required of every field
+//! ```
+//!
+//! The chain of poisoning stops when a type already omits the trait or when
+//! it provides the trait on its own, without requiring the child to implement
+//! it. For example, a `Vec<T>` implements `Default` even if `T` does not, so
+//! poisoning of the `Default` trait would not continue from there.
+//!
+//! The two passes are mirror images: phase 1 walks children and asks
+//! "can you also satisfy this?", phase 2 walks referrers and asks "can
+//! you implement this without your child doing so?".
+//!
+//! Traits granted in Phase 1 are never poisoned in Phase 2. Phase 1 proves
+//! that each type can support the REQUIRED traits so Phase 2 cannot "discover"
+//! some new incompatibility. The ordering of the phases is necessary and
+//! deliberate.
+//!
+//! ## Supertrait dependencies
+//!
+//! `Ord` requires both `PartialOrd` and `Eq`. Both `Eq` and `PartialOrd`
+//! require `PartialEq` (and transitively, `Ord` requires `PartialEq`). Each
+//! requirement is expanded through [`close_supertraits`] during traversal
+//! initialization. Poisoning is expanded through [`strip_dependents`] in
+//! reverse e.g. removing `PartialEq` also removes `Eq`, `PartialOrd`, and
+//! `Ord`.
+//!
+//! TODO could close_supertraits and strip_dependents have names that have more
+//! similarity? Could they (do they) share a source of truth?
+//!
+//! Desired traits carry one extra rule: a supertrait granted by
+//! [`close_supertraits`] is not wanted for its own sake, so phase 2
+//! grants each desired trait together with its supertraits or grants none of
+//! them. If `Eq` was desired, but not satisfiable, we don't leave behind, say,
+//! `PartialEq` if it is not also specifically desired.
+//!
+//! ## Custom optional `Option` wrappers
+//!
+//! A struct field that can be absent, null, or some value is represented as
+//! [`StructPropertyState::Optional`] with a [`Type::Option`]. By default this
+//! is rendered as `Option<T>`, but consumers may change this to
+//! `Option<Option<T>>` to represent the three states, or a custom type (see
+//! [`OptionalNullable::CustomType`]). Trait flow through an "optional option"
+//! heeds this container type and its trait properties (as with any other
+//! container).
+//!
+//! ## Does type X implement trait Y?
+//!
+//! For a named type, [`feasibility`] encodes whether and how a trait can be
+//! had: derived, forwarded (an alias), realized by a hand-written impl with
+//! its own obligation list, or impossible. Phase 1 absorbs and pushes from
+//! that answer; phase 2's [`provides`] turns the same answer into yes or no
+//! given what the children still hold.
+//!
+//! For an unnamed type the rules live twice: [`required_resolution`]'s
+//! per-variant arms split requirement sets and record conflicts, while
+//! [`unnamed_provides`] answers one trait as a boolean, with
+//! [`leaf_provides`] and [`container_provides`] as its slices. The two
+//! encodings must agree. `unnamed_provides` is shared with
+//! [`Type::has_impl`](crate::view::Type::has_impl), so a query about
+//! an unnamed type recomputes from the rules the passes used.
+//!
+//! TODO can we simplify the redundancy above?
+//!
+//! ## Preconditions
+//!
+//! By the time [`resolve_traits`] runs: `build_commons` has given every named
+//! type a `TypeCommonBuilt` to write into; `break_cycles` has finalized the
+//! ids, boxing containment cycles; `check_anonymous_cycles` verifies that
+//! every type cycle contains a named type (see below); and
+//! [`resolve_from_string_irrefutable`] has cached its answers, which
+//! [`feasibility`] reads to decide FromStr on untagged enums. Within
+//! [`resolve_traits`], required precedes desired because desired resolution
+//! treats required grants as untouchable.
+//!
+//! ## Traversal termination
+//!
+//! Both phases are designed to make monotonic progress:
+//!
+//! - Phase 1: a named type's built set only grows; only newly added traits
+//!   propagate. Unnamed types re-push unconditionally, but
+//!   `check_anonymous_cycles` has rejected every cycle made only of unnamed
+//!   types, so each cycle includes a named type that absorbs a requirement the
+//!   first time it comes around so that the walk terminates on the next
+//!   encounter.
+//! - Phase 2: the optimistic grant only shrinks; each type loses each
+//!   trait at most once. When we encounter a type that already lacks the
+//!   poisoned trait, we don't need to poison further.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

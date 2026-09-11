@@ -763,31 +763,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Finalize the typespace.
     ///
-    /// Verifies that every ID referenced by a type names an inserted
-    /// type (a dangling reference is a
-    /// [`error::Error::UnknownTypeId`]), breaks containment cycles by
-    /// inserting `Box` types, verifies that no representation cycles remain
-    /// ([`error::Error::AnonymousCycle`]), and propagates trait requirements
-    /// through the graph--a type used as a map key must be `Ord`, and so must
-    /// everything it contains. Trait requirements that types cannot satisfy
-    /// are collected--all of them, not just the first--into
-    /// [`error::Error::TraitConflicts`].
+    /// Verifies the individual validity of types and the overall consistency
+    /// of the type graph including type referenced and settings.
     ///
-    /// `make_box_id` is called to generate a fresh ID for each `Box<T>`
-    /// wrapper inserted to break a containment cycle. The argument is the ID
-    /// of the inner type being wrapped. Pass [`no_cycles`] to assert
-    /// that the graph contains no containment cycles.
+    /// Propagates all trait settings to types, producing an error if required
+    /// traits cannot be implement for a given type.
+    ///
+    /// Breaks containment cycles by inserting a `Box<T>` type, making use of
+    /// the provided `make_box_id` parameter to generate a new `Id` (with the
+    /// `Id` of the type to be boxed as its input). Pass [`no_cycles`] to
+    /// assert that the graph contains no containment cycles.
     pub fn finalize<F>(self, make_box_id: F) -> Result<Typespace<Id>, Error<Id>>
     where
         F: FnMut(&Id) -> Id,
     {
-        // TODO 9/1/2026
-        // We've lost sight of this comment vvvvvvv and its order; fix.
-
-        // Basic steps:
-        // 1. Break containment cycles with Box types
-        // 2. Propagate trait impls
-        // 3. Type-specific finalization
+        // Finalization can be decomposed into a few phases:
+        // 1. Local validation -- check the legality of various configured
+        //    settings, check for unspecified references, check type names and
+        //    structure, etc.
+        // 2. Breaking containment cycles (and checking for illegal,
+        //    anonymous-only cycles)
+        // 3. Trait resolution to populate the post-finalization cache of
+        //    traits for each named type.
 
         // Validate that derives are parseable as Rust paths.
         // TODO 9/1/2026
@@ -830,6 +827,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         build_commons(&mut types);
         cycles::break_cycles(&mut types, make_box_id);
         cycles::check_anonymous_cycles(&types)?;
+
         // After break_cycles, because a newtype's inner may have become
         // a freshly minted Box, which has no FromStr at all; before
         // resolve_traits, because both required and desired resolution
