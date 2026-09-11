@@ -611,6 +611,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         let (from_str_impl, try_from_impl) = if derived_traits.remove(TypespaceTrait::FromStr) {
             typespace.add_error_mod(out);
+            let string_type = typespace.render_std_string();
             let from_str_impl = quote! {
                 impl ::std::str::FromStr for #name_ident {
                     type Err = self::error::ConversionError;
@@ -640,11 +641,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         value.parse()
                     }
                 }
-                impl ::std::convert::TryFrom<::std::string::String> for #name_ident {
+                impl ::std::convert::TryFrom<#string_type> for #name_ident {
                     type Error = self::error::ConversionError;
 
-                    fn try_from(value: ::std::string::String) ->
-                        ::std::result::Result<Self, self::error::ConversionError>
+                    fn try_from(value: #string_type)
+                        -> ::std::result::Result<Self, self::error::ConversionError>
                     {
                         value.parse()
                     }

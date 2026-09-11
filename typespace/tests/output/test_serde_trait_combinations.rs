@@ -43,7 +43,7 @@ pub mod both {
             D: ::serde::Deserializer<'de>,
         {
             let expected = ::serde_json::Value::String("<<marker>>".to_string());
-            let value: serde_json::Value = ::serde::Deserialize::deserialize(
+            let value: ::serde_json::Value = ::serde::Deserialize::deserialize(
                 deserializer,
             )?;
             if value != expected {
@@ -222,7 +222,7 @@ pub mod deserialize_only {
             D: ::serde::Deserializer<'de>,
         {
             let expected = ::serde_json::Value::String("<<marker>>".to_string());
-            let value: serde_json::Value = ::serde::Deserialize::deserialize(
+            let value: ::serde_json::Value = ::serde::Deserialize::deserialize(
                 deserializer,
             )?;
             if value != expected {

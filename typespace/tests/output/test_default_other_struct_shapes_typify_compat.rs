@@ -83,7 +83,9 @@ impl<'de> ::serde::Deserialize<'de> for UnitShape {
         D: ::serde::Deserializer<'de>,
     {
         let expected = ::serde_json::Value::String("unit".to_string());
-        let value: serde_json::Value = ::serde::Deserialize::deserialize(deserializer)?;
+        let value: ::serde_json::Value = ::serde::Deserialize::deserialize(
+            deserializer,
+        )?;
         if value != expected {
             return Err(
                 ::serde::de::Error::custom(

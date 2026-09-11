@@ -798,7 +798,7 @@ impl UnitStruct {
                         D: ::serde::Deserializer<'de>,
                     {
                         let expected = #repr_tokens;
-                        let value: serde_json::Value =
+                        let value: ::serde_json::Value =
                             ::serde::Deserialize::deserialize(deserializer)?;
                         if value != expected {
                             return Err(::serde::de::Error::custom(format!(
