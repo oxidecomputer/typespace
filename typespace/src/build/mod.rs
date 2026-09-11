@@ -405,28 +405,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 
-    /// Children that this type "contains" (i.e. cycle-breaking candidates).
-    pub fn contained_children(&self) -> Vec<Id> {
-        match self {
-            Type::TupleStruct(TupleStruct { fields, .. }) => fields.clone(),
-            Type::NewtypeStruct(NewtypeStruct { inner, .. }) => vec![inner.clone()],
-            Type::Option(id) | Type::Vec(id) | Type::Set(id) | Type::Array(id, _) => {
-                vec![id.clone()]
-            }
-            Type::Map(k, v) => vec![k.clone(), v.clone()],
-            Type::Tuple(ids) => ids.clone(),
-            Type::Struct(s) => s.properties.iter().map(|p| p.type_id.clone()).collect(),
-            Type::Enum(e) => e
-                .variants
-                .iter()
-                .flat_map(|v| v.contained_children())
-                .collect(),
-            _ => vec![],
-        }
-    }
-
-    /// Exclusive-reference form of [`Type::contained_children`]: the same
-    /// children, as mutable references, for in-place cycle breaking.
+    /// The children that contribute to this type's size, as mutable
+    /// references, for in-place cycle breaking.
+    ///
+    /// A cycle running only through these edges makes a type of
+    /// infinite size, which is what `break_cycles` cuts with a `Box`.
+    /// The heap-indirect containers (box, vec, map, set) already bound
+    /// their contents and report nothing; a type alias reports its
+    /// target, since the alias is that type under another name.
     pub fn contained_children_mut(&mut self) -> Vec<&mut Id> {
         match self {
             Type::Enum(Enum { variants, .. }) => {

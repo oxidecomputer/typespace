@@ -935,10 +935,6 @@ impl<Id: Clone> EnumVariant<Id> {
             }
         }
     }
-
-    pub(crate) fn contained_children(&self) -> Vec<Id> {
-        self.children()
-    }
 }
 
 /// The associated data of an [`EnumVariant`].
