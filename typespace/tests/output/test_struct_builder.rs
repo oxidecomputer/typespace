@@ -1,4 +1,5 @@
 #[derive(
+    ::schemars::JsonSchema,
     ::serde::Deserialize,
     ::serde::Serialize,
     Clone,
@@ -7,8 +8,7 @@
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
 pub struct MyStruct {
     pub a: ::std::string::String,

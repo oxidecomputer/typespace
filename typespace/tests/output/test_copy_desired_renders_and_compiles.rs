@@ -1,4 +1,5 @@
 #[derive(
+    ::schemars::JsonSchema,
     ::serde::Deserialize,
     ::serde::Serialize,
     Clone,
@@ -8,8 +9,7 @@
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
 pub enum Color {
     Red,
@@ -52,6 +52,7 @@ impl ::std::convert::TryFrom<::std::string::String> for Color {
     }
 }
 #[derive(
+    ::schemars::JsonSchema,
     ::serde::Deserialize,
     ::serde::Serialize,
     Clone,
@@ -62,8 +63,7 @@ impl ::std::convert::TryFrom<::std::string::String> for Color {
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
 #[serde(transparent)]
 pub struct Port(pub u32);

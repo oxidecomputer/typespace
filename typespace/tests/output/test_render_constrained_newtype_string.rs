@@ -1,4 +1,5 @@
 #[derive(
+    ::schemars::JsonSchema,
     ::serde::Serialize,
     Clone,
     Debug,
@@ -7,8 +8,7 @@
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
 #[serde(transparent)]
 pub struct ConstrainedString(::std::string::String);
