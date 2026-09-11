@@ -1,4 +1,4 @@
-#[derive(::schemars::JsonSchema, Debug)]
+#[derive(Debug, schemars::JsonSchema)]
 pub struct Piggies {
     #[schemars(
         default,

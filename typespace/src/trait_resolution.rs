@@ -399,14 +399,12 @@ where
 /// Expand a requirement set to include the supertraits its members
 /// imply.
 ///
-/// `Ord` requires `PartialOrd`, `Eq`, and `PartialEq`; `Eq` requires
-/// `PartialEq`; `PartialOrd` requires `PartialEq`; `Copy` requires
-/// `Clone`. Applied to every requirement set as it is formed (the
-/// settings-required set, map key traits, and set element traits) so
-/// that a work item's `traits` is always already closed--otherwise a
-/// lone `Ord` requirement would derive `Ord` without the
-/// `Eq`/`PartialEq`/`PartialOrd` impls it needs, and the emitted derive
-/// would not compile.
+/// Applied to every initial requirement set as it is formed (the
+/// settings-required set, container obligations, and the serde-default and
+/// default-value seeds), so a requirement enters the queue with the
+/// supertraits it needs; otherwise a lone `Ord` requirement would derive `Ord`
+/// without the `Eq`/`PartialEq`/`PartialOrd` impls it needs, and the emitted
+/// derive would not compile.
 fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     if traits.contains(&TypespaceTrait::Ord) {
         traits.add(TypespaceTrait::PartialOrd);
@@ -1191,6 +1189,12 @@ where
             // them only from default-state properties and from untagged item
             // variants, and the wrapper substitutes only at optional-state
             // properties, so no obligation ever names a wrapped edge.
+            //
+            // Pushing one bare trait with no supertrait closure is
+            // sound only while every manually realizable trait
+            // (Display, FromStr, Default) has no supertraits. If a
+            // trait with supertraits ever becomes manually realizable,
+            // expand each pushed set with its dependencies.
             for (trait_name, obligations) in manual_pushes {
                 for (relation, child_id) in obligations {
                     work.push_back(WorkItem {

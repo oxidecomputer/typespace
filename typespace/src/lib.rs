@@ -186,7 +186,7 @@ impl TypespaceTrait {
                 TypespaceTrait::Debug => quote! { Debug },
                 TypespaceTrait::Serialize => quote! { ::serde::Serialize },
                 TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
-                TypespaceTrait::JsonSchema => quote! { ::schemars::JsonSchema },
+                TypespaceTrait::JsonSchema => quote! { schemars::JsonSchema },
                 // TypespaceTrait::Eq => quote! { ::std::cmp::Eq },
                 // TypespaceTrait::PartialEq => quote! { ::std::cmp::PartialEq },
                 // TypespaceTrait::Hash => quote! { ::std::hash::Hash },
