@@ -525,6 +525,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Verify that every type ID referenced by a type is actually
     /// present; later steps rely on lookups of child IDs succeeding.
+    /// Verify that a declared optional-nullable wrapper claims an
+    /// unconditional `Default`.
+    ///
+    /// `feasibility` exempts an optional property from its own
+    /// `Default` obligation without consulting the wrapper that renders
+    /// in its place. The exemption is sound only where the wrapper
+    /// claims `Default` unconditionally, so a declaration claiming less
+    /// is refused here rather than resolved against.
+    fn check_optional_nullable_default(&self) -> Result<(), Error<Id>> {
+        let OptionalNullable::CustomType(container) = &self.settings.optional_nullable else {
+            return Ok(());
+        };
+        let provision = container.provision(TypespaceTrait::Default);
+        if provision == TraitProvision::Always {
+            return Ok(());
+        }
+        Err(Error::OptionalNullableWrapperDefault {
+            path: crate::settings::path_text(container.path()),
+            provision,
+        })
+    }
+
     fn check_references(&self) -> Result<(), Error<Id>> {
         for (type_id, typ) in &self.types {
             for child_id in typ.children() {
@@ -822,6 +844,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // Validate that each container declares an obligation for every
         // type parameter it is rendered with.
         self.check_containers()?;
+        self.check_optional_nullable_default()?;
 
         // Ensure that every referenced type ID has been initialized.
         self.check_references()?;

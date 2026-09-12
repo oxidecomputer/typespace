@@ -343,6 +343,29 @@ where
         /// Details on the incompatibility.
         reason: String,
     },
+    /// A declared custom optional-nullable wrapper does not claim an
+    /// unconditional `Default`.
+    ///
+    /// The wrapper substitutes for `Option` at every optional struct
+    /// property whose type is itself an `Option`, and trait resolution
+    /// exempts such a property from its own `Default` obligation
+    /// without consulting the declaration. `Default: Always` is what
+    /// makes that exemption sound, and a wrapper meeting its documented
+    /// contract always has it to claim: the wrapper implements
+    /// `json_serde::OptionalNullable`, which requires `Default` as a
+    /// supertrait.
+    #[error(
+        "the optional-nullable wrapper `{path}` declares `Default: \
+         {provision:?}`; it must declare `Default: Always`, since every \
+         optional property rendering through it is exempted from its own \
+         `Default` obligation on that assumption"
+    )]
+    OptionalNullableWrapperDefault {
+        /// The wrapper's path as configured.
+        path: String,
+        /// The provision it declared for `Default`.
+        provision: crate::TraitProvision,
+    },
 }
 
 /// The axis on which a name collision occurred.

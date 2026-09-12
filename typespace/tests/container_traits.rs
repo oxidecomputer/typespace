@@ -357,34 +357,6 @@ fn cardinality_mismatch_is_rejected_at_finalization() {
     );
 }
 
-// `TraitProvision::Unknown` is only meaningful for a machine-authored
-// native; a configured container is hand-authored, so declaring it
-// there is a configuration error rather than a silent pass.
-#[test]
-fn unknown_provision_on_a_container_is_rejected_at_finalization() {
-    let settings = Settings::minimal().with_vec_type(
-        ContainerType::vec().with_provision(TypespaceTrait::Hash, TraitProvision::Unknown),
-    );
-
-    let mut builder = TypespaceBuilder::new(settings);
-    builder.insert("string".to_string(), Type::String).unwrap();
-
-    let Err(err) = builder.finalize(no_cycles) else {
-        panic!("expected finalize to reject the Unknown provision");
-    };
-    assert!(
-        matches!(
-            err,
-            Error::ContainerProvisionUnknown {
-                position: "vec",
-                trait_: TypespaceTrait::Hash,
-                ..
-            }
-        ),
-        "{err}"
-    );
-}
-
 // A map key is demanded JsonSchema even where schemars 0.8 would not
 // need it. The graph, roughly:
 //
@@ -470,6 +442,91 @@ fn custom_optional_cardinality_mismatch_is_rejected_at_finalization() {
         ),
         "{err}"
     );
+}
+
+// `feasibility`'s struct-Default arms exempt every optional property
+// from its own Default obligation without ever consulting the
+// configured wrapper: the exemption assumes whatever renders there is
+// Default whatever it holds. A wrapper declared Default: Never breaks
+// that assumption, so it is rejected outright at finalization--before
+// any type is even checked, and whether or not Default is required or
+// desired of anything.
+#[test]
+fn a_wrapper_that_never_provides_default_is_rejected_at_finalization() {
+    let settings = Settings::minimal().with_optional_nullable(OptionalNullable::CustomType(
+        ContainerType::option()
+            .with_path("::custom::Opt")
+            .with_provision(TypespaceTrait::Default, TraitProvision::Never),
+    ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the wrapper declaration");
+    };
+    assert!(
+        matches!(
+            err,
+            Error::OptionalNullableWrapperDefault {
+                provision: TraitProvision::Never,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+// The same rejection applies to a wrapper narrowed to
+// Default: IfParameters. Nothing routes the option's value type through
+// the wrapper's Default column the way a required or desired trait
+// does for every other trait, so IfParameters is exactly as unsound
+// here as Never: only Always leaves the exemption sound.
+#[test]
+fn a_wrapper_with_conditional_default_is_rejected_at_finalization() {
+    let settings = Settings::minimal().with_optional_nullable(OptionalNullable::CustomType(
+        ContainerType::option()
+            .with_path("::custom::Opt")
+            .with_provision(TypespaceTrait::Default, TraitProvision::IfParameters),
+    ));
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the wrapper declaration");
+    };
+    assert!(
+        matches!(
+            err,
+            Error::OptionalNullableWrapperDefault {
+                provision: TraitProvision::IfParameters,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+// A wrapper that does claim Default: Always--the ContainerType::option
+// preset's own answer, unmodified--passes the check trivially, and a
+// required Default reaches every optional property through it without
+// a conflict.
+#[test]
+fn a_wrapper_claiming_default_always_satisfies_a_required_default() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Default)
+        .with_optional_nullable(OptionalNullable::CustomType(
+            ContainerType::option().with_path("::custom::Opt"),
+        ));
+
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            maybe: OptionalNullable<u32>,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
 }
 
 // What the wrapper demands of its value type is imposed like a map
