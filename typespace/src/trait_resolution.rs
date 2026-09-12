@@ -449,9 +449,20 @@ pub(crate) fn leaf_provides<Id>(
         // owned heap buffer can never be Copy.
         Type::String => Some(trait_name != TypespaceTrait::Copy),
 
-        // The unit type and ::json_serde::Absent implement
-        // everything except Display and FromStr.
-        Type::Unit | Type::Never => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
+        // The unit type implements everything except Display and
+        // FromStr.
+        Type::Unit => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
+
+        // TODO 9/12/2026
+        // This doesn't seem quite right; a raw Never shouldn't be
+        // Absent; only an Option<Never>
+
+        // ::json_serde::Absent derives Clone, Debug, Default, Eq,
+        // Hash, Ord, PartialEq, and PartialOrd, and hand-writes
+        // Serialize, Deserialize, and (under the schemars08 and
+        // schemars1 features) JsonSchema; it has no Display or
+        // FromStr impl (see json-serde/src/lib.rs).
+        Type::Never => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
 
         // Floating-point types have no total ordering, no equality
         // relation, and no hash.
@@ -964,46 +975,6 @@ where
     // Accumulate all conflicts; not just the first.
     let mut conflicts = Vec::<TraitConflict<Id>>::new();
 
-    // Split `traits` into those present in `unsupported` and the rest.
-    let split = |traits: &TypespaceTraitSet, unsupported: &[TypespaceTrait]| {
-        let bad = traits
-            .iter()
-            .filter(|tt| unsupported.contains(tt))
-            .copied()
-            .collect::<Vec<_>>();
-        let rest = traits
-            .iter()
-            .filter(|tt| !unsupported.contains(tt))
-            .copied()
-            .collect::<TypespaceTraitSet>();
-        (bad, rest)
-    };
-
-    // Split `traits` at a configurable container according to what the
-    // container declares it provides: the traits it never provides are
-    // conflicts here, the traits it provides only when its parameters do
-    // pass to those parameters, and the traits it provides
-    // unconditionally are satisfied and go no further.
-    let container_split = |declaration: &ContainerType, traits: &TypespaceTraitSet| {
-        let bad = traits
-            .iter()
-            .filter(|tt| matches!(declaration.provision(**tt), TraitProvision::Never))
-            .copied()
-            .collect::<Vec<_>>();
-        // Re-close the forwarded set: dropping a trait the container
-        // provides unconditionally can leave a subtrait behind without
-        // its supertraits, and a parameter that absorbed `Eq` with no
-        // `PartialEq` derives code that does not compile.
-        let pass = close_supertraits(
-            traits
-                .iter()
-                .filter(|tt| matches!(declaration.provision(**tt), TraitProvision::IfParameters))
-                .copied()
-                .collect::<TypespaceTraitSet>(),
-        );
-        (bad, pass)
-    };
-
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means consulting
     // its feasibility for each newly-required trait, absorbing what it can,
@@ -1177,283 +1148,28 @@ where
                 }
             }
         } else {
-            match ty {
-                // TODO 9/12/2026
-                // Can I put the whole block above into here?
-                all_named_types!(_) => unreachable!(),
+            // TODO 9/12/2026
+            // Can I put the whole block above into here?
+            assert!(
+                !ty.is_named(),
+                "the named-type branch above handles every named type"
+            );
 
-                // Native types include trait obligation information.
-                Type::Native(native) => {
-                    // Split the traits into those the native type can't implement
-                    // and those it can if its type paramaters also do (ignore
-                    // traits it always implements and those that are unknown).
-                    // TODO 9/12/2026
-                    // ignoring unknown seems wrong
-                    let (bad, pass) = container_split(&native.container, &traits);
-                    conflict(
-                        bad,
-                        OffenderReason::NativeMissingImpl {
-                            type_name: path_text(native.path()),
-                        },
-                    );
-                    if !pass.is_empty() {
-                        for (index, param_id) in native.parameters().iter().enumerate() {
-                            work.push_back(WorkItem {
-                                target: param_id.clone(),
-                                traits: pass.clone(),
-                                origin: origin.clone(),
-                                path: hop(Relation::Parameter(index)),
-                            });
-                        }
-                    }
-                }
-
-                // Option<T> implements everything we care about--except
-                // for Display and FromStr--as long as T implements them.
-                // Option<T> additionally implements Default unconditionally.
-                Type::Option(inner_id) => {
-                    let (bad, mut pass) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "Option".to_string(),
-                        },
-                    );
-                    pass.remove(TypespaceTrait::Default);
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: inner_id.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-
-                // The utility of Box is primarily to break containment cycles.
-                // We treat it like a container with regard to trait
-                // forwarding, except for Copy: a box heap-allocates and is
-                // never Copy no matter what it holds.
-                Type::Box(inner_id) => {
-                    let (bad, rest) = split(
-                        &traits,
-                        &[
-                            TypespaceTrait::Display,
-                            TypespaceTrait::FromStr,
-                            TypespaceTrait::Copy,
-                        ],
-                    );
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "Box".to_string(),
-                        },
-                    );
-                    if !rest.is_empty() {
-                        work.push_back(WorkItem {
-                            target: inner_id.clone(),
-                            traits: rest,
-                            origin,
-                            path: hop(Relation::Boxed),
-                        });
-                    }
-                }
-
-                // The configured vec type states which traits it never
-                // provides, which it provides whatever the element does,
-                // and which follow the element.
-                Type::Vec(item_id) => {
-                    let (bad, pass) = container_split(&settings.vec_type, &traits);
-                    // TODO 9/12/2026
-                    // Should the type name come from the configured container?
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "Vec".to_string(),
-                        },
-                    );
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: item_id.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-                Type::Array(item_id, _) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "array".to_string(),
-                        },
-                    );
-                    if !rest.is_empty() {
-                        work.push_back(WorkItem {
-                            target: item_id.clone(),
-                            traits: rest,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-                // Tuples implement everything except for Display and FromStr
-                // as long as all their component types do as well.
-                Type::Tuple(field_ids) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "tuple".to_string(),
-                        },
-                    );
-                    if !rest.is_empty() {
-                        for field_id in field_ids {
-                            work.push_back(WorkItem {
-                                target: field_id.clone(),
-                                traits: rest.clone(),
-                                origin: origin.clone(),
-                                path: hop(Relation::Element),
-                            });
-                        }
-                    }
-                }
-
-                // The configured map and set types answer the same way,
-                // over the key and value parameters and over the element
-                // parameter respectively.
-                Type::Map(key_ref, value_ref) => {
-                    let (bad, pass) = container_split(&settings.map_type, &traits);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "map".to_string(),
-                        },
-                    );
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: key_ref.clone(),
-                            traits: pass.clone(),
-                            origin: origin.clone(),
-                            path: hop(Relation::Key),
-                        });
-                        work.push_back(WorkItem {
-                            target: value_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Value),
-                        });
-                    }
-                }
-                Type::Set(element_ref) => {
-                    let (bad, pass) = container_split(&settings.set_type, &traits);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "set".to_string(),
-                        },
-                    );
-                    if !pass.is_empty() {
-                        work.push_back(WorkItem {
-                            target: element_ref.clone(),
-                            traits: pass,
-                            origin,
-                            path: hop(Relation::Element),
-                        });
-                    }
-                }
-
-                // Floating-point types have no total ordering, no equality
-                // relation, and no hash.
-                Type::Float(name) => {
-                    let (bad, _) = split(
-                        &traits,
-                        &[
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::Eq,
-                            TypespaceTrait::Hash,
-                        ],
-                    );
-                    let reason = OffenderReason::Primitive {
-                        type_name: name.clone(),
-                    };
-                    conflict(bad, reason);
-                }
-
-                // Integers and booleans implement every trait we track.
-                Type::Integer(_) | Type::Boolean => (),
-
-                // The unit type implements everything except Display and
-                // FromStr.
-                Type::Unit => {
-                    let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "()".to_string(),
-                        },
-                    );
-                }
-
-                // String implements every trait we track except Copy: an
-                // owned heap buffer can never be Copy.
-                Type::String => {
-                    let (bad, _) = split(&traits, &[TypespaceTrait::Copy]);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "String".to_string(),
-                        },
-                    );
-                }
-
-                // JsonValue implements everything except for Ord,
-                // PartialOrd, and Copy: serde_json::Value derives Clone,
-                // Eq, PartialEq, and Hash, has no ordering impls, and owns
-                // a String and a Vec, which rule out Copy.
-                Type::JsonValue => {
-                    let unsupported = if settings.typify_compat {
-                        vec![
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::PartialOrd,
-                            TypespaceTrait::Copy,
-                            TypespaceTrait::Display,
-                            TypespaceTrait::FromStr,
-                        ]
-                    } else {
-                        vec![
-                            TypespaceTrait::Ord,
-                            TypespaceTrait::PartialOrd,
-                            TypespaceTrait::Copy,
-                        ]
-                    };
-                    let (bad, _) = split(&traits, &unsupported);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "serde_json::Value".to_string(),
-                        },
-                    );
-                }
-
-                // TODO 9/12/2026
-                // This doesn't seem quite right; a raw Never shouldn't be
-                // Absent; only an Option<Never>
-
-                // ::json_serde::Absent derives Clone, Debug, Default, Eq,
-                // Hash, Ord, PartialEq, and PartialOrd, and hand-writes
-                // Serialize, Deserialize, and (under the schemars08 and
-                // schemars1 features) JsonSchema; it has no Display or
-                // FromStr impl (see json-serde/src/lib.rs).
-                Type::Never => {
-                    let (bad, _) = split(&traits, CONTAINER_UNSUPPORTED);
-                    conflict(
-                        bad,
-                        OffenderReason::Primitive {
-                            type_name: "json_serde::Absent".to_string(),
-                        },
-                    );
+            // An unnamed type answers the same three questions
+            // whatever it is: which of the required traits it can
+            // never provide, which it provides only when its children
+            // do, and which children those are. A leaf has no children
+            // and the loop does nothing.
+            let (bad, pass) = unnamed_split(ty, &traits, settings);
+            conflict(bad, unnamed_offender(ty));
+            if !pass.is_empty() {
+                for (relation, child_id) in unnamed_children(ty) {
+                    work.push_back(WorkItem {
+                        target: child_id,
+                        traits: pass.clone(),
+                        origin: origin.clone(),
+                        path: hop(relation),
+                    });
                 }
             }
         }
@@ -1486,25 +1202,252 @@ fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = Typespac
     std::iter::once(trait_name).chain(dependents.iter().copied())
 }
 
+/// Apply a [`TraitProvision`] answer: never is false, always is true,
+/// and "if parameters" defers to `parameters`, which answers whether
+/// every one of the type's parameters has the trait. This is the
+/// desired-phase half of the provision vocabulary; [`provision_split`]
+/// is its required-phase counterpart, applying the same three answers
+/// to a whole set of required traits at once.
+fn provision_applies(provision: TraitProvision, parameters: impl FnOnce() -> bool) -> bool {
+    match provision {
+        // `Unknown` answers `false`, the same as `Never`: reached only
+        // through a native, since finalization rejects a configured
+        // container that declares it, and a desired trait is never
+        // granted on a guess.
+        TraitProvision::Never | TraitProvision::Unknown => false,
+        TraitProvision::Always => true,
+        TraitProvision::IfParameters => parameters(),
+    }
+}
+
 /// Whether a container-shaped declaration ([`ContainerType`], or the
 /// [`ContainerType`] a [`Native`](crate::build::Native) composes)
 /// provides `trait_name`.
 ///
 /// `parameters` answers whether every one of the declaration's type
 /// parameters has the trait; it is consulted only when the declaration
-/// makes the impl conditional on them. `Unknown` answers `false`, the
-/// same as `Never`: reached only through a native (finalization
-/// rejects a configured container that declares it), and a desired
-/// trait is never granted on a guess.
+/// makes the impl conditional on them.
 fn container_provides(
     declaration: &ContainerType,
     trait_name: TypespaceTrait,
     parameters: impl FnOnce() -> bool,
 ) -> bool {
-    match declaration.provision(trait_name) {
-        TraitProvision::Never | TraitProvision::Unknown => false,
-        TraitProvision::Always => true,
-        TraitProvision::IfParameters => parameters(),
+    provision_applies(declaration.provision(trait_name), parameters)
+}
+
+/// Split `traits` at a declaration-backed type -- a configurable
+/// container, or the [`ContainerType`] a native composes -- according
+/// to what it declares it provides: the traits it never provides are
+/// conflicts at the caller, the traits it provides only when its
+/// parameters do pass to those parameters, and the traits it provides
+/// unconditionally are satisfied and go no further.
+fn container_split(
+    declaration: &ContainerType,
+    traits: &TypespaceTraitSet,
+) -> (Vec<TypespaceTrait>, TypespaceTraitSet) {
+    let (bad, pass) = provision_split(traits, |tt| declaration.provision(tt));
+    // Re-close the forwarded set: dropping a trait the container
+    // provides unconditionally can leave a subtrait behind without its
+    // supertraits, and a parameter that absorbed `Eq` with no
+    // `PartialEq` derives code that does not compile.
+    (bad, close_supertraits(pass))
+}
+
+/// Split `traits` by `provision`: a trait answered
+/// [`TraitProvision::Never`] becomes a conflict at the caller, one
+/// answered [`TraitProvision::Always`] is satisfied and dropped here,
+/// and one answered [`TraitProvision::IfParameters`] passes onward for
+/// the caller to push to its child (or children). This is the
+/// required-phase half of the provision vocabulary;
+/// [`provision_applies`] is its desired-phase counterpart, answering
+/// one trait at a time instead of splitting a set.
+///
+/// The returned pass-through set is not re-closed under
+/// [`close_supertraits`]; `container_split`, in [`required_resolution`],
+/// does that itself where a configured container's own obligations
+/// require it.
+fn provision_split(
+    traits: &TypespaceTraitSet,
+    provision: impl Fn(TypespaceTrait) -> TraitProvision,
+) -> (Vec<TypespaceTrait>, TypespaceTraitSet) {
+    let bad = traits
+        .iter()
+        .filter(|tt| matches!(provision(**tt), TraitProvision::Never))
+        .copied()
+        .collect::<Vec<_>>();
+    let pass = traits
+        .iter()
+        .filter(|tt| matches!(provision(**tt), TraitProvision::IfParameters))
+        .copied()
+        .collect::<TypespaceTraitSet>();
+    (bad, pass)
+}
+
+/// Split `traits` at an unnamed type: the traits it can never provide
+/// become conflicts at the caller, and the rest pass to its children.
+///
+/// A native and the configurable vec, set, and map types answer from
+/// their own declaration, so they go through [`container_split`],
+/// which re-closes the pass-through set under [`close_supertraits`].
+/// Everything else answers from the [`unnamed_provision`] table, which
+/// needs no re-closing: the only trait any of those provides
+/// unconditionally is an `Option`'s `Default`, and `Default` has no
+/// supertraits to leave stranded.
+fn unnamed_split<Id>(
+    ty: &Type<Id>,
+    traits: &TypespaceTraitSet,
+    settings: &Settings,
+) -> (Vec<TypespaceTrait>, TypespaceTraitSet) {
+    match ty {
+        // A native carries its own trait declaration, which answers
+        // exactly as a configured container's does.
+        // TODO 9/12/2026
+        // ignoring unknown seems wrong
+        Type::Native(native) => container_split(&native.container, traits),
+        Type::Vec(_) => container_split(&settings.vec_type, traits),
+        Type::Set(_) => container_split(&settings.set_type, traits),
+        Type::Map(..) => container_split(&settings.map_type, traits),
+        _ => provision_split(traits, |trait_name| {
+            unnamed_provision(ty, trait_name, settings)
+        }),
+    }
+}
+
+/// What a conflict at an unnamed type names as the offender.
+fn unnamed_offender<Id>(ty: &Type<Id>) -> OffenderReason {
+    // TODO 9/12/2026
+    // Should the type name come from the configured container?
+    let type_name = match ty {
+        Type::Native(native) => {
+            return OffenderReason::NativeMissingImpl {
+                type_name: path_text(native.path()),
+            };
+        }
+        Type::Option(_) => "Option",
+        Type::Box(_) => "Box",
+        Type::Vec(_) => "Vec",
+        Type::Set(_) => "set",
+        Type::Map(..) => "map",
+        Type::Array(..) => "array",
+        Type::Tuple(_) => "tuple",
+        Type::Unit => "()",
+        Type::String => "String",
+        Type::Boolean => "bool",
+        Type::Integer(name) | Type::Float(name) => name,
+        Type::JsonValue => "serde_json::Value",
+        Type::Never => "json_serde::Absent",
+        all_named_types!(_) => unreachable!("named types take the branch above"),
+    };
+    OffenderReason::Primitive {
+        type_name: type_name.to_string(),
+    }
+}
+
+/// Every child an unnamed type passes a required trait to, labeled by
+/// the relation a conflict path records for the hop.
+///
+/// Empty for a leaf, and for a native with no type parameters.
+fn unnamed_children<Id: Clone>(ty: &Type<Id>) -> Vec<(Relation, Id)> {
+    match ty {
+        Type::Native(native) => native
+            .parameters()
+            .iter()
+            .enumerate()
+            .map(|(index, param_id)| (Relation::Parameter(index), param_id.clone()))
+            .collect(),
+        Type::Option(id) | Type::Array(id, _) | Type::Vec(id) | Type::Set(id) => {
+            vec![(Relation::Element, id.clone())]
+        }
+        Type::Box(id) => vec![(Relation::Boxed, id.clone())],
+        Type::Tuple(ids) => ids
+            .iter()
+            .map(|id| (Relation::Element, id.clone()))
+            .collect(),
+        Type::Map(key_id, value_id) => vec![
+            (Relation::Key, key_id.clone()),
+            (Relation::Value, value_id.clone()),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// The provision table for the unnamed types that have no
+/// [`ContainerType`] declaration of their own: `Option`, `Box`,
+/// arrays, tuples, and the child-free leaves. States each one's rule
+/// exactly once, as the same never/always/if-parameters answer a
+/// configured container's declaration gives; [`required_resolution`]
+/// consults it through [`provision_split`] and [`unnamed_provides`]
+/// consults it through [`provision_applies`], so a divergence between
+/// what required resolution enforces and what a query like
+/// [`view::Type::has_impl`](crate::view::Type::has_impl) reports is no
+/// longer possible for these types.
+///
+/// Not called for named types, [`Type::Native`] (whose own declared
+/// impls answer instead), or `Vec`, `Set`, and `Map` (whose
+/// [`ContainerType`] declaration is consulted directly at their call
+/// sites).
+fn unnamed_provision<Id>(
+    ty: &Type<Id>,
+    trait_name: TypespaceTrait,
+    settings: &Settings,
+) -> TraitProvision {
+    match ty {
+        // Option<T> implements everything we care about--except
+        // for Display and FromStr--as long as T implements them.
+        // Option<T> additionally implements Default unconditionally.
+        Type::Option(_) if CONTAINER_UNSUPPORTED.contains(&trait_name) => TraitProvision::Never,
+        Type::Option(_) if trait_name == TypespaceTrait::Default => TraitProvision::Always,
+        Type::Option(_) => TraitProvision::IfParameters,
+
+        // Tuples implement everything except for Display and FromStr
+        // as long as all their component types do as well.
+        //
+        // Arrays and tuples forward everything they can provide,
+        // Default included.
+        Type::Array(..) | Type::Tuple(_) if CONTAINER_UNSUPPORTED.contains(&trait_name) => {
+            TraitProvision::Never
+        }
+        Type::Array(..) | Type::Tuple(_) => TraitProvision::IfParameters,
+
+        // The utility of Box is primarily to break containment cycles.
+        // We treat it like a container with regard to trait
+        // forwarding, except for Copy: a box heap-allocates and is
+        // never Copy no matter what it holds.
+        Type::Box(_)
+            if trait_name == TypespaceTrait::Copy
+                || CONTAINER_UNSUPPORTED.contains(&trait_name) =>
+        {
+            TraitProvision::Never
+        }
+        Type::Box(_) => TraitProvision::IfParameters,
+
+        // Child-free built-ins answer from the shared leaf table.
+        Type::Integer(_)
+        | Type::Boolean
+        | Type::String
+        | Type::Unit
+        | Type::Never
+        | Type::Float(_)
+        | Type::JsonValue => match leaf_provides(ty, trait_name, settings) {
+            Some(true) => TraitProvision::Always,
+            Some(false) => TraitProvision::Never,
+            None => unreachable!("every arm above is a leaf the table answers"),
+        },
+
+        Type::Enum(_)
+        | Type::Struct(_)
+        | Type::UnitStruct(_)
+        | Type::TupleStruct(_)
+        | Type::NewtypeStruct(_)
+        | Type::TypeAlias(_)
+        | Type::Native(_)
+        | Type::Vec(_)
+        | Type::Set(_)
+        | Type::Map(..) => {
+            unreachable!(
+                "unnamed_provision is not called for named types, Native, or the configurable containers"
+            )
+        }
     }
 }
 
@@ -1516,19 +1459,14 @@ fn container_provides(
 /// answer from one rule set. `provides` asks a child through its `has`
 /// map (what desired resolution has not yet stripped); the view asks a
 /// child by recursing into the finalized typespace. Either way: a
-/// configured container answers from its declaration, and the
-/// containers a consumer cannot configure forward a trait to their
-/// parameters, except that none has `Display` or `FromStr` and
-/// `Option` provides `Default` whatever it holds.
+/// configured container answers from its declaration, and every other
+/// unnamed type answers from [`unnamed_provision`]'s table.
 pub(crate) fn unnamed_provides<Id>(
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     settings: &Settings,
     child_has: &mut dyn FnMut(&Id) -> bool,
 ) -> bool {
-    let supported = !CONTAINER_UNSUPPORTED.contains(&trait_name);
-    let is_default = matches!(trait_name, TypespaceTrait::Default);
-
     match ty {
         all_named_types!(_) => unreachable!(),
 
@@ -1541,15 +1479,6 @@ pub(crate) fn unnamed_provides<Id>(
         Type::Native(native) => container_provides(&native.container, trait_name, || {
             native.parameters.iter().all(child_has)
         }),
-
-        // Pass the buck, minus Display and FromStr, which an Option<T> never
-        // implements, and Default, which Option<T> always implements.
-        Type::Option(inner_id) => supported && (is_default || child_has(inner_id)),
-        // Box is never Copy, whatever it holds; every other trait
-        // follows the boxed type.
-        Type::Box(inner_id) => {
-            supported && trait_name != TypespaceTrait::Copy && child_has(inner_id)
-        }
 
         // The configurable containers answer from what their
         // declaration says they provide, the same table required
@@ -1564,10 +1493,29 @@ pub(crate) fn unnamed_provides<Id>(
             child_has(key_ref) && child_has(value_ref)
         }),
 
-        // Arrays and tuples forward everything they can provide,
-        // Default included.
-        Type::Array(item_id, _) => supported && child_has(item_id),
-        Type::Tuple(field_ids) => supported && field_ids.iter().all(child_has),
+        // Option, Box, arrays, and tuples answer from the shared
+        // `unnamed_provision` table, the same one required resolution
+        // consults.
+        Type::Option(inner_id) => {
+            provision_applies(unnamed_provision(ty, trait_name, settings), || {
+                child_has(inner_id)
+            })
+        }
+        Type::Box(inner_id) => {
+            provision_applies(unnamed_provision(ty, trait_name, settings), || {
+                child_has(inner_id)
+            })
+        }
+        Type::Array(item_id, _) => {
+            provision_applies(unnamed_provision(ty, trait_name, settings), || {
+                child_has(item_id)
+            })
+        }
+        Type::Tuple(field_ids) => {
+            provision_applies(unnamed_provision(ty, trait_name, settings), || {
+                field_ids.iter().all(child_has)
+            })
+        }
 
         // Child-free built-ins answer from the shared leaf table.
         Type::Integer(_)
