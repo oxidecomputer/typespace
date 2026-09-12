@@ -4241,6 +4241,29 @@ fn test_default_value_map_key_type() {
 
 /// A property default value for a tuple struct, both a plain one and
 /// one whose trailing field collects the rest of the sequence.
+// A tuple struct with a whole-type default value renders a `Default`
+// impl built from that value, so its fields owe no `Default` of their
+// own. `feasibility` answers `IfSomeChildren(vec![])` for that case;
+// answering `IfAllChildren` instead obligates every field, which is a
+// requirement the generated impl never relies on.
+#[test]
+fn tuple_struct_with_a_default_value_obligates_no_field() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Default)
+            .with_required_trait(TypespaceTrait::Clone),
+        {
+            native ::std::net::IpAddr: Clone + Deserialize;
+
+            #[default = ["127.0.0.1", 8080]]
+            struct Addressed(::std::net::IpAddr, u32);
+        }
+    );
+    builder
+        .finalize(no_cycles)
+        .expect("a default value supplies the field, so IpAddr owes no Default");
+}
+
 #[test]
 fn test_default_value_tuple_struct_kinds() {
     let builder = typespace_builder!(default_settings(), {

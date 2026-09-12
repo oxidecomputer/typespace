@@ -150,24 +150,45 @@ pub enum Type<Id> {
 }
 
 macro_rules! all_named_types {
-    ($common:pat) => {
+    (_) => {
+        $crate::build::Type::Enum(_)
+        | $crate::build::Type::Struct(_)
+        | $crate::build::Type::UnitStruct(_)
+        | $crate::build::Type::TupleStruct(_)
+        | $crate::build::Type::NewtypeStruct(_)
+        | $crate::build::Type::TypeAlias(_)
+    };
+
+    // Identifiers get dispatched so we can recognize `common`.
+    ($common:ident) => {
+        all_named_types!(@ident $common; $common)
+    };
+
+    // `common` specifically. `$common` is still the caller's token,
+    // so its hygiene is correct.
+    (@ident common; $common:ident) => {
         $crate::build::Type::Enum($crate::build::Enum {
-            common: $common,
+            $common,
             ..
-        }) | $crate::build::Type::Struct($crate::build::Struct {
-            common: $common,
+        })
+        | $crate::build::Type::Struct($crate::build::Struct {
+            $common,
             ..
-        }) | $crate::build::Type::UnitStruct($crate::build::UnitStruct {
-            common: $common,
+        })
+        | $crate::build::Type::UnitStruct($crate::build::UnitStruct {
+            $common,
             ..
-        }) | $crate::build::Type::TupleStruct($crate::build::TupleStruct {
-            common: $common,
+        })
+        | $crate::build::Type::TupleStruct($crate::build::TupleStruct {
+            $common,
             ..
-        }) | $crate::build::Type::NewtypeStruct($crate::build::NewtypeStruct {
-            common: $common,
+        })
+        | $crate::build::Type::NewtypeStruct($crate::build::NewtypeStruct {
+            $common,
             ..
-        }) | $crate::build::Type::TypeAlias($crate::build::TypeAlias {
-            common: $common,
+        })
+        | $crate::build::Type::TypeAlias($crate::build::TypeAlias {
+            $common,
             ..
         })
     };
