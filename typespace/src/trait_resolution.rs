@@ -260,17 +260,17 @@ fn classify_edges<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
 pub(crate) fn resolve_traits<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
-    deserialized_defaults: &BTreeMap<Id, Id>,
+    default_checks: &crate::DefaultChecks<Id>,
 ) -> Result<(), Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
     // First propagate required traits. A failure to satisfy a required trait
     // is an error.
-    required_resolution(types, settings, deserialized_defaults)?;
+    required_resolution(types, settings, default_checks)?;
 
     // Then propagate desired traits to the types that support them.
-    desired_resolution(types, settings);
+    desired_resolution(types, settings, default_checks);
 
     Ok(())
 }
@@ -483,7 +483,7 @@ enum Feasibility<Id> {
     IfAllChildren,
     /// The type requires some (or none! but usually not all) of its children
     /// to implement the trait.
-    IfSomeChildren(Vec<(Relation, Id)>),
+    IfSomeChildren(Vec<(TypespaceTrait, Relation, Id)>),
     /// No derive and no manual impl exists for this kind of type and trait;
     /// the reason is the one a [`TraitConflict`] reports if the trait was
     /// required.
@@ -529,9 +529,11 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 /// separate case is needed for it.
 fn feasibility<Id>(
     types: &BTreeMap<Id, Type<Id>>,
+    type_id: &Id,
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     settings: &Settings,
+    default_checks: &crate::DefaultChecks<Id>,
 ) -> Feasibility<Id>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -555,7 +557,7 @@ where
                 TypespaceTrait::Display | TypespaceTrait::FromStr => cannot_implement(),
 
                 TypespaceTrait::Default => {
-                    if let Some(default) = struct_info.common.default() {
+                    if struct_info.common.default().is_some() {
                         // The hand-written impl takes each property the
                         // default value names from that value, and
                         // takes the rest from whatever that property
@@ -563,58 +565,20 @@ where
                         // value where it has one, and
                         // Default::default() otherwise. Only the
                         // second of those calls the property type's
-                        // Default, so only those properties are
-                        // obligations. A flattened property has no wire
-                        // name to look for, and a default value that is
-                        // not a JSON object names nothing at all;
-                        // either way the property counts as unnamed. An
-                        // optional property is exempt whether the value
-                        // names it or not: it renders as an Option (or
-                        // as the configured optional-nullable type),
-                        // which is Default whatever the property's own
-                        // type is.
-                        let map = default.as_object();
-                        let obligations = struct_info
-                            .properties
-                            .iter()
-                            .filter(|prop| {
-                                // TODO 9/12/2026
-                                // There's clearly a bug in here with flattened
-                                // fields.
-                                // flattened_default_value_supplies_the_flattened_property
-
-                                // Does the default value specify a value for
-                                // this property?
-                                let default_has_prop = matches!(
-                                    (map, prop.wire_name()),
-                                    (Some(named), Some(wire_name)) if named.contains_key(wire_name)
-                                );
-                                // Does the property have a given default value
-                                // either by virtue of being Optional or by
-                                // having a DefaultValue attached to the
-                                // property?
-                                let prop_has_default = matches!(
-                                    &prop.state,
-                                    StructPropertyState::Optional
-                                        | StructPropertyState::DefaultValue(_)
-                                );
-
-                                // If both are false (i.e. the provided default
-                                // value doesn't specify a value for this
-                                // property AND the property doesn't provide a
-                                // value), then we need the type of the
-                                // property to provide an implementation for
-                                // default.
-                                !default_has_prop && !prop_has_default
-                            })
-                            .map(|prop| {
-                                (
-                                    Relation::Field(prop.rust_name.clone()),
-                                    prop.type_id.clone(),
-                                )
-                            })
-                            .collect();
-                        Feasibility::IfSomeChildren(obligations)
+                        // The default walk already worked out what
+                        // rendering this value obliges, including for a
+                        // flattened property, whose fields appear inline
+                        // and which therefore has no wire name to look
+                        // for. Reading its answer keeps one source of
+                        // truth; deriving a second one here is what made
+                        // a flattened property look unsupplied.
+                        Feasibility::IfSomeChildren(
+                            default_checks
+                                .whole_type
+                                .get(type_id)
+                                .cloned()
+                                .unwrap_or_default(),
+                        )
                     } else if struct_info
                         .properties
                         .iter()
@@ -639,6 +603,7 @@ where
                             .filter(|prop| matches!(prop.state, StructPropertyState::Default))
                             .map(|prop| {
                                 (
+                                    TypespaceTrait::Default,
                                     Relation::Field(prop.rust_name.clone()),
                                     prop.type_id.clone(),
                                 )
@@ -708,7 +673,7 @@ where
                     Feasibility::IfSomeChildren(
                         ty.contained_children_related()
                             .into_iter()
-                            .map(|ContainedChild { relation, id, .. }| (relation, id))
+                            .map(|ContainedChild { relation, id, .. }| (trait_name, relation, id))
                             .collect(),
                     )
                 } else {
@@ -739,7 +704,9 @@ where
                         None => Feasibility::IfSomeChildren(
                             ty.contained_children_related()
                                 .into_iter()
-                                .map(|ContainedChild { relation, id, .. }| (relation, id))
+                                .map(|ContainedChild { relation, id, .. }| {
+                                    (trait_name, relation, id)
+                                })
                                 .collect(),
                         ),
                     }
@@ -789,7 +756,7 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
 fn required_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
-    deserialized_defaults: &BTreeMap<Id, Id>,
+    default_checks: &crate::DefaultChecks<Id>,
 ) -> Result<(), Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -951,7 +918,7 @@ where
     // A native-typed position in a default value is constructed in
     // generated code by deserializing it (default.rs's Type::Native
     // arm), so the value requires Deserialize of the native type.
-    for (native_id, owner_id) in deserialized_defaults {
+    for (native_id, owner_id) in &default_checks.deserialized {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
     }
 
@@ -1062,7 +1029,7 @@ where
                     continue;
                 }
 
-                match feasibility(types, ty, trait_name, settings) {
+                match feasibility(types, &target, ty, trait_name, settings, default_checks) {
                     Feasibility::IfAllChildren => {
                         built_traits.add(trait_name);
                         all_children.push(trait_name);
@@ -1165,10 +1132,10 @@ where
                     ]
                     .contains(&trait_name)
                 );
-                for (relation, child_id) in obligations {
+                for (required, relation, child_id) in obligations {
                     work.push_back(WorkItem {
                         target: child_id,
-                        traits: [trait_name].into_iter().collect::<TypespaceTraitSet>(),
+                        traits: [required].into_iter().collect::<TypespaceTraitSet>(),
                         origin: origin.clone(),
                         path: hop(relation),
                     });
@@ -1590,10 +1557,12 @@ pub(crate) fn unnamed_provides<Id>(
 /// [`unnamed_provides`].
 fn provides<Id>(
     types: &BTreeMap<Id, Type<Id>>,
+    type_id: &Id,
     ty: &Type<Id>,
     trait_name: TypespaceTrait,
     has: &BTreeMap<Id, TypespaceTraitSet>,
     settings: &Settings,
+    default_checks: &crate::DefaultChecks<Id>,
 ) -> bool
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -1604,7 +1573,7 @@ where
     };
 
     if ty.is_named() {
-        match feasibility(types, ty, trait_name, settings) {
+        match feasibility(types, type_id, ty, trait_name, settings, default_checks) {
             Feasibility::Impossible(_) => false,
             // A wrapped property edge answers from the declared custom
             // optional-nullable wrapper, exactly as required resolution
@@ -1621,9 +1590,16 @@ where
                         Edge::Plain(_, child_id) => child_has(&child_id),
                     })
             }
-            Feasibility::IfSomeChildren(obligations) => obligations
-                .iter()
-                .all(|(_, obligated)| child_has(obligated)),
+            // Each obligation names the trait its target must have,
+            // which is not always the trait being asked about here: a
+            // default value renders inside one impl and may oblige
+            // another trait of what it constructs.
+            Feasibility::IfSomeChildren(obligations) => {
+                obligations.iter().all(|(required, _, obligated)| {
+                    has.get(obligated)
+                        .is_some_and(|traits| traits.contains(required))
+                })
+            }
         }
     } else {
         unnamed_provides(ty, trait_name, settings, &mut child_has)
@@ -1712,8 +1688,11 @@ where
 ///
 /// Unlike with required traits, a failure to implement a desired trait is
 /// logged but doesn't produce an error.
-fn desired_resolution<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Settings)
-where
+fn desired_resolution<Id>(
+    types: &mut BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+    default_checks: &crate::DefaultChecks<Id>,
+) where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
     // Expand to include transitive dependencies of each desired trait.
@@ -1750,7 +1729,17 @@ where
         .flat_map(|(type_id, ty)| {
             desired
                 .iter()
-                .filter(|trait_name| !provides(types, ty, **trait_name, &state.has, settings))
+                .filter(|trait_name| {
+                    !provides(
+                        types,
+                        type_id,
+                        ty,
+                        **trait_name,
+                        &state.has,
+                        settings,
+                        default_checks,
+                    )
+                })
                 .map(|trait_name| (type_id.clone(), *trait_name))
                 .collect::<Vec<_>>()
         })
@@ -1764,7 +1753,15 @@ where
         for referrer in referrers.get(&loser).into_iter().flatten() {
             let ty = types.get(referrer).unwrap();
             if state.has[referrer].contains(&trait_name)
-                && !provides(types, ty, trait_name, &state.has, settings)
+                && !provides(
+                    types,
+                    referrer,
+                    ty,
+                    trait_name,
+                    &state.has,
+                    settings,
+                    default_checks,
+                )
             {
                 let granted = granted_traits(types, referrer);
                 state.lose(referrer, trait_name, &loser, granted);
@@ -1807,15 +1804,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use super::{Feasibility, feasibility, from_string_irrefutable};
+    use super::from_string_irrefutable;
     use crate::{
         Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
-        build::{
-            JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct, StructProperty,
-            StructPropertySerde, StructPropertyState, TupleStruct, Type,
-        },
+        build::{JsonValue, Native, NewtypeConstraints, NewtypeStruct, TupleStruct, Type},
         error::{Error, OffenderReason, Relation, RequirementOrigin},
         no_cycles,
         settings::{ContainerType, Settings},
@@ -2987,64 +2979,6 @@ mod tests {
         assert_eq!(
             built_traits(&typespace, "Color"),
             trait_set([TypespaceTrait::Clone])
-        );
-    }
-
-    /// The hand-written `Default` impl a whole-type default value
-    /// realizes takes each property the value names from the value and
-    /// fills the rest with `Default::default()`, so the properties the
-    /// value leaves out are what it obligates. The value is searched
-    /// for the wire name, not the Rust name (`trap` is obligated: the
-    /// value's `trap` key is not the `trap_wire` the property
-    /// serializes under). An optional property is exempt, and a
-    /// flattened property, having no wire name at all, is obligated.
-    #[test]
-    fn attached_struct_default_obligates_the_properties_it_omits() {
-        let ty = Struct::<String>::new()
-            .name("S")
-            .default(serde_json::json!({
-                "plain": 0,
-                "wire": 0,
-                "trap": 0,
-            }))
-            .properties([
-                StructProperty::new("plain", "u32".to_string()),
-                StructProperty::new("renamed", "u32".to_string())
-                    .with_json_name(StructPropertySerde::Rename("wire".to_string())),
-                StructProperty::new("trap", "u32".to_string())
-                    .with_json_name(StructPropertySerde::Rename("trap_wire".to_string())),
-                StructProperty::new("missing", "Missing".to_string()),
-                StructProperty::new("optional", "Omitted".to_string())
-                    .with_state(StructPropertyState::Optional),
-                StructProperty::new("flattened", "Flattened".to_string())
-                    .with_json_name(StructPropertySerde::Flatten),
-            ])
-            .build()
-            .unwrap();
-
-        let Feasibility::IfSomeChildren(obligations) = feasibility(
-            &BTreeMap::new(),
-            &ty,
-            TypespaceTrait::Default,
-            &Settings::minimal(),
-        ) else {
-            panic!("expected a hand-written impl");
-        };
-
-        let obligated = obligations
-            .iter()
-            .map(|(relation, type_id)| match relation {
-                Relation::Field(name) => (name.as_str(), type_id.as_str()),
-                other => panic!("unexpected relation: {other}"),
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            obligated,
-            vec![
-                ("trap", "u32"),
-                ("missing", "Missing"),
-                ("flattened", "Flattened"),
-            ]
         );
     }
 

@@ -591,7 +591,17 @@ impl<Id> StructProperty<Id> {
             return Ok(BTreeSet::new());
         };
 
-        typespace.check_default(value, &self.type_id)
+        // A property's own default value renders as a `defaults::`
+        // function reached on a deserialize path, so its natives are
+        // seeded as requirements rather than made conditional on
+        // `Default`. Only the `Deserialize` obligations apply here.
+        Ok(typespace
+            .check_default(value, &self.type_id)?
+            .into_iter()
+            .filter_map(|(required, _, target)| {
+                (required == crate::TypespaceTrait::Deserialize).then_some(target)
+            })
+            .collect())
     }
 }
 

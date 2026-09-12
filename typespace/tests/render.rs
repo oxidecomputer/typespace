@@ -5934,7 +5934,6 @@ fn test_tuple_struct_default_length_bounds() {
 }
 
 #[test]
-#[ignore = "feasibility matches a default value against wire names, which a flattened property lacks"]
 fn flattened_default_value_supplies_the_flattened_property() {
     let builder = typespace_builder!(
         Settings::minimal().with_desired_trait(TypespaceTrait::Default),
@@ -5955,5 +5954,41 @@ fn flattened_default_value_supplies_the_flattened_property() {
         ts.get_type(&"Foo".to_string())
             .has_impl(TypespaceTrait::Default),
         "Foo lost Default even though its default value supplies every field"
+    );
+}
+
+// A default value only reaches generated code through an impl that
+// trait resolution may never grant. A whole-type default renders
+// inside a `Default` impl, so a type that never receives `Default`
+// never constructs its value, and the natives inside that value are
+// never deserialized.
+//
+// `check_type_defaults` walks every attached default value regardless
+// and seeds `Deserialize` for each native it finds, so the requirement
+// lands whether or not the code that would deserialize it is emitted.
+// Under `Settings::minimal()`, where nothing requires `Default`, that
+// refuses a graph whose output would have been fine. The conflict even
+// says "generated code does so by deserializing it", which is a claim
+// about a decision that has not been made when the seed is created.
+//
+// The same conditionality applies to a property-level `DefaultValue`,
+// whose `defaults::` function is reached only on a `Deserialize` path.
+#[test]
+fn a_default_value_that_is_never_rendered_requires_nothing() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        native ::ext::Thing: Clone;
+
+        #[default = ["x", 7]]
+        struct Holder(::ext::Thing, u32);
+    });
+
+    let typespace = builder
+        .finalize(no_cycles)
+        .expect("Holder never gets Default, so its value is never constructed");
+
+    let rendered = typespace.to_codespace().into_stream().to_string();
+    assert!(
+        !rendered.contains("Default for Holder"),
+        "nothing required Default of Holder, so no impl should be rendered"
     );
 }

@@ -10,9 +10,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::{
-    TypespaceBuilder, TypespaceRenderer,
+    TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
     build::{self, StructProperty, StructPropertySerde, StructPropertyState, Type, VariantDetails},
-    error::Error,
+    error::{Error, Relation},
     settings::{OptionalNullable, Settings, Std},
 };
 
@@ -158,7 +158,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         &self,
         value: &serde_json::Value,
         id: &Id,
-    ) -> Result<BTreeSet<Id>, Error<Id>> {
+    ) -> Result<Vec<(TypespaceTrait, Relation, Id)>, Error<Id>> {
         let Self { types, settings } = self;
         check_default(types, settings, value, id)
     }
@@ -169,7 +169,7 @@ fn check_default<Id>(
     settings: &Settings,
     value: &serde_json::Value,
     id: &Id,
-) -> Result<BTreeSet<Id>, Error<Id>>
+) -> Result<Vec<(TypespaceTrait, Relation, Id)>, Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -182,7 +182,7 @@ where
     };
     let mut state = WalkState::new();
     imp.default_impl(&mut state, id, value)?;
-    Ok(state.deserialized_natives)
+    Ok(state.obligations)
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
@@ -283,18 +283,20 @@ struct WalkState<Id> {
     /// The (id, value) pairs visited so far while expanding a default
     /// value, used to detect and reject recursive expansion.
     expansion_set: Vec<(Id, serde_json::Value)>,
-    /// The native types the walk reaches. A native-typed position is
-    /// constructed by deserializing its value, so each collected type
-    /// must implement Deserialize; `check_default` hands the set to
-    /// its caller and trait resolution seeds the requirement from it.
-    deserialized_natives: BTreeSet<Id>,
+    /// What rendering this value obliges of other types, as
+    /// `(trait, relation, target)`. Everything here is CONDITIONAL on
+    /// the owner actually rendering the value: a whole-type default
+    /// lives inside a `Default` impl that trait resolution may never
+    /// grant, so these are handed to `feasibility` to evaluate rather
+    /// than seeded as requirements.
+    obligations: Vec<(TypespaceTrait, Relation, Id)>,
 }
 
 impl<Id> WalkState<Id> {
     fn new() -> Self {
         Self {
             expansion_set: Vec::new(),
-            deserialized_natives: BTreeSet::new(),
+            obligations: Vec::new(),
         }
     }
 }
@@ -399,7 +401,11 @@ where
                 // expect rather than unwrap?
 
                 if self.mode == Mode::Check {
-                    state.deserialized_natives.insert(id.clone());
+                    state.obligations.push((
+                        TypespaceTrait::Deserialize,
+                        Relation::Inner,
+                        id.clone(),
+                    ));
                 }
                 let text = value.to_string();
                 Ok(self.generate(|| {
@@ -732,6 +738,22 @@ where
                     // optional-nullable settings).
                     (StructPropertyState::Optional, None)
                     | (StructPropertyState::Default, None) => {
+                        // The value says nothing about this property, so
+                        // the impl fills it from Default::default(). For a
+                        // property in the Default state that is its own
+                        // type's Default, which the type therefore owes. An
+                        // Optional property renders as an Option, or as the
+                        // configured optional-nullable wrapper, and either
+                        // is Default whatever it holds, so it owes nothing.
+                        if self.mode == Mode::Check
+                            && prop_info.state == StructPropertyState::Default
+                        {
+                            state.obligations.push((
+                                TypespaceTrait::Default,
+                                Relation::Field(prop_info.rust_name.clone()),
+                                prop_info.type_id.clone(),
+                            ));
+                        }
                         if self.mode == Mode::Generate {
                             // TODO 9/4/2026
                             // Qualify default Default
