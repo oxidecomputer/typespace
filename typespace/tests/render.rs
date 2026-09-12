@@ -5909,3 +5909,28 @@ fn test_tuple_struct_default_length_bounds() {
     });
     assert!(just_right.finalize(no_cycles).is_ok());
 }
+
+#[test]
+#[ignore = "feasibility matches a default value against wire names, which a flattened property lacks"]
+fn flattened_default_value_supplies_the_flattened_property() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::Default),
+        {
+            #[default = { "bar": 1, "baz": 2 }]
+            struct Foo {
+                #[flatten]
+                inner: Bar,
+            }
+            struct Bar {
+                bar: u32,
+                baz: u32,
+            }
+        }
+    );
+    let ts = builder.finalize(no_cycles).expect("finalize succeeds");
+    assert!(
+        ts.get_type(&"Foo".to_string())
+            .has_impl(TypespaceTrait::Default),
+        "Foo lost Default even though its default value supplies every field"
+    );
+}

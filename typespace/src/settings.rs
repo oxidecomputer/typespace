@@ -457,7 +457,7 @@ pub struct ContainerType {
 
     /// What the container demands of each of its type parameters, in
     /// parameter order.
-    pub(crate) obligations: Vec<TypespaceTraitSet>,
+    obligations: Vec<TypespaceTraitSet>,
 
     /// What the container implements for each trait typespace tracks.
     provisions: ProvisionTable,

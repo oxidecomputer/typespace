@@ -149,6 +149,32 @@ pub enum Type<Id> {
     Never,
 }
 
+macro_rules! all_named_types {
+    ($common:pat) => {
+        $crate::build::Type::Enum($crate::build::Enum {
+            common: $common,
+            ..
+        }) | $crate::build::Type::Struct($crate::build::Struct {
+            common: $common,
+            ..
+        }) | $crate::build::Type::UnitStruct($crate::build::UnitStruct {
+            common: $common,
+            ..
+        }) | $crate::build::Type::TupleStruct($crate::build::TupleStruct {
+            common: $common,
+            ..
+        }) | $crate::build::Type::NewtypeStruct($crate::build::NewtypeStruct {
+            common: $common,
+            ..
+        }) | $crate::build::Type::TypeAlias($crate::build::TypeAlias {
+            common: $common,
+            ..
+        })
+    };
+}
+
+pub(crate) use all_named_types;
+
 impl<Id> Type<Id> {
     /// The name of this type, if it has one.
     ///
@@ -211,12 +237,7 @@ impl<Id> Type<Id> {
     /// caller-assigned name.
     pub(crate) fn common(&self) -> Option<&TypeCommon> {
         match self {
-            Type::Enum(Enum { common, .. })
-            | Type::Struct(Struct { common, .. })
-            | Type::UnitStruct(UnitStruct { common, .. })
-            | Type::TupleStruct(TupleStruct { common, .. })
-            | Type::NewtypeStruct(NewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeAlias { common, .. }) => Some(common),
+            all_named_types!(common) => Some(common),
             _ => None,
         }
     }
@@ -226,12 +247,7 @@ impl<Id> Type<Id> {
     /// variants as `common`.
     pub(crate) fn common_mut(&mut self) -> Option<&mut TypeCommon> {
         match self {
-            Type::Enum(Enum { common, .. })
-            | Type::Struct(Struct { common, .. })
-            | Type::UnitStruct(UnitStruct { common, .. })
-            | Type::TupleStruct(TupleStruct { common, .. })
-            | Type::NewtypeStruct(NewtypeStruct { common, .. })
-            | Type::TypeAlias(TypeAlias { common, .. }) => Some(common),
+            all_named_types!(common) => Some(common),
             _ => None,
         }
     }
@@ -601,15 +617,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// are exactly those carrying a name, description, default, and
     /// per-type derives and attributes.
     pub fn is_named(&self) -> bool {
-        matches!(
-            self,
-            Type::Enum(_)
-                | Type::Struct(_)
-                | Type::UnitStruct(_)
-                | Type::TupleStruct(_)
-                | Type::NewtypeStruct(_)
-                | Type::TypeAlias(_)
-        )
+        matches!(self, all_named_types!(_))
     }
 
     /// Re-run the shape checks that `build()` applies.

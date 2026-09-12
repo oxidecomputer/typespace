@@ -93,6 +93,7 @@ use quote::{ToTokens, format_ident, quote};
 use crate::build::{
     Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
     StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
+    all_named_types,
 };
 use crate::default::{SharedDefaultFn, shared_default_fn};
 use crate::error::Error;
@@ -1754,12 +1755,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // Here we assume that the generated type for the field has an
             // implementation of Default. There isn't a simple "is_default()"
             // that we can presume... so we'll just leave it.
-            Type::Enum(_)
-            | Type::Struct(_)
-            | Type::UnitStruct(_)
-            | Type::TupleStruct(_)
-            | Type::NewtypeStruct(_)
-            | Type::TypeAlias(_) => {}
+            all_named_types!(_) => {}
 
             // The same applies to external types.
             Type::Native(_) => {}

@@ -193,7 +193,7 @@ use log::debug;
 
 use crate::build::{
     ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
-    TupleStruct, Type, TypeAlias, VariantDetails,
+    TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::{ContainerType, OptionalNullable, Settings, path_text};
@@ -218,7 +218,12 @@ enum Edge<'a, Id> {
     },
 }
 
-/// Classify every contained child of `ty` for trait propagation.
+/// Classify every contained child of `ty` for trait propagation. For an
+/// Optional struct field that's also an Option type we render that with either
+/// an Option or double-Option, whose trait obligations are simple and known a
+/// priori, or a custom container, whose obligations need to be handled at
+/// runtime. In that latter case, we wrap the child with the container so that
+/// trait propagation can properly handle it.
 fn classify_edges<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
     ty: &Type<Id>,
     types: &BTreeMap<Id, Type<Id>>,
@@ -402,9 +407,7 @@ where
 /// Applied to every initial requirement set as it is formed (the
 /// settings-required set, container obligations, and the serde-default and
 /// default-value seeds), so a requirement enters the queue with the
-/// supertraits it needs; otherwise a lone `Ord` requirement would derive `Ord`
-/// without the `Eq`/`PartialEq`/`PartialOrd` impls it needs, and the emitted
-/// derive would not compile.
+/// supertraits it needs.
 fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     if traits.contains(&TypespaceTrait::Ord) {
         traits.add(TypespaceTrait::PartialOrd);
@@ -475,30 +478,15 @@ pub(crate) fn leaf_provides<Id>(
 }
 
 /// What a named type can do about one required trait.
-///
-/// The end-state answer for `(kind of type, trait)`--consulted once
-/// per required trait at every named type reached during required
-/// resolution. Obligation lists carry the same trait onward to
-/// specific, relation-labeled targets; `Derivable` and `Forward`
-/// obligate every contained child (via
-/// [`Type::contained_children_related`]) and are handled identically
-/// by the caller, but are kept distinct here because they mean
-/// different things to rendering: a derive attribute versus an alias
-/// whose fate is entirely its target's.
 enum Feasibility<Id> {
-    /// The type derives the trait as long as every contained child
-    /// does.
-    Derivable,
-    /// The type realizes the trait with a manual impl; the listed
-    /// relation-labeled targets must also implement it. Often empty:
-    /// an attached default value, say, needs nothing from anyone
-    /// else.
-    ManuallyRealizable(Vec<(Relation, Id)>),
-    /// A type alias: the trait's fate is entirely its target's.
-    Forward,
-    /// No derive and no manual impl exists for this kind of type and
-    /// trait; the reason is the one a [`TraitConflict`] reports if the
-    /// trait was required.
+    /// The type derives the trait as long as every contained child does.
+    IfAllChildren,
+    /// The type requires some (or none! but usually not all) of its children
+    /// to implement the trait.
+    IfSomeChildren(Vec<(Relation, Id)>),
+    /// No derive and no manual impl exists for this kind of type and trait;
+    /// the reason is the one a [`TraitConflict`] reports if the trait was
+    /// required.
     Impossible(OffenderReason),
 }
 
@@ -560,13 +548,12 @@ where
     match ty {
         // An alias has no impl site of its own to realize anything
         // with; every trait's fate belongs entirely to its target.
-        Type::TypeAlias(_) => Feasibility::Forward,
+        Type::TypeAlias(_) => Feasibility::IfAllChildren,
         Type::Struct(struct_info) => {
             match trait_name {
-                // Neither has a derive, and neither has a sensible
-                // manual rendering: a struct's fields have no implied
-                // textual order or separator.
+                // Not applicable.
                 TypespaceTrait::Display | TypespaceTrait::FromStr => cannot_implement(),
+
                 TypespaceTrait::Default => {
                     if let Some(default) = struct_info.common.default() {
                         // The hand-written impl takes each property the
@@ -591,6 +578,11 @@ where
                             .properties
                             .iter()
                             .filter(|prop| {
+                                // TODO 9/12/2026
+                                // There's clearly a bug in here with flattened
+                                // fields.
+                                // flattened_default_value_supplies_the_flattened_property
+
                                 // Does the default value specify a value for
                                 // this property?
                                 let default_has_prop = matches!(
@@ -622,7 +614,7 @@ where
                                 )
                             })
                             .collect();
-                        Feasibility::ManuallyRealizable(obligations)
+                        Feasibility::IfSomeChildren(obligations)
                     } else if struct_info
                         .properties
                         .iter()
@@ -652,10 +644,10 @@ where
                                 )
                             })
                             .collect();
-                        Feasibility::ManuallyRealizable(obligations)
+                        Feasibility::IfSomeChildren(obligations)
                     }
                 }
-                _ => Feasibility::Derivable,
+                _ => Feasibility::IfAllChildren,
             }
         }
 
@@ -668,13 +660,15 @@ where
                 // TYPIFY COMPAT
                 TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
                 TypespaceTrait::Default => {
-                    if common.default().is_some() {
-                        Feasibility::ManuallyRealizable(Vec::new())
+                    if common.default.is_some() {
+                        Feasibility::IfSomeChildren(Vec::new())
                     } else {
-                        Feasibility::Derivable
+                        // TODO 9/12/2026
+                        // This will change once we have per field defaults
+                        Feasibility::IfAllChildren
                     }
                 }
-                _ => Feasibility::Derivable,
+                _ => Feasibility::IfAllChildren,
             }
         }
 
@@ -685,32 +679,10 @@ where
             // TYPIFY COMPAT
             TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
             // No fields means no obligations either way.
-            _ => Feasibility::Derivable,
+            _ => Feasibility::IfAllChildren,
         },
 
-        Type::NewtypeStruct(NewtypeStruct {
-            common,
-            inner,
-            constraints,
-            ..
-        }) => match trait_name {
-            // A newtype's Display is always the inner value's Display.
-            TypespaceTrait::Display => {
-                Feasibility::ManuallyRealizable(vec![(Relation::Inner, inner.clone())])
-            }
-            TypespaceTrait::FromStr => {
-                if matches!(constraints, NewtypeConstraints::None) {
-                    Feasibility::ManuallyRealizable(vec![(Relation::Inner, inner.clone())])
-                } else {
-                    // A constrained newtype's FromStr parses the
-                    // inner value and then validates it; the inner
-                    // type need not implement FromStr on its own
-                    // account (it may not: a constrained String
-                    // newtype has no separate FromStr obligation for
-                    // String).
-                    Feasibility::ManuallyRealizable(Vec::new())
-                }
-            }
+        Type::NewtypeStruct(NewtypeStruct { common, .. }) => match trait_name {
             // An attached default value needs a hand-written impl that
             // NewtypeStruct::render does not write. Claiming the trait
             // would derive one that ignores the value, or fail to
@@ -720,23 +692,20 @@ where
             TypespaceTrait::Default if settings.typify_compat || common.default().is_some() => {
                 cannot_implement()
             }
-            TypespaceTrait::Default => Feasibility::Derivable,
-            _ => Feasibility::Derivable,
+            _ => Feasibility::IfAllChildren,
         },
 
         Type::Enum(e) => match trait_name {
             TypespaceTrait::Display => {
                 if e.all_tagged_unit_variants() {
-                    // A hand-written impl maps variants to and from
-                    // their serialized names; no variant has payload
-                    // types to forward to.
-                    Feasibility::ManuallyRealizable(Vec::new())
+                    // No children, so short-circuit a step.
+                    Feasibility::IfSomeChildren(Vec::new())
                 } else if e.all_untagged_item_variants() {
                     // An untagged enum's serialized form is exactly
                     // one variant's payload's serialized form, so
                     // Display forwards to whichever payload types the
                     // variants carry.
-                    Feasibility::ManuallyRealizable(
+                    Feasibility::IfSomeChildren(
                         ty.contained_children_related()
                             .into_iter()
                             .map(|ContainedChild { relation, id, .. }| (relation, id))
@@ -748,9 +717,8 @@ where
             }
             TypespaceTrait::FromStr => {
                 if e.all_tagged_unit_variants() {
-                    // The same hand-written impl as Display's, read
-                    // backwards: a serialized name maps to one variant.
-                    Feasibility::ManuallyRealizable(Vec::new())
+                    // No children; so short-circuit a step.
+                    Feasibility::IfSomeChildren(Vec::new())
                 } else if !e.all_untagged_item_variants() {
                     cannot_implement()
                 } else {
@@ -768,7 +736,7 @@ where
                                 variant,
                             })
                         }
-                        None => Feasibility::ManuallyRealizable(
+                        None => Feasibility::IfSomeChildren(
                             ty.contained_children_related()
                                 .into_iter()
                                 .map(|ContainedChild { relation, id, .. }| (relation, id))
@@ -779,14 +747,14 @@ where
             }
             TypespaceTrait::Default => {
                 if e.common.default().is_some() {
-                    Feasibility::ManuallyRealizable(Vec::new())
+                    Feasibility::IfSomeChildren(Vec::new())
                 } else {
                     // No derive exists, and there is no invented
                     // #[default] variant.
                     cannot_implement()
                 }
             }
-            _ => Feasibility::Derivable,
+            _ => Feasibility::IfAllChildren,
         },
 
         _ => unreachable!("feasibility is only called for named types"),
@@ -877,17 +845,18 @@ where
                 path: Default::default(),
             }
         }
+
+        fn init_global(type_id: &Id, traits: TypespaceTraitSet) -> Self {
+            Self {
+                target: type_id.clone(),
+                traits,
+                origin: RequirementOrigin::GlobalSettings,
+                path: Default::default(),
+            }
+        }
     }
 
-    // Initialize the work queue with the
-
-    // A container's blanket obligations are what its own type needs of its
-    // parameters to exist at all: BTreeMap needs Ord of its key, HashMap needs
-    // Eq and Hash. They're necessary irrespective of other constraints.
-    // Finalization has checked each container's type parameter count, so every
-    // position is present. A native's obligations are the same idea, stated
-    // by the declaration rather than fixed by which container it is;
-    // validation at insertion has already checked its parameter count.
+    // Initialize the work queue with Container obligations.
     let mut work = VecDeque::new();
     for (type_id, ty) in types.iter() {
         match ty {
@@ -922,8 +891,10 @@ where
                 ));
             }
 
-            // Optional struct fields may be wrapped in a container; apply
-            // constraints for any that do.
+            // Struct fields are containers iff
+            // - the field is optional
+            // - the type is an Option
+            // - settings specifies a custom optional-nullable type
             Type::Struct(_) | Type::Enum(_) => {
                 for edge in classify_edges(ty, types, settings) {
                     if let Edge::Wrapped {
@@ -964,7 +935,9 @@ where
     // A property whose state is StructPropertyState::Default renders as
     // #[serde(default)], and serde's derive expands that into a call to
     // T::default() on the property's type, so that type must implement
-    // Default.
+    // Default. Note that this is default without a value **only**. Properties
+    // that are Optional or DefaultValue don't require `Default` (nor,
+    // obviously, does Required).
     for (type_id, ty) in types.iter() {
         for prop in serde_default_properties(ty) {
             work.push_back(WorkItem::init_default(
@@ -988,12 +961,7 @@ where
         let required = close_supertraits(settings.required_traits.clone());
         for (type_id, ty) in types.iter() {
             if ty.is_named() {
-                work.push_back(WorkItem {
-                    target: type_id.clone(),
-                    traits: required.clone(),
-                    origin: RequirementOrigin::GlobalSettings,
-                    path: Vec::new(),
-                });
+                work.push_back(WorkItem::init_global(type_id, required.clone()));
             }
         }
     }
@@ -1043,14 +1011,13 @@ where
 
     // In each iteration, we need to assert the set of required traits to the
     // current type. If the current type is generated, that means consulting
-    // its feasibility for each newly-required trait, absorbing what
-    // it can derive or manually realize, and pushing obligations onward. If
-    // the type is **not** generated (native or otherwise external to our
-    // control), we need to check that it implements (or is capable of
-    // implementing) the required traits; if it doesn't (or can't), we'll
-    // produce an error. We don't stop on the first failure, but want to
-    // identify as many distinct failures as is reasonable and as would be
-    // useful for a consumer.
+    // its feasibility for each newly-required trait, absorbing what it can,
+    // and pushing obligations onward. If the type is **not** generated (native
+    // or otherwise external to our control), we need to check that it
+    // implements (or is capable of implementing) the required traits; if it
+    // doesn't (or can't), we'll produce an error. We don't stop on the first
+    // failure, but want to identify as many distinct failures as is reasonable
+    // and as would be useful for a consumer.
     while let Some(WorkItem {
         target,
         traits,
@@ -1082,37 +1049,28 @@ where
         };
 
         if ty.is_named() {
-            // A named type absorbs conditionally: consult feasibility
-            // per required trait. Derivable and forwarded (alias)
-            // traits share one obligation set--every contained child,
-            // via contained_children_related--so we batch them and push
-            // once per child. Manually realized traits carry their own,
-            // often-empty, obligation list, so each gets its own push.
-            // Impossible traits become conflicts and are never
-            // absorbed.
-            let mut derivable_new = TypespaceTraitSet::empty();
-            let mut manual_pushes = Vec::<(TypespaceTrait, Vec<(Relation, Id)>)>::new();
+            // We build work-lists; each needs slightly different handling.
+            let mut all_children = Vec::new();
+            let mut some_children = Vec::new();
 
-            // Work against a copy of the built trait set: feasibility
-            // borrows the whole graph, so we cannot hold a live
-            // reference into it across the loop. Written back below in
-            // one shot, once every read of `ty` is done.
-            let mut built = ty.common().unwrap().built.as_ref().unwrap().traits.clone();
+            // Save a copy; we'll replace it at the end of this block.
+            let mut built_traits = ty.common().unwrap().built.as_ref().unwrap().traits.clone();
 
             for trait_name in traits {
-                if built.contains(&trait_name) {
+                // Trait is already handled; no new work.
+                if built_traits.contains(&trait_name) {
                     continue;
                 }
 
                 match feasibility(types, ty, trait_name, settings) {
-                    Feasibility::Derivable | Feasibility::Forward => {
-                        built.add(trait_name);
-                        derivable_new.add(trait_name);
+                    Feasibility::IfAllChildren => {
+                        built_traits.add(trait_name);
+                        all_children.push(trait_name);
                     }
-                    Feasibility::ManuallyRealizable(obligations) => {
-                        built.add(trait_name);
+                    Feasibility::IfSomeChildren(obligations) => {
+                        built_traits.add(trait_name);
                         if !obligations.is_empty() {
-                            manual_pushes.push((trait_name, obligations));
+                            some_children.push((trait_name, obligations));
                         }
                     }
                     Feasibility::Impossible(reason) => {
@@ -1121,6 +1079,7 @@ where
                 }
             }
 
+            // We need to save this before taking a mutable ref to the type.
             let children = classify_edges(ty, types, settings);
 
             types
@@ -1131,40 +1090,48 @@ where
                 .built
                 .as_mut()
                 .unwrap()
-                .traits = built;
+                .traits = built_traits;
 
-            // Push each derivable trait to every child: a derived impl
-            // compiles only if each field or payload type also implements the
-            // trait.
-            //
-            // A wrapped edge is the exception. There, the generated field's
-            // type is the declared custom optional-nullable wrapper, not the
-            // graph's Option node, so the requirement is put to the wrapper's
-            // declaration and each trait takes the route its answer dictates:
-            // a trait the declaration never provides is unsatisfiable at this
-            // property and becomes a conflict naming the wrapper; a trait it
-            // always provides is satisfied and stops here; a trait it
-            // provides when its parameter does continues to the option's
-            // value type, with the option node recorded as a hop on the path.
-            if !derivable_new.is_empty() {
+            // For traits that require that all children implement them, we can
+            // handle them all at the same time. Rather than one-at-a- time for
+            // the conditional batch.
+            if !all_children.is_empty() {
+                let traits_for_all_children =
+                    all_children.into_iter().collect::<TypespaceTraitSet>();
+
                 for edge in children {
                     match edge {
+                        // Simple child; pass on all traits.
+                        Edge::Plain(relation, child_id) => work.push_back(WorkItem {
+                            target: child_id,
+                            traits: traits_for_all_children.clone(),
+                            origin: origin.clone(),
+                            path: hop(relation),
+                        }),
+
+                        // A wrapped child inserts a container with its own
+                        // collection of obligations that we must consider.
                         Edge::Wrapped {
                             relation,
                             option_id,
                             container,
                             value_id,
                         } => {
-                            let (bad, pass) = container_split(container, &derivable_new);
-                            conflicts.extend(bad.into_iter().map(|required| TraitConflict {
-                                required,
-                                origin: origin.clone(),
-                                path: hop(relation.clone()),
-                                offender: option_id.clone(),
-                                reason: OffenderReason::Primitive {
-                                    type_name: path_text(container.path()),
-                                },
-                            }));
+                            let (bad, pass) = container_split(container, &traits_for_all_children);
+
+                            // Unrealizable traits become conflicts.
+                            for bad_trait in bad {
+                                conflicts.push(TraitConflict {
+                                    required: bad_trait,
+                                    origin: origin.clone(),
+                                    path: hop(relation.clone()),
+                                    offender: option_id.clone(),
+                                    reason: OffenderReason::Primitive {
+                                        type_name: path_text(container.path()),
+                                    },
+                                });
+                            }
+                            // Any remaining traits descend to the child.
                             if !pass.is_empty() {
                                 let mut path = hop(relation);
                                 path.push(PathStep {
@@ -1179,26 +1146,25 @@ where
                                 });
                             }
                         }
-                        Edge::Plain(relation, child_id) => work.push_back(WorkItem {
-                            target: child_id,
-                            traits: derivable_new.clone(),
-                            origin: origin.clone(),
-                            path: hop(relation),
-                        }),
                     }
                 }
             }
-            // Manual obligations need no wrapper routing: feasibility builds
-            // them only from default-state properties and from untagged item
-            // variants, and the wrapper substitutes only at optional-state
-            // properties, so no obligation ever names a wrapped edge.
-            //
-            // Pushing one bare trait with no supertrait closure is
-            // sound only while every manually realizable trait
-            // (Display, FromStr, Default) has no supertraits. If a
-            // trait with supertraits ever becomes manually realizable,
-            // expand each pushed set with its dependencies.
-            for (trait_name, obligations) in manual_pushes {
+
+            // Traits for which only some children must transitively implement
+            // that trait don't need to worry about wrapped types (as we do
+            // above) only due to the traits that might appear here: Default,
+            // FromStr, and Display--none of which propagate through a struct's
+            // optional Option fields. For the same reason, we don't need to
+            // consider supertraits because none of those traits have any.
+            for (trait_name, obligations) in some_children {
+                assert!(
+                    &[
+                        TypespaceTrait::Display,
+                        TypespaceTrait::FromStr,
+                        TypespaceTrait::Default
+                    ]
+                    .contains(&trait_name)
+                );
                 for (relation, child_id) in obligations {
                     work.push_back(WorkItem {
                         target: child_id,
@@ -1210,28 +1176,17 @@ where
             }
         } else {
             match ty {
-                Type::Enum(_)
-                | Type::Struct(_)
-                | Type::UnitStruct(_)
-                | Type::TupleStruct(_)
-                | Type::NewtypeStruct(_)
-                | Type::TypeAlias(_) => unreachable!(),
+                // TODO 9/12/2026
+                // Can I put the whole block above into here?
+                all_named_types!(_) => unreachable!(),
 
-                // A native's declaration answers the same way a
-                // configured container's does, through the same split:
-                // a trait it never implements conflicts, one it
-                // implements unconditionally is satisfied and goes no
-                // further, and one it implements only when every type
-                // parameter does passes onward to each parameter,
-                // exactly as a container's own IfParameters traits
-                // reach its parameters. A trait its declaration cannot
-                // answer for (Unknown) is neither bad nor pass here, so
-                // it silently passes without reaching any parameter:
-                // refusing to generate for a valid schema is worse than
-                // a compile error naming the real missing impl, and a
-                // source like typify's `x-rust-type` has no way to
-                // declare more.
+                // Native types include trait obligation information.
                 Type::Native(native) => {
+                    // Split the traits into those the native type can't implement
+                    // and those it can if its type paramaters also do (ignore
+                    // traits it always implements and those that are unknown).
+                    // TODO 9/12/2026
+                    // ignoring unknown seems wrong
                     let (bad, pass) = container_split(&native.container, &traits);
                     conflict(
                         bad,
@@ -1254,7 +1209,7 @@ where
                 // Option<T> implements everything we care about--except
                 // for Display and FromStr--as long as T implements them.
                 // Option<T> additionally implements Default unconditionally.
-                Type::Option(schema_ref) => {
+                Type::Option(inner_id) => {
                     let (bad, mut pass) = split(&traits, CONTAINER_UNSUPPORTED);
                     conflict(
                         bad,
@@ -1265,7 +1220,7 @@ where
                     pass.remove(TypespaceTrait::Default);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
-                            target: schema_ref.clone(),
+                            target: inner_id.clone(),
                             traits: pass,
                             origin,
                             path: hop(Relation::Element),
@@ -1277,7 +1232,7 @@ where
                 // We treat it like a container with regard to trait
                 // forwarding, except for Copy: a box heap-allocates and is
                 // never Copy no matter what it holds.
-                Type::Box(schema_ref) => {
+                Type::Box(inner_id) => {
                     let (bad, rest) = split(
                         &traits,
                         &[
@@ -1294,7 +1249,7 @@ where
                     );
                     if !rest.is_empty() {
                         work.push_back(WorkItem {
-                            target: schema_ref.clone(),
+                            target: inner_id.clone(),
                             traits: rest,
                             origin,
                             path: hop(Relation::Boxed),
@@ -1305,8 +1260,10 @@ where
                 // The configured vec type states which traits it never
                 // provides, which it provides whatever the element does,
                 // and which follow the element.
-                Type::Vec(schema_ref) => {
+                Type::Vec(item_id) => {
                     let (bad, pass) = container_split(&settings.vec_type, &traits);
+                    // TODO 9/12/2026
+                    // Should the type name come from the configured container?
                     conflict(
                         bad,
                         OffenderReason::Primitive {
@@ -1315,14 +1272,14 @@ where
                     );
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
-                            target: schema_ref.clone(),
+                            target: item_id.clone(),
                             traits: pass,
                             origin,
                             path: hop(Relation::Element),
                         });
                     }
                 }
-                Type::Array(schema_ref, _) => {
+                Type::Array(item_id, _) => {
                     let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
                     conflict(
                         bad,
@@ -1332,7 +1289,7 @@ where
                     );
                     if !rest.is_empty() {
                         work.push_back(WorkItem {
-                            target: schema_ref.clone(),
+                            target: item_id.clone(),
                             traits: rest,
                             origin,
                             path: hop(Relation::Element),
@@ -1341,7 +1298,7 @@ where
                 }
                 // Tuples implement everything except for Display and FromStr
                 // as long as all their component types do as well.
-                Type::Tuple(schema_refs) => {
+                Type::Tuple(field_ids) => {
                     let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
                     conflict(
                         bad,
@@ -1350,9 +1307,9 @@ where
                         },
                     );
                     if !rest.is_empty() {
-                        for schema_ref in schema_refs {
+                        for field_id in field_ids {
                             work.push_back(WorkItem {
-                                target: schema_ref.clone(),
+                                target: field_id.clone(),
                                 traits: rest.clone(),
                                 origin: origin.clone(),
                                 path: hop(Relation::Element),
@@ -1478,6 +1435,10 @@ where
                     );
                 }
 
+                // TODO 9/12/2026
+                // This doesn't seem quite right; a raw Never shouldn't be
+                // Absent; only an Option<Never>
+
                 // ::json_serde::Absent derives Clone, Debug, Default, Eq,
                 // Hash, Ord, PartialEq, and PartialOrd, and hand-writes
                 // Serialize, Deserialize, and (under the schemars08 and
@@ -1567,12 +1528,7 @@ pub(crate) fn unnamed_provides<Id>(
     let is_default = matches!(trait_name, TypespaceTrait::Default);
 
     match ty {
-        Type::Enum(_)
-        | Type::Struct(_)
-        | Type::UnitStruct(_)
-        | Type::TupleStruct(_)
-        | Type::NewtypeStruct(_)
-        | Type::TypeAlias(_) => unreachable!(),
+        all_named_types!(_) => unreachable!(),
 
         // A native answers exactly as a configured container does,
         // through the same table and the same helper: unconditionally,
@@ -1586,21 +1542,21 @@ pub(crate) fn unnamed_provides<Id>(
 
         // Pass the buck, minus Display and FromStr, which an Option<T> never
         // implements, and Default, which Option<T> always implements.
-        Type::Option(schema_ref) => supported && (is_default || child_has(schema_ref)),
+        Type::Option(inner_id) => supported && (is_default || child_has(inner_id)),
         // Box is never Copy, whatever it holds; every other trait
         // follows the boxed type.
-        Type::Box(schema_ref) => {
-            supported && trait_name != TypespaceTrait::Copy && child_has(schema_ref)
+        Type::Box(inner_id) => {
+            supported && trait_name != TypespaceTrait::Copy && child_has(inner_id)
         }
 
         // The configurable containers answer from what their
         // declaration says they provide, the same table required
         // resolution consults.
-        Type::Vec(schema_ref) => {
-            container_provides(&settings.vec_type, trait_name, || child_has(schema_ref))
+        Type::Vec(item_id) => {
+            container_provides(&settings.vec_type, trait_name, || child_has(item_id))
         }
-        Type::Set(schema_ref) => {
-            container_provides(&settings.set_type, trait_name, || child_has(schema_ref))
+        Type::Set(item_id) => {
+            container_provides(&settings.set_type, trait_name, || child_has(item_id))
         }
         Type::Map(key_ref, value_ref) => container_provides(&settings.map_type, trait_name, || {
             child_has(key_ref) && child_has(value_ref)
@@ -1608,8 +1564,8 @@ pub(crate) fn unnamed_provides<Id>(
 
         // Arrays and tuples forward everything they can provide,
         // Default included.
-        Type::Array(schema_ref, _) => supported && child_has(schema_ref),
-        Type::Tuple(schema_refs) => supported && schema_refs.iter().all(child_has),
+        Type::Array(item_id, _) => supported && child_has(item_id),
+        Type::Tuple(field_ids) => supported && field_ids.iter().all(child_has),
 
         // Child-free built-ins answer from the shared leaf table.
         Type::Integer(_)
@@ -1653,17 +1609,19 @@ where
             // A wrapped property edge answers from the declared custom
             // optional-nullable wrapper, exactly as required resolution
             // routes it; every other edge asks the child directly.
-            Feasibility::Derivable | Feasibility::Forward => classify_edges(ty, types, settings)
-                .into_iter()
-                .all(|edge| match edge {
-                    Edge::Wrapped {
-                        container,
-                        value_id,
-                        ..
-                    } => container_provides(container, trait_name, || child_has(&value_id)),
-                    Edge::Plain(_, child_id) => child_has(&child_id),
-                }),
-            Feasibility::ManuallyRealizable(obligations) => obligations
+            Feasibility::IfAllChildren => {
+                classify_edges(ty, types, settings)
+                    .into_iter()
+                    .all(|edge| match edge {
+                        Edge::Wrapped {
+                            container,
+                            value_id,
+                            ..
+                        } => container_provides(container, trait_name, || child_has(&value_id)),
+                        Edge::Plain(_, child_id) => child_has(&child_id),
+                    })
+            }
+            Feasibility::IfSomeChildren(obligations) => obligations
                 .iter()
                 .all(|(_, obligated)| child_has(obligated)),
         }
@@ -1758,34 +1716,15 @@ fn desired_resolution<Id>(types: &mut BTreeMap<Id, Type<Id>>, settings: &Setting
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
-    // Poison tracking covers each desired trait's supertraits as well,
-    // not just the traits settings named, since a trait is granted
-    // below only when every supertrait it needs survived too: granting
-    // Ord without PartialEq renders a derive that does not compile.
+    // Expand to include transitive dependencies of each desired trait.
     let desired = close_supertraits(settings.desired_traits.clone());
     if desired.is_empty() {
         return;
     }
 
-    // Each desired trait paired with the supertraits it needs. A
-    // supertrait is not desired on its own account--it is there so
-    // that a granted derive compiles--so a group is granted or dropped
-    // whole: a type that cannot have Eq has no use for the PartialEq
-    // that Eq pulled in.
-    let grant_groups = settings
-        .desired_traits
-        .iter()
-        .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
-        .collect::<Vec<_>>();
-
-    // The inverse of Type::children: the types referring to each type,
-    // which is the direction a loss travels. This reaches a native's
-    // type parameters too--Type::children reports them, exactly as it
-    // reports a container's--so a loss at a parameter poisons the
-    // native back through the same route a loss at a map's key
-    // poisons the map.
+    // An inverse lookup table from child to parents.
     let referrers = types.iter().fold(
-        BTreeMap::<Id, Vec<Id>>::new(),
+        BTreeMap::<_, Vec<_>>::new(),
         |mut referrers, (type_id, ty)| {
             for child in ty.children() {
                 referrers.entry(child).or_default().push(type_id.clone());
@@ -1833,20 +1772,33 @@ where
         }
     }
 
-    // A named type's built set is what required resolution absorbed
-    // plus the desired groups that survived whole.
-    for (type_id, ty) in types.iter_mut() {
-        if let Some(common) = ty.common_mut() {
-            let survivors = state.has.remove(type_id).unwrap();
-            let built = common.built.as_mut().unwrap();
-            for group in &grant_groups {
-                if group
-                    .iter()
-                    .all(|trait_name| survivors.contains(trait_name))
-                {
-                    for trait_name in group.iter() {
-                        built.traits.add(*trait_name);
-                    }
+    // Build a group for each trait of related traits that need to be applied
+    // together.
+    let grant_groups = settings
+        .desired_traits
+        .iter()
+        .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
+        .collect::<Vec<_>>();
+
+    for (type_id, survivors) in state.has {
+        let ty = types.get_mut(&type_id).unwrap();
+
+        let Some(common) = ty.common_mut() else {
+            continue;
+        };
+
+        let built = common.built.as_mut().unwrap();
+
+        // For each group (a desired trait and its transitive dependencies),
+        // if all members have survived then add all members to the type's
+        // trait set.
+        for group in &grant_groups {
+            if group
+                .iter()
+                .all(|trait_name| survivors.contains(trait_name))
+            {
+                for trait_name in group.iter() {
+                    built.traits.add(*trait_name);
                 }
             }
         }
@@ -3070,7 +3022,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let Feasibility::ManuallyRealizable(obligations) = feasibility(
+        let Feasibility::IfSomeChildren(obligations) = feasibility(
             &BTreeMap::new(),
             &ty,
             TypespaceTrait::Default,

@@ -557,7 +557,7 @@ impl<Id> StructProperty<Id> {
     /// The serde rename when there is one and the Rust name otherwise.
     /// A flattened property has no wire name of its own: its fields are
     /// spliced into the containing type's wire form.
-    pub fn wire_name(&self) -> Option<&str> {
+    pub(crate) fn wire_name(&self) -> Option<&str> {
         match &self.json_name {
             StructPropertySerde::None => Some(self.rust_name.as_str()),
             StructPropertySerde::Rename(rename) => Some(rename.as_str()),
