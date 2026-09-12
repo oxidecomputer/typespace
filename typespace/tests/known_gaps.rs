@@ -8,11 +8,10 @@
 //! behavior and drop the attribute.
 
 use typespace::{
-    TraitProvision, TypespaceBuilder, TypespaceTrait,
+    TypespaceBuilder, TypespaceTrait,
     build::{JsonValue, NewtypeConstraints, NewtypeStruct, Type},
-    error::Error,
     no_cycles,
-    settings::{ContainerType, OptionalNullable, Settings},
+    settings::{ContainerType, Settings},
 };
 use typespace_test_macro::typespace_builder;
 

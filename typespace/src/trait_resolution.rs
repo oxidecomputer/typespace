@@ -50,18 +50,16 @@
 //!
 //! - A named type consults [`feasibility`] for each trait. It applies the
 //!   traits that are compatible. Any conflict is an error.
-//! - Each container effectively has a disposition for each trait: always
-//!   provided, never provided, or provided if all type parameters also provide
-//!   the trait. Configurable containers encode this in [`TraitProvision`];
-//!   fixed containers (Option, Box, arrays, tuples) hard-code these.
+//! - Anything with type parameters answers from a declaration of what it
+//!   provides for each trait: always, never, provided if all its parameters
+//!   provide it, or unknown. Configurable containers and native types both
+//!   carry one ([`TraitProvision`]); fixed containers (Option, Box, arrays,
+//!   tuples) hard-code the same answers. `Unknown` is a native's alone, since
+//!   its declaration comes from a source that cannot always enumerate traits:
+//!   the requirement passes on the benefit of the doubt, and if that turns out
+//!   wrong the consumer gets a compile error naming the type and the trait.
 //! - A leaf type (a type with no children) satisfies the demand or conflicts,
 //!   per [`leaf_provides`].
-//! - Each native type declares a similar table of trait capabilities
-//!   (supported, unsupported, unknown). It conflicts on traits known to be
-//!   unsupported; a trait whose support is unknown is given the benefit of the
-//!   doubt. If this turns out to be wrong, the generated code may result in a
-//!   compilation-time failure that states both the type and trait requirement.
-//!   TODO can native and container types be unified?
 //!
 //! Conflicts accumulate instead of stopping the pass; a consumer
 //! fixing a schema wants every failure at once.
@@ -142,7 +140,9 @@
 //! `Option<Option<T>>` to represent the three states, or a custom type (see
 //! [`OptionalNullable::CustomType`]). Trait flow through an "optional option"
 //! heeds this container type and its trait properties (as with any other
-//! container).
+//! container), with one exception: an optional property is exempt from its own
+//! `Default` obligation without consulting the wrapper, so finalize rejects a
+//! declaration that does not claim `Default` unconditionally.
 //!
 //! ## Does type X implement trait Y?
 //!
@@ -835,6 +835,52 @@ where
         path: Vec<PathStep<Id>>,
     }
 
+    impl<Id: Clone> WorkItem<Id> {
+        fn init_container(
+            parent_id: &Id,
+            relation: Relation,
+            child_id: &Id,
+            traits: &TypespaceTraitSet,
+        ) -> Self {
+            Self {
+                target: child_id.clone(),
+                traits: close_supertraits(traits.clone()),
+                origin: RequirementOrigin::ContainerParameter {
+                    container: parent_id.clone(),
+                    relation,
+                },
+                path: Default::default(),
+            }
+        }
+
+        fn init_default(parent_id: &Id, relation: Relation, child_id: &Id) -> Self {
+            let default_required =
+                close_supertraits([TypespaceTrait::Default].into_iter().collect());
+            Self {
+                target: child_id.clone(),
+                traits: default_required,
+                origin: RequirementOrigin::PropertyDefault(parent_id.clone()),
+                path: vec![PathStep {
+                    type_id: parent_id.clone(),
+                    relation,
+                }],
+            }
+        }
+
+        fn init_deserialize(parent_id: &Id, child_id: &Id) -> Self {
+            let deserialize_required =
+                close_supertraits([TypespaceTrait::Deserialize].into_iter().collect());
+            Self {
+                target: child_id.clone(),
+                traits: deserialize_required,
+                origin: RequirementOrigin::DefaultValue(parent_id.clone()),
+                path: Default::default(),
+            }
+        }
+    }
+
+    // Initialize the work queue with the
+
     // A container's blanket obligations are what its own type needs of its
     // parameters to exist at all: BTreeMap needs Ord of its key, HashMap needs
     // Eq and Hash. They're necessary irrespective of other constraints.
@@ -842,166 +888,117 @@ where
     // position is present. A native's obligations are the same idea, stated
     // by the declaration rather than fixed by which container it is;
     // validation at insertion has already checked its parameter count.
-    let mut work = types
-        .iter()
-        .flat_map(|(type_id, ty)| match ty {
-            Type::Map(key_schema_ref, value_schema_ref) => vec![
-                WorkItem {
-                    target: key_schema_ref.clone(),
-                    traits: close_supertraits(settings.map_type.obligation(0).clone()),
-                    origin: RequirementOrigin::ContainerParameter {
-                        container: type_id.clone(),
-                        relation: Relation::Key,
-                    },
-                    path: Vec::new(),
-                },
-                WorkItem {
-                    target: value_schema_ref.clone(),
-                    traits: close_supertraits(settings.map_type.obligation(1).clone()),
-                    origin: RequirementOrigin::ContainerParameter {
-                        container: type_id.clone(),
-                        relation: Relation::Value,
-                    },
-                    path: Vec::new(),
-                },
-            ],
-            Type::Set(element_schema_ref) => vec![WorkItem {
-                target: element_schema_ref.clone(),
-                traits: close_supertraits(settings.set_type.obligation(0).clone()),
-                origin: RequirementOrigin::ContainerParameter {
-                    container: type_id.clone(),
-                    relation: Relation::Element,
-                },
-                path: Vec::new(),
-            }],
-            Type::Vec(element_schema_ref) => vec![WorkItem {
-                target: element_schema_ref.clone(),
-                traits: close_supertraits(settings.vec_type.obligation(0).clone()),
-                origin: RequirementOrigin::ContainerParameter {
-                    container: type_id.clone(),
-                    relation: Relation::Element,
-                },
-                path: Vec::new(),
-            }],
-            // A declared custom optional-nullable wrapper is consulted at
-            // exactly the positions rendering substitutes it: the optional
-            // struct-style properties whose type is itself an Option. What the
-            // declaration demands of the wrapper's value type seeds from each
-            // such property, like a map key's demand; the same Option node
-            // reached any other way is a std Option and demands nothing.
-            Type::Struct(_) | Type::Enum(_) => classify_edges(ty, types, settings)
-                .into_iter()
-                .filter_map(|edge| match edge {
-                    Edge::Wrapped {
+    let mut work = VecDeque::new();
+    for (type_id, ty) in types.iter() {
+        match ty {
+            Type::Map(key_id, value_id) => {
+                work.push_back(WorkItem::init_container(
+                    type_id,
+                    Relation::Key,
+                    key_id,
+                    settings.map_type.obligation(0),
+                ));
+                work.push_back(WorkItem::init_container(
+                    type_id,
+                    Relation::Value,
+                    value_id,
+                    settings.map_type.obligation(1),
+                ));
+            }
+            Type::Set(element_id) => {
+                work.push_back(WorkItem::init_container(
+                    type_id,
+                    Relation::Element,
+                    element_id,
+                    settings.set_type.obligation(0),
+                ));
+            }
+            Type::Vec(element_id) => {
+                work.push_back(WorkItem::init_container(
+                    type_id,
+                    Relation::Element,
+                    element_id,
+                    settings.vec_type.obligation(0),
+                ));
+            }
+
+            // Optional struct fields may be wrapped in a container; apply
+            // constraints for any that do.
+            Type::Struct(_) | Type::Enum(_) => {
+                for edge in classify_edges(ty, types, settings) {
+                    if let Edge::Wrapped {
                         option_id,
                         container,
                         value_id,
                         ..
-                    } => Some(WorkItem {
-                        target: value_id,
-                        traits: close_supertraits(container.obligation(0).clone()),
-                        origin: RequirementOrigin::ContainerParameter {
-                            container: option_id,
-                            relation: Relation::Element,
-                        },
-                        path: Vec::new(),
-                    }),
-                    Edge::Plain(..) => None,
-                })
-                .collect::<Vec<_>>(),
-            Type::Native(native) => native
-                .parameters()
-                .iter()
-                .zip(native.obligations())
-                .enumerate()
-                .map(|(index, (param_id, obligation))| WorkItem {
-                    target: param_id.clone(),
-                    traits: close_supertraits(obligation.clone()),
-                    origin: RequirementOrigin::ContainerParameter {
-                        container: type_id.clone(),
-                        relation: Relation::Parameter(index),
-                    },
-                    path: Vec::new(),
-                })
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        })
-        .collect::<VecDeque<_>>();
+                    } = edge
+                    {
+                        work.push_back(WorkItem::init_container(
+                            &option_id,
+                            Relation::Element,
+                            &value_id,
+                            container.obligation(0),
+                        ));
+                    }
+                }
+            }
+            Type::Native(native) => {
+                for (index, (param_id, obligation)) in native
+                    .parameters()
+                    .iter()
+                    .zip(native.obligations())
+                    .enumerate()
+                {
+                    work.push_back(WorkItem::init_container(
+                        type_id,
+                        Relation::Parameter(index),
+                        param_id,
+                        obligation,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
 
     // A property whose state is StructPropertyState::Default renders as
     // #[serde(default)], and serde's derive expands that into a call to
     // T::default() on the property's type, so that type must implement
-    // Default. Seed the requirement for every such property: a struct's
-    // own, and those of an enum's struct-shaped variants, which render
-    // through the same path. The other states impose nothing here: an
-    // optional property is an Option<T>, which is Default whatever T
-    // is; a property with its own default value names a function rather
-    // than Default::default(); and a required property emits no serde
-    // default at all.
-    let default_required = close_supertraits(
-        [TypespaceTrait::Default]
-            .into_iter()
-            .collect::<TypespaceTraitSet>(),
-    );
-    work.extend(types.iter().flat_map(|(type_id, ty)| {
-        serde_default_properties(ty)
-            .into_iter()
-            .map(|prop| WorkItem {
-                target: prop.type_id.clone(),
-                traits: default_required.clone(),
-                origin: RequirementOrigin::PropertyDefault(type_id.clone()),
-                path: vec![PathStep {
-                    type_id: type_id.clone(),
-                    relation: Relation::Field(prop.rust_name.clone()),
-                }],
-            })
-            .collect::<Vec<_>>()
-    }));
+    // Default.
+    for (type_id, ty) in types.iter() {
+        for prop in serde_default_properties(ty) {
+            work.push_back(WorkItem::init_default(
+                type_id,
+                Relation::Field(prop.rust_name.clone()),
+                &prop.type_id,
+            ));
+        }
+    }
 
     // A native-typed position in a default value is constructed in
     // generated code by deserializing it (default.rs's Type::Native
-    // arm), so the value requires Deserialize of the native. The
-    // default-value walk collected each such native during
-    // check_type_defaults, keyed by the type whose value first reached
-    // it; seed the requirement so an undeclared native conflicts here
-    // instead of failing in the consumer's build.
-    let deserialize_required = close_supertraits(
-        [TypespaceTrait::Deserialize]
-            .into_iter()
-            .collect::<TypespaceTraitSet>(),
-    );
-    work.extend(
-        deserialized_defaults
-            .iter()
-            .map(|(native_id, owner_id)| WorkItem {
-                target: native_id.clone(),
-                traits: deserialize_required.clone(),
-                origin: RequirementOrigin::DefaultValue(owner_id.clone()),
-                path: Vec::new(),
-            }),
-    );
+    // arm), so the value requires Deserialize of the native type.
+    for (native_id, owner_id) in deserialized_defaults {
+        work.push_back(WorkItem::init_deserialize(owner_id, native_id));
+    }
 
     // Traits required via Settings::with_required_trait seed the trait
-    // set of every named type. We route the seeds through the normal
-    // work queue rather than writing them into TypeCommonBuilt directly
-    // so that they propagate to contained types--and are checked against
-    // native and built-in leaf types--exactly like structural
-    // requirements.
+    // set of every named type.
     if !settings.required_traits.is_empty() {
         let required = close_supertraits(settings.required_traits.clone());
-        work.extend(
-            types
-                .iter()
-                .filter(|(_, ty)| ty.is_named())
-                .map(|(type_id, _)| WorkItem {
+        for (type_id, ty) in types.iter() {
+            if ty.is_named() {
+                work.push_back(WorkItem {
                     target: type_id.clone(),
                     traits: required.clone(),
                     origin: RequirementOrigin::GlobalSettings,
                     path: Vec::new(),
-                }),
-        );
+                });
+            }
+        }
     }
 
+    // Accumulate all conflicts; not just the first.
     let mut conflicts = Vec::<TraitConflict<Id>>::new();
 
     // Split `traits` into those present in `unsupported` and the rest.
@@ -1017,17 +1014,6 @@ where
             .copied()
             .collect::<TypespaceTraitSet>();
         (bad, rest)
-    };
-
-    // Drop Default from a requirement set: used at containers (vec, map,
-    // set, option) that implement Default regardless of their element
-    // types.
-    let strip_default = |traits: TypespaceTraitSet| {
-        traits
-            .iter()
-            .filter(|tt| !matches!(tt, TypespaceTrait::Default))
-            .copied()
-            .collect::<TypespaceTraitSet>()
     };
 
     // Split `traits` at a configurable container according to what the
@@ -1269,14 +1255,14 @@ where
                 // for Display and FromStr--as long as T implements them.
                 // Option<T> additionally implements Default unconditionally.
                 Type::Option(schema_ref) => {
-                    let (bad, rest) = split(&traits, CONTAINER_UNSUPPORTED);
+                    let (bad, mut pass) = split(&traits, CONTAINER_UNSUPPORTED);
                     conflict(
                         bad,
                         OffenderReason::Primitive {
                             type_name: "Option".to_string(),
                         },
                     );
-                    let pass = strip_default(rest);
+                    pass.remove(TypespaceTrait::Default);
                     if !pass.is_empty() {
                         work.push_back(WorkItem {
                             target: schema_ref.clone(),
