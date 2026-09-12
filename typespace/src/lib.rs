@@ -320,21 +320,36 @@ pub(crate) const ALL_TRAITS: [TypespaceTrait; 14] = [
     TypespaceTrait::JsonSchema,
 ];
 
-/// What a [`build::Native`] says about one trait.
+/// What a [`build::Native`] or a configured container
+/// ([`settings::ContainerType`]) declares about one trait.
 ///
-/// A declarer that knows the answer states it; one that does not
-/// leaves the trait [`Unknown`](TraitDisposition::Unknown). The two
-/// resolution phases read an unknown trait in opposite directions: a
-/// requirement for it passes, because refusing to generate for a valid
-/// schema is worse than a compile error naming the real missing impl,
-/// and a desired trait is never granted from it, because granting one
-/// on a guess emits a derive nobody asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraitDisposition {
-    /// The type implements the trait.
-    Yes,
-    /// The type does not implement the trait.
-    No,
+/// A container is hand-authored in [`settings::Settings`], so its
+/// author is expected to know the container completely and answers
+/// with [`Never`](Self::Never), [`Always`](Self::Always), or
+/// [`IfParameters`](Self::IfParameters); declaring
+/// [`Unknown`](Self::Unknown) there is a configuration error, rejected
+/// during finalization (see `check_containers`). A native, in
+/// contrast, sometimes comes from a machine source--typify's
+/// `x-rust-type` schema extension, say--that names a Rust type and the
+/// little it knows about it, with no way to state more, so `Unknown`
+/// is how such a declaration says "cannot answer" rather than falsely
+/// claiming [`Never`](Self::Never).
+///
+/// The two resolution phases read [`Unknown`](Self::Unknown) in
+/// opposite directions: a requirement for it passes, because refusing
+/// to generate for a valid schema is worse than a compile error naming
+/// the real missing impl, and a desired trait is never granted from
+/// it, because granting one on a guess emits a derive nobody asked
+/// for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TraitProvision {
+    /// No impl exists, whatever the type parameters implement.
+    Never,
+    /// The type implements the trait whatever its type parameters do.
+    Always,
+    /// The type implements the trait when every type parameter does.
+    IfParameters,
     /// The declaration cannot answer either way.
     Unknown,
 }
@@ -470,7 +485,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     }
 
     /// Verify that each configured container declares what it demands
-    /// of every type parameter the position it renders supplies.
+    /// of every type parameter the position it renders supplies, and
+    /// that it answers for every trait outright rather than deferring
+    /// to [`TraitProvision::Unknown`], which is only meaningful for a
+    /// machine-authored [`build::Native`].
     fn check_containers(&self) -> Result<(), Error<Id>> {
         let custom_optional = match &self.settings.optional_nullable {
             OptionalNullable::CustomType(container) => Some(("optional-nullable", container, 1)),
@@ -484,11 +502,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         .into_iter()
         .chain(custom_optional)
         .try_for_each(|(position, container, parameters)| {
+            if let Some(trait_) = container.provisions().find_map(|(trait_, provision)| {
+                matches!(provision, TraitProvision::Unknown).then_some(trait_)
+            }) {
+                return Err(Error::ContainerProvisionUnknown {
+                    position,
+                    path: settings::path_text(container.path()),
+                    trait_,
+                });
+            }
             match container.obligations().len() {
                 declared if declared == parameters => Ok(()),
                 declared => Err(Error::ContainerParameterCount {
                     position,
-                    path: container.path().to_token_stream().to_string(),
+                    path: settings::path_text(container.path()),
                     declared,
                     parameters,
                 }),
@@ -1281,9 +1308,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
 
             Type::Native(Native {
-                name, parameters, ..
+                container,
+                parameters,
             }) => {
-                let name_ident = syn::parse_str::<syn::TypePath>(name).unwrap();
+                let path = container.path();
                 let parameters = (!base_type && !parameters.is_empty()).then(|| {
                     let parameter_idents = parameters
                         .iter()
@@ -1293,7 +1321,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     }
                 });
                 quote! {
-                    #name_ident #parameters
+                    #path #parameters
                 }
             }
 

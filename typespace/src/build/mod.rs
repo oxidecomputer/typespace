@@ -274,6 +274,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
     /// must have a corresponding type inserted into the
     /// [`TypespaceBuilder`](crate::TypespaceBuilder) for finalization to
     /// succeed.
+    ///
+    /// A [`Native`]'s type parameters are children here, exactly like a
+    /// container's: their IDs must resolve
+    /// ([`check_references`](crate::TypespaceBuilder::insert)), a
+    /// requirement the native forwards under
+    /// [`TraitProvision::IfParameters`](crate::TraitProvision::IfParameters)
+    /// reaches them, and a loss of a desired trait at a parameter
+    /// reaches the native back through the referrer map desired
+    /// resolution builds from this method.
     pub fn children(&self) -> Vec<Id> {
         match self {
             Type::Enum(type_enum) => type_enum.children(),
@@ -285,7 +294,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
 
             Type::Boolean => Vec::new(),
             Type::String => Vec::new(),
-            Type::Native(_) => Vec::new(),
+            Type::Native(native) => native.parameters().to_vec(),
 
             Type::Option(id)
             | Type::Box(id)
@@ -464,6 +473,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
 
             // TODO maybe native types could have children? Right now these are
             // just for self-contained types...
+            //
+            // Type::children() now reports a native's type parameters
+            // (see its doc), but this method and contained_children
+            // stay as they are: they exist to find containment cycles
+            // that need a Box to stay finite-sized, and typespace has
+            // no way to know whether a native holds its parameter by
+            // value or behind its own indirection (a `Vec<T>`-like
+            // native versus a `struct W<T>(T)`-like one), the same
+            // reason Box, Vec, Map, and Set are absent below.
             Type::Native(_) => Default::default(),
             Type::Box(_)
             | Type::Vec(_)
@@ -610,6 +628,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::TupleStruct(tuple_struct) => tuple_struct.validate(),
             Type::NewtypeStruct(newtype_struct) => newtype_struct.validate(),
             Type::TypeAlias(type_alias) => type_alias.validate(),
+            Type::Native(native) => native.validate(),
             _ => Ok(()),
         }
     }

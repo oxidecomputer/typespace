@@ -177,6 +177,44 @@ where
         parameters: usize,
     },
 
+    /// A configured container answers
+    /// [`TraitProvision::Unknown`](crate::TraitProvision::Unknown) for
+    /// some trait.
+    ///
+    /// A container is hand-authored in
+    /// [`Settings`](crate::settings::Settings), so its author is
+    /// expected to know it completely; `Unknown` is only meaningful for
+    /// a machine-authored [`Native`](crate::build::Native), which
+    /// cannot always answer for the Rust type it names.
+    #[error(
+        "the {position} container `{path}` answers `unknown` for the \
+         trait `{trait_}`, which only a native type may do"
+    )]
+    ContainerProvisionUnknown {
+        /// The setting the container is configured for: `"map"`,
+        /// `"set"`, `"vec"`, or `"optional-nullable"`.
+        position: &'static str,
+        /// The container's path as configured.
+        path: String,
+        /// The trait left unanswered.
+        trait_: TypespaceTrait,
+    },
+
+    /// A native type states obligations for the wrong number of type
+    /// parameters.
+    #[error(
+        "the native type `{path}` states obligations for {declared} \
+         type parameter(s), but declares {parameters}"
+    )]
+    NativeParameterCount {
+        /// The native's declared path.
+        path: String,
+        /// The number of parameter obligations the native states.
+        declared: usize,
+        /// The number of type parameters the native declares.
+        parameters: usize,
+    },
+
     /// A type refers to a child type ID for which no type was inserted.
     #[error(
         "the type with id `{type_id}` references the id `{child_id}` \
@@ -444,14 +482,16 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
 #[non_exhaustive]
 pub enum RequirementOrigin<Id> {
     /// The requirement applies to one type parameter of the container
-    /// with this ID, because the container demands it of that
-    /// parameter.
+    /// or native type with this ID, because that type demands it of
+    /// that parameter.
     ContainerParameter {
-        /// The ID of the container that makes the demand.
+        /// The ID of the container or native type that makes the
+        /// demand.
         container: Id,
-        /// The parameter position the demand lands on: [`Relation::Key`]
-        /// or [`Relation::Value`] for a map, [`Relation::Element`] for a
-        /// set or a vec.
+        /// The parameter position the demand lands on:
+        /// [`Relation::Key`] or [`Relation::Value`] for a map,
+        /// [`Relation::Element`] for a set or a vec,
+        /// [`Relation::Parameter`] for a native.
         relation: Relation,
     },
     /// The requirement applies to the type of a property of the type
@@ -499,6 +539,9 @@ pub enum Relation {
     Key,
     /// The value type of a map.
     Value,
+    /// The type parameter of a [`Native`](crate::build::Native) at the
+    /// given index, in declaration order.
+    Parameter(usize),
     /// The type inside a box.
     Boxed,
     /// The type inside a newtype struct.
@@ -515,6 +558,7 @@ impl std::fmt::Display for Relation {
             Relation::Element => write!(f, "its element type"),
             Relation::Key => write!(f, "its key type"),
             Relation::Value => write!(f, "its value type"),
+            Relation::Parameter(index) => write!(f, "its type parameter {index}"),
             Relation::Boxed => write!(f, "its boxed type"),
             Relation::Inner => write!(f, "its inner type"),
             Relation::Target => write!(f, "its target type"),

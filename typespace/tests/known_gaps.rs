@@ -34,7 +34,7 @@ mod common;
 // promised: if the real NativeK has no Hash, the output does not
 // compile.
 //
-// TraitDisposition's own doc says an unknown must never grant a
+// TraitProvision's own doc says an unknown must never grant a
 // desired trait. The fix is for the desired phase to read a
 // container's blanket obligations, not just the trait it is asked
 // about; it waits on the typify merge.

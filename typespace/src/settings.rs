@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::{ALL_TRAITS, TypespaceTrait, TypespaceTraitSet};
+use crate::{ALL_TRAITS, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 // TODO 7/18/2025
 // I wanted to get this started to think through various settings that we might
@@ -405,18 +405,27 @@ impl Settings {
 ///
 /// The number of obligations must match the number of type parameters the
 /// type expects (two for a map, one for a set or a vec). Finalization produces
-/// an error if that's not the case.
+/// an error if that's not the case, and rejects a declaration whose provisions
+/// answer [`TraitProvision::Unknown`] for any trait: a container is
+/// hand-authored here, so its author is expected to know it completely, unlike
+/// a machine-authored [`build::Native`](crate::build::Native).
 ///
 /// Finalization imposes an obligation on type parameters according to these
 /// settings (and this may cascade to dependent traits i.e. `Ord` implies
 /// `PartialOrd`, `Eq`, and `PartialEq`).
 ///
+/// Nothing verifies a declaration against the container it describes.
+/// Claiming more than the container implements yields generated code that
+/// does not compile; claiming less yields a trait conflict naming the trait
+/// and the container, which is diagnosable, so the presets and any
+/// hand-written declaration should lean toward claiming less.
+///
 /// There are presets for the common modalities:
 ///
 /// ```
 /// # use typespace::{
-/// #     settings::{ContainerType, TraitProvision},
-/// #     TypespaceTrait, TypespaceTraitSet,
+/// #     settings::ContainerType,
+/// #     TraitProvision, TypespaceTrait, TypespaceTraitSet,
 /// # };
 /// // An ordered map, at another path, that clones its keys and
 /// // values, and that has no `Hash` impl of its own.
@@ -697,14 +706,56 @@ fn parse_path(path: &str) -> syn::Type {
     syn::parse_str::<syn::Type>(path).expect("valid type path")
 }
 
-/// The token text of a path.
+/// The rendering of a path: its segment names joined by `::`, keeping
+/// a leading `::` when the path has one.
 ///
 /// `syn::Type` implements neither `PartialEq` nor `Debug` without syn's
-/// `extra-traits` feature; equality and debug output go through the
-/// tokens instead.
+/// `extra-traits` feature; equality and debug output go through this
+/// rendering instead, and so does every error message that names a
+/// container's or a native's declared path.
+///
+/// A plain path--the form every preset and every `native` item
+/// declares, since generic arguments are split out into separate type
+/// parameters rather than kept in the path itself--renders exactly as
+/// written: `::chrono::NaiveDate` reads back as `::chrono::NaiveDate`,
+/// not the spaced-out `:: chrono :: NaiveDate` a token stream's default
+/// `Display` would produce. Anything else a caller manages to parse
+/// into this position (a path carrying its own generic arguments, a
+/// qualified `<T as Trait>::Assoc` path, a reference, a tuple, ...)
+/// falls back to that spaced form; nothing currently constructed by
+/// this crate takes that path.
 pub(crate) fn path_text(path: &syn::Type) -> String {
-    use quote::ToTokens;
-    path.to_token_stream().to_string()
+    compact_path_text(path).unwrap_or_else(|| {
+        use quote::ToTokens;
+        path.to_token_stream().to_string()
+    })
+}
+
+/// The compact rendering [`path_text`] prefers: `Some` for a plain
+/// path (every segment argument-less, no `qself`), `None` otherwise.
+fn compact_path_text(path: &syn::Type) -> Option<String> {
+    let syn::Type::Path(syn::TypePath {
+        qself: None, path, ..
+    }) = path
+    else {
+        return None;
+    };
+    path.segments
+        .iter()
+        .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+        .then(|| {
+            let leading = if path.leading_colon.is_some() {
+                "::"
+            } else {
+                ""
+            };
+            let segments = path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            format!("{leading}{}", segments.join("::"))
+        })
 }
 
 impl PartialEq for ContainerType {
@@ -821,31 +872,9 @@ impl TryFrom<ContainerTypeRepr> for ContainerType {
     }
 }
 
-/// What a container implements for one trait.
-///
-/// A container declaration answers this for every trait typespace
-/// tracks. The same three answers describe the containers a consumer
-/// cannot configure: `Option` implements `Default` whatever its
-/// parameter does ([`Always`](Self::Always)), `Box` implements it only
-/// when its parameter does ([`IfParameters`](Self::IfParameters)), and
-/// neither implements `FromStr` at any parameter
-/// ([`Never`](Self::Never)).
-///
-/// Nothing verifies a declaration against the container it describes.
-/// Claiming more than the container implements yields generated code
-/// that does not compile; claiming less yields a trait conflict naming
-/// the trait and the container, which is diagnosable, so the presets
-/// and any hand-written declaration should lean toward claiming less.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TraitProvision {
-    /// No impl exists, whatever the parameters implement.
-    Never,
-    /// The container implements the trait whatever its parameters do.
-    Always,
-    /// The container implements the trait when every parameter does.
-    IfParameters,
-}
+// [`TraitProvision`] (the answer a `provides` entry holds for one
+// trait) lives at the crate root: a `Native` states it too, not just a
+// `ContainerType`.
 
 /// One [`TraitProvision`] for every trait typespace tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]

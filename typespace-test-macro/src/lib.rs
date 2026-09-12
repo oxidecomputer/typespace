@@ -103,7 +103,7 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// | `struct N;` (requires `#[json = V]`) | `UnitStruct::new(V)`       |
 /// | `enum N { .. }`                      | `Enum`                     |
 /// | `type N = Ty;`                       | `TypeAlias`                |
-/// | `native P;` / `native P: Tr + ?Tr;`  | `Native`                   |
+/// | `native P;` / `native P: Tr + ?Tr + *Tr;` | `Native`              |
 ///
 /// Enum variants: `V` unit; `V(Ty)` single payload
 /// (`VariantDetails::Item`); `#[tuple] V(Ty)` one-element
@@ -193,11 +193,15 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// required trait that a native leaves unknown passes; a desired one is
 /// not granted. `!Tr` marks `Tr` known not to be implemented, which is
 /// what an unnamed trait means already and what carves an exception out
-/// of `..`.
+/// of `..`. `*Tr` marks `Tr` implemented when every one of the native's
+/// own type parameters implements it--the bound a generic native states
+/// for a trait its parameter decides, the same way `Vec<T>: Clone`
+/// depends on `T: Clone`.
 ///
 /// ```ignore
 /// native ::chrono::naive::NaiveDate: Clone + Debug + ?Ord + ?Hash;
 /// native ::foo::Opaque: Clone + Debug + .. + !Default;
+/// native ::foo::Wrapper<Inner>: Debug + *Clone + *PartialEq;
 /// ```
 ///
 /// `..` is the background statement, so a bound naming a trait

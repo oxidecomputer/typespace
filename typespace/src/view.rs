@@ -127,17 +127,22 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
             build::Type::Unit => TypeDetails::Unit,
             build::Type::String => TypeDetails::String,
-            build::Type::Boolean => TypeDetails::Builtin("bool"),
-            build::Type::Integer(s) => TypeDetails::Builtin(s.as_str()),
-            build::Type::Float(s) => TypeDetails::Builtin(s.as_str()),
-            build::Type::JsonValue => TypeDetails::Builtin("::serde_json::Value"),
-            build::Type::Never => TypeDetails::Builtin("::json_serde::Absent"),
-            build::Type::Native(n) => TypeDetails::Builtin(n.name.as_str()),
+            build::Type::Boolean => TypeDetails::Builtin(Cow::Borrowed("bool")),
+            build::Type::Integer(s) => TypeDetails::Builtin(Cow::Borrowed(s.as_str())),
+            build::Type::Float(s) => TypeDetails::Builtin(Cow::Borrowed(s.as_str())),
+            build::Type::JsonValue => TypeDetails::Builtin(Cow::Borrowed("::serde_json::Value")),
+            build::Type::Never => TypeDetails::Builtin(Cow::Borrowed("::json_serde::Absent")),
+            // A native's path is parsed into a `syn::Type`, which has
+            // no borrowed string form, so this is the one variant that
+            // owns its rendered string rather than borrowing it.
+            build::Type::Native(n) => {
+                TypeDetails::Builtin(Cow::Owned(crate::settings::path_text(n.path())))
+            }
 
             // Treat these less-common named types as opaque to callers.
             build::Type::UnitStruct(_)
             | build::Type::TupleStruct(_)
-            | build::Type::TypeAlias(_) => TypeDetails::Builtin(self.name_str()),
+            | build::Type::TypeAlias(_) => TypeDetails::Builtin(Cow::Borrowed(self.name_str())),
         }
     }
 
@@ -152,12 +157,16 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
     /// Whether this type implements the given trait.
     ///
-    /// A native type answers from what it is known to implement, so a trait
-    /// its declaration cannot answer for returns `false`. A container's answer
-    /// (`Vec`, `Option`, `Map`, `Set`, `Box`, an array, a tuple) depends on
-    /// its children and, for the configurable containers, from the declared
-    /// container tables trait resolution consults, descending into each child
-    /// through this same method; a type alias forwards to its target.
+    /// A native type answers from its declared table, exactly like a
+    /// configured container: unconditionally, never, when every type
+    /// parameter has the trait (descending into each parameter through
+    /// this same method), or--a state only a native can hold--`false`
+    /// for a trait its declaration cannot answer for. A container's
+    /// answer (`Vec`, `Option`, `Map`, `Set`, `Box`, an array, a tuple)
+    /// depends on its children and, for the configurable containers,
+    /// from the declared container tables trait resolution consults,
+    /// descending into each child through this same method; a type
+    /// alias forwards to its target.
     pub fn has_impl(&self, trait_: TypespaceTrait) -> bool {
         self.has_trait(trait_, &mut BTreeSet::new())
     }
@@ -170,7 +179,6 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             return false;
         }
         let answer = match self.typ {
-            build::Type::Native(n) => n.impls.contains(&trait_),
             build::Type::Enum(e) => e
                 .common
                 .built
@@ -225,7 +233,7 @@ pub enum TypeDetails<'a, Id> {
     Box(Id),
     Tuple(Box<dyn Iterator<Item = Id> + 'a>),
     Array(Id, usize),
-    Builtin(&'a str),
+    Builtin(Cow<'a, str>),
     Unit,
     String,
 }

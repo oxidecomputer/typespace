@@ -169,12 +169,15 @@ struct NativeItem {
 
 /// One entry in a `native` item's bound list.
 enum NativeBound {
-    /// `Tr`: the type implements the trait.
+    /// `Tr`: the type implements the trait unconditionally.
     Yes(syn::Path),
     /// `!Tr`: the type does not implement the trait.
     No(syn::Path),
     /// `?Tr`: the declaration cannot answer for the trait.
     Unknown(syn::Path),
+    /// `*Tr`: the type implements the trait when every one of its type
+    /// parameters does.
+    IfParameters(syn::Path),
     /// `..`: every trait the list does not name is unknown.
     Rest,
 }
@@ -190,6 +193,9 @@ impl Parse for NativeBound {
         } else if input.peek(Token![?]) {
             input.parse::<Token![?]>()?;
             Ok(NativeBound::Unknown(input.parse()?))
+        } else if input.peek(Token![*]) {
+            input.parse::<Token![*]>()?;
+            Ok(NativeBound::IfParameters(input.parse()?))
         } else {
             Ok(NativeBound::Yes(input.parse()?))
         }
@@ -1393,6 +1399,10 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
         NativeBound::No(path) => Some(path),
         _ => None,
     })?;
+    let if_parameters = native_trait_group(&item.bounds, |bound| match bound {
+        NativeBound::IfParameters(path) => Some(path),
+        _ => None,
+    })?;
     // An empty array literal would leave the element type unresolved,
     // so the trait-less case names the empty set directly.
     let impls_tokens = if impls.is_empty() {
@@ -1418,7 +1428,15 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
         .iter()
         .map(|trait_tokens| {
             quote! {
-                .with_disposition(#trait_tokens, ::typespace::TraitDisposition::No)
+                .with_disposition(#trait_tokens, ::typespace::TraitProvision::Never)
+            }
+        })
+        .collect::<Vec<_>>();
+    let if_parameters_tokens = if_parameters
+        .iter()
+        .map(|trait_tokens| {
+            quote! {
+                .with_disposition(#trait_tokens, ::typespace::TraitProvision::IfParameters)
             }
         })
         .collect::<Vec<_>>();
@@ -1438,6 +1456,7 @@ fn lower_native(item: &NativeItem, lowering: &mut Lowering) -> syn::Result<()> {
                 #rest_tokens
                 #unknown_tokens
                 #(#known_not_tokens)*
+                #(#if_parameters_tokens)*
             ),
         ).unwrap();
     });
@@ -2373,6 +2392,22 @@ mod tests {
             }
         });
         expectorate::assert_contents("tests/output/test_native_generic_parameters.rs", &out);
+    }
+
+    #[test]
+    fn test_native_if_parameters() {
+        let out = expand_pretty(quote! {
+            Settings::typical(), {
+                struct Inner {
+                    count: u32,
+                }
+
+                native ::foo::Wrapper<Inner>: Debug + *Clone + *PartialEq;
+
+                type Wrapped = ::foo::Wrapper<Inner>;
+            }
+        });
+        expectorate::assert_contents("tests/output/test_native_if_parameters.rs", &out);
     }
 
     #[test]

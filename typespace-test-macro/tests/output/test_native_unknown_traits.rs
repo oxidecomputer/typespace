@@ -42,7 +42,7 @@ fn expansion() {
                         .with_rest_unknown()
                         .with_disposition(
                             ::typespace::TypespaceTrait::Default,
-                            ::typespace::TraitDisposition::No,
+                            ::typespace::TraitProvision::Never,
                         ),
                 ),
             )

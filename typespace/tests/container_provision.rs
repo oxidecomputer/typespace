@@ -27,11 +27,11 @@
 //! it refuses would not have.
 
 use typespace::{
-    Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
+    TraitProvision, Typespace, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::{Native, NewtypeStruct, Struct, StructProperty, StructPropertyState, Type},
     error::{Error, OffenderReason, Relation, RequirementOrigin, TraitConflict},
     no_cycles,
-    settings::{ContainerType, OptionalNullable, Settings, TraitProvision},
+    settings::{ContainerType, OptionalNullable, Settings},
 };
 use typespace_test_macro::{check_and_include, typespace_builder};
 
@@ -504,6 +504,11 @@ fn required_mismatches(position: Position, name: &str, declaration: &ContainerTy
                         (TraitProvision::Never, _) => Landing::Container,
                         (TraitProvision::Always, _) | (_, None) => Landing::Satisfied,
                         (TraitProvision::IfParameters, Some(slot)) => Landing::Parameter(slot),
+                        (TraitProvision::Unknown, _) => {
+                            unreachable!(
+                                "a configured container's own provisions are never Unknown"
+                            )
+                        }
                     };
                     match conflicts_of(result) {
                         Err(message) => Some(format!("{name} {position:?} {trait_}: {message}")),
@@ -550,6 +555,11 @@ fn desired_mismatches(position: Position, name: &str, declaration: &ContainerTyp
                         (TraitProvision::Never, _) => false,
                         (TraitProvision::Always, _) | (_, None) => true,
                         (TraitProvision::IfParameters, Some(_)) => false,
+                        (TraitProvision::Unknown, _) => {
+                            unreachable!(
+                                "a configured container's own provisions are never Unknown"
+                            )
+                        }
                     };
                     match wrapped_container(settings, position, &parameters).finalize(no_cycles) {
                         Err(err) => Some(format!(

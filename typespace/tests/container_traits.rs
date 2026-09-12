@@ -3,11 +3,11 @@
 //! What a caller states about a container type, and what reads back.
 
 use typespace::{
-    TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
+    TraitProvision, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::Type,
     error::{Error, PathStep, Relation},
     no_cycles,
-    settings::{ContainerType, OptionalNullable, Settings, TraitProvision},
+    settings::{ContainerType, OptionalNullable, Settings},
 };
 use typespace_test_macro::typespace_builder;
 
@@ -350,6 +350,34 @@ fn cardinality_mismatch_is_rejected_at_finalization() {
                 position: "map",
                 declared: 1,
                 parameters: 2,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+// `TraitProvision::Unknown` is only meaningful for a machine-authored
+// native; a configured container is hand-authored, so declaring it
+// there is a configuration error rather than a silent pass.
+#[test]
+fn unknown_provision_on_a_container_is_rejected_at_finalization() {
+    let settings = Settings::minimal().with_vec_type(
+        ContainerType::vec().with_provision(TypespaceTrait::Hash, TraitProvision::Unknown),
+    );
+
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("string".to_string(), Type::String).unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the Unknown provision");
+    };
+    assert!(
+        matches!(
+            err,
+            Error::ContainerProvisionUnknown {
+                position: "vec",
+                trait_: TypespaceTrait::Hash,
                 ..
             }
         ),

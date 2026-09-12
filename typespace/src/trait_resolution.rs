@@ -192,12 +192,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use log::debug;
 
 use crate::build::{
-    ContainedChild, Enum, Native, NewtypeConstraints, NewtypeStruct, StructProperty,
-    StructPropertyState, TupleStruct, Type, TypeAlias, VariantDetails,
+    ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
+    TupleStruct, Type, TypeAlias, VariantDetails,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
-use crate::settings::{ContainerType, OptionalNullable, Settings, TraitProvision, path_text};
-use crate::{TraitDisposition, TypespaceTrait, TypespaceTraitSet};
+use crate::settings::{ContainerType, OptionalNullable, Settings, path_text};
+use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 /// A contained child edge classified against the settings.
 ///
@@ -839,7 +839,9 @@ where
     // parameters to exist at all: BTreeMap needs Ord of its key, HashMap needs
     // Eq and Hash. They're necessary irrespective of other constraints.
     // Finalization has checked each container's type parameter count, so every
-    // position is present.
+    // position is present. A native's obligations are the same idea, stated
+    // by the declaration rather than fixed by which container it is;
+    // validation at insertion has already checked its parameter count.
     let mut work = types
         .iter()
         .flat_map(|(type_id, ty)| match ty {
@@ -905,6 +907,21 @@ where
                         path: Vec::new(),
                     }),
                     Edge::Plain(..) => None,
+                })
+                .collect::<Vec<_>>(),
+            Type::Native(native) => native
+                .parameters()
+                .iter()
+                .zip(native.obligations())
+                .enumerate()
+                .map(|(index, (param_id, obligation))| WorkItem {
+                    target: param_id.clone(),
+                    traits: close_supertraits(obligation.clone()),
+                    origin: RequirementOrigin::ContainerParameter {
+                        container: type_id.clone(),
+                        relation: Relation::Parameter(index),
+                    },
+                    path: Vec::new(),
                 })
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
@@ -1214,24 +1231,38 @@ where
                 | Type::NewtypeStruct(_)
                 | Type::TypeAlias(_) => unreachable!(),
 
-                // Only a trait the native is known not to implement
-                // conflicts. A trait its declaration cannot answer for
-                // passes: refusing to generate for a valid schema is
-                // worse than a compile error naming the real missing
-                // impl, and a source like typify's `x-rust-type` has no
-                // way to declare more.
+                // A native's declaration answers the same way a
+                // configured container's does, through the same split:
+                // a trait it never implements conflicts, one it
+                // implements unconditionally is satisfied and goes no
+                // further, and one it implements only when every type
+                // parameter does passes onward to each parameter,
+                // exactly as a container's own IfParameters traits
+                // reach its parameters. A trait its declaration cannot
+                // answer for (Unknown) is neither bad nor pass here, so
+                // it silently passes without reaching any parameter:
+                // refusing to generate for a valid schema is worse than
+                // a compile error naming the real missing impl, and a
+                // source like typify's `x-rust-type` has no way to
+                // declare more.
                 Type::Native(native) => {
-                    let missing_traits = traits
-                        .iter()
-                        .filter(|trait_name| {
-                            matches!(native.disposition(**trait_name), TraitDisposition::No)
-                        })
-                        .copied()
-                        .collect::<Vec<_>>();
-                    let reason = OffenderReason::NativeMissingImpl {
-                        type_name: native.name.clone(),
-                    };
-                    conflict(missing_traits, reason);
+                    let (bad, pass) = container_split(&native.container, &traits);
+                    conflict(
+                        bad,
+                        OffenderReason::NativeMissingImpl {
+                            type_name: path_text(native.path()),
+                        },
+                    );
+                    if !pass.is_empty() {
+                        for (index, param_id) in native.parameters().iter().enumerate() {
+                            work.push_back(WorkItem {
+                                target: param_id.clone(),
+                                traits: pass.clone(),
+                                origin: origin.clone(),
+                                path: hop(Relation::Parameter(index)),
+                            });
+                        }
+                    }
                 }
 
                 // Option<T> implements everything we care about--except
@@ -1506,18 +1537,23 @@ fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = Typespac
     std::iter::once(trait_name).chain(dependents.iter().copied())
 }
 
-/// Whether a configurable container provides `trait_name`.
+/// Whether a container-shaped declaration ([`ContainerType`], or the
+/// [`ContainerType`] a [`Native`](crate::build::Native) composes)
+/// provides `trait_name`.
 ///
-/// `parameters` answers whether every one of the container's type
+/// `parameters` answers whether every one of the declaration's type
 /// parameters has the trait; it is consulted only when the declaration
-/// makes the container's impl conditional on them.
+/// makes the impl conditional on them. `Unknown` answers `false`, the
+/// same as `Never`: reached only through a native (finalization
+/// rejects a configured container that declares it), and a desired
+/// trait is never granted on a guess.
 fn container_provides(
     declaration: &ContainerType,
     trait_name: TypespaceTrait,
     parameters: impl FnOnce() -> bool,
 ) -> bool {
     match declaration.provision(trait_name) {
-        TraitProvision::Never => false,
+        TraitProvision::Never | TraitProvision::Unknown => false,
         TraitProvision::Always => true,
         TraitProvision::IfParameters => parameters(),
     }
@@ -1552,10 +1588,15 @@ pub(crate) fn unnamed_provides<Id>(
         | Type::NewtypeStruct(_)
         | Type::TypeAlias(_) => unreachable!(),
 
-        // Only a trait the native is known to implement is
-        // provided: granting a desired trait a declaration cannot
-        // answer for would emit a derive nobody asked for.
-        Type::Native(Native { impls, .. }) => impls.contains(&trait_name),
+        // A native answers exactly as a configured container does,
+        // through the same table and the same helper: unconditionally,
+        // never, or when every type parameter provides the trait.
+        // Unknown answers false here too--granting a desired trait a
+        // declaration cannot answer for would emit a derive nobody
+        // asked for.
+        Type::Native(native) => container_provides(&native.container, trait_name, || {
+            native.parameters.iter().all(child_has)
+        }),
 
         // Pass the buck, minus Display and FromStr, which an Option<T> never
         // implements, and Default, which Option<T> always implements.
@@ -1752,9 +1793,11 @@ where
         .collect::<Vec<_>>();
 
     // The inverse of Type::children: the types referring to each type,
-    // which is the direction a loss travels. Type::children reports
-    // nothing for a native type, so a native's type parameters are not
-    // reached from here.
+    // which is the direction a loss travels. This reaches a native's
+    // type parameters too--Type::children reports them, exactly as it
+    // reports a container's--so a loss at a parameter poisons the
+    // native back through the same route a loss at a map's key
+    // poisons the map.
     let referrers = types.iter().fold(
         BTreeMap::<Id, Vec<Id>>::new(),
         |mut referrers, (type_id, ty)| {
@@ -3255,6 +3298,212 @@ mod tests {
             &conflicts[0].reason,
             OffenderReason::NativeMissingImpl { type_name }
                 if type_name == "::opaque::Opaque"
+        ));
+    }
+
+    /// A generic native's `IfParameters` disposition (`*Tr` in the
+    /// macro) forwards a required trait to its type parameter, exactly
+    /// as a configured container forwards to the parameters it holds.
+    /// The requirement is satisfied when the parameter has the trait
+    /// and conflicts, at the parameter, when it does not.
+    #[test]
+    fn required_trait_forwards_through_native_if_parameters() {
+        let settings = || Settings::minimal().with_required_trait(TypespaceTrait::Clone);
+
+        // Inner derives Clone from its own field, so the requirement
+        // Wrapper<Inner> forwards to it is satisfiable.
+        let builder = typespace_builder!(settings(), {
+            struct Inner {
+                count: u32,
+            }
+
+            native ::foo::Wrapper<Inner>: Debug + *Clone;
+
+            struct Holder {
+                wrapped: ::foo::Wrapper<Inner>,
+            }
+        });
+        let typespace = builder
+            .finalize(no_cycles)
+            .expect("Wrapper<Inner> is Clone because Inner is");
+        assert!(
+            built_traits(&typespace, "Holder").contains(&TypespaceTrait::Clone),
+            "Holder should derive Clone through Wrapper<Inner>"
+        );
+
+        // NoClone is a native that never declares Clone, so the same
+        // requirement, forwarded to it, conflicts there rather than at
+        // Wrapper itself.
+        let builder = typespace_builder!(settings(), {
+            native ::bar::NoClone: Debug;
+            native ::foo::Wrapper<::bar::NoClone>: Debug + *Clone;
+
+            struct Holder {
+                wrapped: ::foo::Wrapper<::bar::NoClone>,
+            }
+        });
+        let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+            panic!("expected finalization to report a trait conflict at NoClone");
+        };
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Clone);
+        assert_eq!(conflicts[0].offender, "::bar::NoClone");
+        assert!(matches!(
+            &conflicts[0].reason,
+            OffenderReason::NativeMissingImpl { type_name }
+                if type_name == "::bar::NoClone"
+        ));
+        // The hop out of Wrapper names the parameter position the
+        // requirement rode through.
+        assert!(
+            conflicts[0]
+                .path
+                .iter()
+                .any(|step| matches!(step.relation, Relation::Parameter(0))),
+            "expected a hop through the native's parameter 0: {:#?}",
+            conflicts[0].path
+        );
+    }
+
+    /// The desired phase forwards through `IfParameters` too: a struct
+    /// holding a generic native gets a desired trait exactly when the
+    /// native's parameter has it, poisoned back through the same
+    /// referrer route a container parameter uses.
+    #[test]
+    fn desired_trait_forwards_through_native_if_parameters() {
+        let settings = || minimal_with_desired([TypespaceTrait::Debug, TypespaceTrait::Clone]);
+
+        let builder = typespace_builder!(settings(), {
+            struct Inner {
+                count: u32,
+            }
+
+            native ::foo::Wrapper<Inner>: Debug + *Clone;
+
+            struct Holder {
+                wrapped: ::foo::Wrapper<Inner>,
+            }
+        });
+        let typespace = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&typespace, "Holder"),
+            trait_set([TypespaceTrait::Debug, TypespaceTrait::Clone])
+        );
+
+        let builder = typespace_builder!(settings(), {
+            native ::bar::NoClone: Debug;
+            native ::foo::Wrapper<::bar::NoClone>: Debug + *Clone;
+
+            struct Holder {
+                wrapped: ::foo::Wrapper<::bar::NoClone>,
+            }
+        });
+        let typespace = builder.finalize(no_cycles).unwrap();
+        assert_eq!(
+            built_traits(&typespace, "Holder"),
+            trait_set([TypespaceTrait::Debug]),
+            "Clone should be dropped: NoClone never declares it"
+        );
+    }
+
+    /// A native's own obligations--what it demands of a type parameter
+    /// to exist at all, independent of anything a caller requires of
+    /// the native itself--are seeded unconditionally, exactly as a
+    /// configured container's obligations are for its key, value, or
+    /// element parameter. The parameter here is never otherwise
+    /// constrained, so the only source of the conflict is the native's
+    /// own declaration.
+    #[test]
+    fn native_obligation_is_seeded_unconditionally() {
+        let mut builder = TypespaceBuilder::<String>::new(Settings::minimal());
+        builder
+            .insert(
+                "Plain".to_string(),
+                Type::Native(Native::new(
+                    "plain::Plain",
+                    TypespaceTraitSet::empty(),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Set".to_string(),
+                Type::Native(
+                    Native::new(
+                        "set::Set",
+                        trait_set([TypespaceTrait::Debug]),
+                        vec!["Plain".to_string()],
+                    )
+                    .with_obligations([trait_set([TypespaceTrait::Hash])]),
+                ),
+            )
+            .unwrap();
+
+        let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+            panic!("expected the unmet obligation to conflict");
+        };
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Hash);
+        assert_eq!(conflicts[0].offender, "Plain");
+        assert!(matches!(
+            &conflicts[0].origin,
+            RequirementOrigin::ContainerParameter { container, relation: Relation::Parameter(0) }
+                if container == "Set"
+        ));
+    }
+
+    /// A native whose obligation count does not match its parameter
+    /// count is rejected at insertion, exactly as a configured
+    /// container's mismatch is rejected at finalization
+    /// (`check_containers`).
+    #[test]
+    fn native_obligation_count_mismatch_is_rejected_at_insertion() {
+        let mut builder = TypespaceBuilder::<String>::new(Settings::minimal());
+        let err = builder
+            .insert(
+                "Bad".to_string(),
+                Type::Native(
+                    Native::<String>::new("bad::Bad", TypespaceTraitSet::empty(), Vec::new())
+                        .with_obligations([trait_set([TypespaceTrait::Hash])]),
+                ),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::NativeParameterCount {
+                declared: 1,
+                parameters: 0,
+                ..
+            }
+        ));
+    }
+
+    /// A native's type parameters are children of the type, exactly
+    /// like a container's: a dangling parameter id is caught by
+    /// `check_references`, and is no longer invisible the way it was
+    /// before `Type::children` reported them.
+    #[test]
+    fn native_parameter_is_a_child_reference() {
+        let mut builder = TypespaceBuilder::<String>::new(Settings::minimal());
+        builder
+            .insert(
+                "Wrapper".to_string(),
+                Type::Native(Native::new(
+                    "foo::Wrapper",
+                    TypespaceTraitSet::empty(),
+                    vec!["Missing".to_string()],
+                )),
+            )
+            .unwrap();
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("expected finalization to reject the dangling parameter id");
+        };
+        assert!(matches!(
+            err,
+            Error::UnknownTypeId { type_id, child_id }
+                if type_id == "Wrapper" && child_id == "Missing"
         ));
     }
 
