@@ -10,9 +10,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::{
-    TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
+    Obligation, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
     build::{self, StructProperty, StructPropertySerde, StructPropertyState, Type, VariantDetails},
-    error::{Error, Relation},
+    error::{Error, PathStep, Relation},
     settings::{OptionalNullable, Settings, Std},
 };
 
@@ -158,7 +158,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         &self,
         value: &serde_json::Value,
         id: &Id,
-    ) -> Result<Vec<(TypespaceTrait, Relation, Id)>, Error<Id>> {
+    ) -> Result<Vec<Obligation<Id>>, Error<Id>> {
         let Self { types, settings } = self;
         check_default(types, settings, value, id)
     }
@@ -169,7 +169,7 @@ fn check_default<Id>(
     settings: &Settings,
     value: &serde_json::Value,
     id: &Id,
-) -> Result<Vec<(TypespaceTrait, Relation, Id)>, Error<Id>>
+) -> Result<Vec<Obligation<Id>>, Error<Id>>
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
@@ -283,19 +283,25 @@ struct WalkState<Id> {
     /// The (id, value) pairs visited so far while expanding a default
     /// value, used to detect and reject recursive expansion.
     expansion_set: Vec<(Id, serde_json::Value)>,
-    /// What rendering this value obliges of other types, as
-    /// `(trait, relation, target)`. Everything here is CONDITIONAL on
-    /// the owner actually rendering the value: a whole-type default
-    /// lives inside a `Default` impl that trait resolution may never
-    /// grant, so these are handed to `feasibility` to evaluate rather
-    /// than seeded as requirements.
-    obligations: Vec<(TypespaceTrait, Relation, Id)>,
+    /// The hops taken to reach the position now being walked, starting from
+    /// the type that originated the default value. An obligation records the
+    /// path so a conflict raised below a flattened property names the property
+    /// the walk descended through instead of naming a relation of some type
+    /// the owner never mentions.
+    path: Vec<PathStep<Id>>,
+    /// What traits rendering this value requires of other types.
+    /// Everything here is CONDITIONAL on the owner actually
+    /// rendering the value: a whole-type default lives inside a `Default` impl
+    /// that trait resolution may never grant, so these are handed to
+    /// `feasibility` to evaluate rather than seeded as requirements.
+    obligations: Vec<Obligation<Id>>,
 }
 
 impl<Id> WalkState<Id> {
     fn new() -> Self {
         Self {
             expansion_set: Vec::new(),
+            path: Vec::new(),
             obligations: Vec::new(),
         }
     }
@@ -355,6 +361,28 @@ where
         }
     }
 
+    /// Run `f` one hop deeper, recording the step it takes.
+    ///
+    /// `from` is the type the walk is leaving and `relation` is how it
+    /// leaves, matching the hops `contained_children_related` names, so
+    /// that an obligation raised anywhere below reads as a path from
+    /// the type whose default value this is.
+    fn at<T>(
+        &self,
+        state: &mut WalkState<Id>,
+        from: &Id,
+        relation: Relation,
+        f: impl FnOnce(&mut WalkState<Id>) -> T,
+    ) -> T {
+        state.path.push(PathStep {
+            type_id: from.clone(),
+            relation,
+        });
+        let result = f(state);
+        state.path.pop();
+        result
+    }
+
     fn default_impl(
         &self,
         state: &mut WalkState<Id>,
@@ -379,8 +407,9 @@ where
                 // A newtype struct may contain itself (directly or
                 // indirectly), so we need to take care not to recur without
                 // narrowing the JSON value.
-                let inner =
-                    self.expansion_guard_default_impl(state, &newtype_struct.inner, value)?;
+                let inner = self.at(state, id, Relation::Inner, |state| {
+                    self.expansion_guard_default_impl(state, &newtype_struct.inner, value)
+                })?;
                 Ok(inner.map(|inner| {
                     let ident = self.render_ident(id);
                     quote! { #ident(#inner) }
@@ -390,7 +419,9 @@ where
                 // A type alias may refer to itself (directly or indirectly),
                 // so we need to take care not to recur without narrowing the
                 // JSON value.
-                self.expansion_guard_default_impl(state, &type_alias.target, value)
+                self.at(state, id, Relation::Target, |state| {
+                    self.expansion_guard_default_impl(state, &type_alias.target, value)
+                })
             }
 
             Type::Native(_) => {
@@ -401,11 +432,11 @@ where
                 // expect rather than unwrap?
 
                 if self.mode == Mode::Check {
-                    state.obligations.push((
-                        TypespaceTrait::Deserialize,
-                        Relation::Inner,
-                        id.clone(),
-                    ));
+                    state.obligations.push(Obligation {
+                        required: TypespaceTrait::Deserialize,
+                        path: state.path.clone(),
+                        target: id.clone(),
+                    });
                 }
                 let text = value.to_string();
                 Ok(self.generate(|| {
@@ -426,7 +457,9 @@ where
                     // really could only happen if someone were attempting
                     // self-harm: an anonymous Option that contained itself.
                     // But people are weird and terrible.
-                    let inner = self.expansion_guard_default_impl(state, type_id, value)?;
+                    let inner = self.at(state, id, Relation::Element, |state| {
+                        self.expansion_guard_default_impl(state, type_id, value)
+                    })?;
                     Ok(inner.map(|inner| {
                         let some = self.render_option_variant(id, "Some");
                         quote! { #some(#inner) }
@@ -437,7 +470,9 @@ where
                 // As above with Option, a deliberately self-harming
                 // construction could cause infinite recursion without the
                 // guard.
-                let inner = self.expansion_guard_default_impl(state, type_id, value)?;
+                let inner = self.at(state, id, Relation::Boxed, |state| {
+                    self.expansion_guard_default_impl(state, type_id, value)
+                })?;
                 // TODO 9/4/2026
                 // We need Settings to know what to render here...
                 Ok(inner.map(|inner| quote! { Box::new(#inner) }))
@@ -451,7 +486,11 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
+                    .map(|elem_value| {
+                        self.at(state, id, Relation::Element, |state| {
+                            self.default_impl(state, elem_id, elem_value)
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -479,8 +518,12 @@ where
                         // make sense of it, exactly as it would any other
                         // string value.
                         let key_value = serde_json::Value::String(key.clone());
-                        let key = self.default_impl(state, key_id, &key_value)?;
-                        let entry_value = self.default_impl(state, value_id, entry_value)?;
+                        let key = self.at(state, id, Relation::Key, |state| {
+                            self.default_impl(state, key_id, &key_value)
+                        })?;
+                        let entry_value = self.at(state, id, Relation::Value, |state| {
+                            self.default_impl(state, value_id, entry_value)
+                        })?;
                         Ok((key, entry_value))
                     })
                     .collect::<Result<Vec<_>, Error<Id>>>()?;
@@ -519,7 +562,11 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
+                    .map(|elem_value| {
+                        self.at(state, id, Relation::Element, |state| {
+                            self.default_impl(state, elem_id, elem_value)
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -544,7 +591,11 @@ where
 
                 let elems = arr
                     .iter()
-                    .map(|elem_value| self.default_impl(state, elem_id, elem_value))
+                    .map(|elem_value| {
+                        self.at(state, id, Relation::Element, |state| {
+                            self.default_impl(state, elem_id, elem_value)
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(self.generate(|| {
                     let elems = elems
@@ -554,7 +605,8 @@ where
                 }))
             }
             Type::Tuple(items) => {
-                let elems = self.default_impl_tuple_items(state, items, value, id)?;
+                let elems =
+                    self.default_impl_tuple_items(state, items, value, id, Relation::Element)?;
                 Ok(elems.map(|elems| quote! { ( #( #elems ),* ) }))
             }
 
@@ -661,6 +713,7 @@ where
         items: &[Id],
         value: &serde_json::Value,
         id: &Id,
+        relation: Relation,
     ) -> Result<Option<Vec<TokenStream>>, Error<Id>> {
         let arr = value.as_array().ok_or_else(|| Error::InvalidDefault {
             value: value.clone(),
@@ -678,7 +731,11 @@ where
         let elems = items
             .iter()
             .zip(arr.iter())
-            .map(|(item_id, item_value)| self.default_impl(state, item_id, item_value))
+            .map(|(item_id, item_value)| {
+                self.at(state, id, relation.clone(), |state| {
+                    self.default_impl(state, item_id, item_value)
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(self.generate(|| {
@@ -694,6 +751,10 @@ where
     ///
     /// For structs, we wrap this in the struct's name; for struct enum
     /// variants, we wrap it in the variant's name.
+    ///
+    /// `hop` is how the walk reaches every property here, which a
+    /// variant's payload sets to the variant itself; `None` names each
+    /// property in turn.
     fn default_impl_struct_props(
         &self,
         state: &mut WalkState<Id>,
@@ -701,6 +762,7 @@ where
         deny_unknown_fields: bool,
         value: &serde_json::Value,
         id: &Id,
+        hop: Option<&Relation>,
     ) -> Result<Vec<TokenStream>, Error<Id>> {
         let map = value.as_object().ok_or_else(|| Error::InvalidDefault {
             value: value.clone(),
@@ -712,6 +774,12 @@ where
         let mut fields = BTreeSet::new();
 
         for prop_info in properties {
+            let relation = hop
+                .cloned()
+                .unwrap_or_else(|| Relation::Field(prop_info.rust_name.clone()));
+
+            // TODO 9/12/2026
+            // prop_info.wire_name() ?
             let named = match &prop_info.json_name {
                 StructPropertySerde::None => Some(&prop_info.rust_name),
                 StructPropertySerde::Rename(rename) => Some(rename),
@@ -738,21 +806,22 @@ where
                     // optional-nullable settings).
                     (StructPropertyState::Optional, None)
                     | (StructPropertyState::Default, None) => {
-                        // The value says nothing about this property, so
-                        // the impl fills it from Default::default(). For a
-                        // property in the Default state that is its own
-                        // type's Default, which the type therefore owes. An
-                        // Optional property renders as an Option, or as the
-                        // configured optional-nullable wrapper, and either
-                        // is Default whatever it holds, so it owes nothing.
+                        // If the state is Default, implementing the
+                        // Default trait on this type confers a requirement of
+                        // a Default implementation for the type of the field.
                         if self.mode == Mode::Check
                             && prop_info.state == StructPropertyState::Default
                         {
-                            state.obligations.push((
-                                TypespaceTrait::Default,
-                                Relation::Field(prop_info.rust_name.clone()),
-                                prop_info.type_id.clone(),
-                            ));
+                            let mut path = state.path.clone();
+                            path.push(PathStep {
+                                type_id: id.clone(),
+                                relation: relation.clone(),
+                            });
+                            state.obligations.push(Obligation {
+                                required: TypespaceTrait::Default,
+                                path,
+                                target: prop_info.type_id.clone(),
+                            });
                         }
                         if self.mode == Mode::Generate {
                             // TODO 9/4/2026
@@ -770,11 +839,14 @@ where
                     // descent where we're *expanding* the input. This is
                     // particularly where we need to use the expansion guard.
                     (StructPropertyState::DefaultValue(prop_default_value), None) => {
-                        let try_rendered_prop_value = self.expansion_guard_default_impl(
-                            state,
-                            &prop_info.type_id,
-                            &prop_default_value.0,
-                        );
+                        let try_rendered_prop_value =
+                            self.at(state, id, relation.clone(), |state| {
+                                self.expansion_guard_default_impl(
+                                    state,
+                                    &prop_info.type_id,
+                                    &prop_default_value.0,
+                                )
+                            });
                         if let Some(rendered_prop_value) = try_rendered_prop_value? {
                             let prop_ident = format_ident!("{}", prop_info.rust_name);
                             rendered_properties.push(quote! {
@@ -798,30 +870,39 @@ where
                                 // A simple Option<T> is sufficient.
                                 OptionalNullable::ConflateAsAbsent
                                 | OptionalNullable::ConflateAsNull => {
-                                    self.default_impl(state, prop_id, prop_value)?
+                                    self.at(state, id, relation.clone(), |state| {
+                                        self.default_impl(state, prop_id, prop_value)
+                                    })?
                                 }
                                 // Nest the option in a `Some`.
                                 OptionalNullable::DoubleOption => self
-                                    .default_impl(state, prop_id, prop_value)?
+                                    .at(state, id, relation.clone(), |state| {
+                                        self.default_impl(state, prop_id, prop_value)
+                                    })?
                                     .map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
                                     }),
 
                                 // Construct the custom type
-                                OptionalNullable::CustomType(_) => self
-                                    .default_impl_custom_optional_nullable(
-                                        state,
-                                        option_inner_id,
-                                        prop_value,
-                                    )?,
+                                OptionalNullable::CustomType(_) => {
+                                    self.at(state, id, relation.clone(), |state| {
+                                        self.default_impl_custom_optional_nullable(
+                                            state,
+                                            option_inner_id,
+                                            prop_value,
+                                        )
+                                    })?
+                                }
                             }
                         } else {
-                            self.default_impl(state, prop_id, prop_value)?
-                                .map(|prop_value| {
-                                    let some = self.render_option_variant2("Some");
-                                    quote! { #some(#prop_value) }
-                                })
+                            self.at(state, id, relation.clone(), |state| {
+                                self.default_impl(state, prop_id, prop_value)
+                            })?
+                            .map(|prop_value| {
+                                let some = self.render_option_variant2("Some");
+                                quote! { #some(#prop_value) }
+                            })
                         };
 
                         let prop_default = prop_default_value.map(|value| {
@@ -846,7 +927,9 @@ where
                     ) => {
                         let prop_id = &prop_info.type_id;
 
-                        let prop_default_value = self.default_impl(state, prop_id, prop_value)?;
+                        let prop_default_value = self.at(state, id, relation.clone(), |state| {
+                            self.default_impl(state, prop_id, prop_value)
+                        })?;
 
                         let prop_default = prop_default_value.map(|value| {
                             let prop_ident = format_ident!("{}", prop_info.rust_name);
@@ -899,8 +982,12 @@ where
                 if prop_info.state == StructPropertyState::Optional {
                     // Note that we ignore errors for Optional flattened fields
                     // intentionally.
-                    let prop_default = if let Some(prop_default) =
-                        self.default_impl(state, prop_id, &new_value).ok().flatten()
+                    let prop_default = if let Some(prop_default) = self
+                        .at(state, id, relation.clone(), |state| {
+                            self.default_impl(state, prop_id, &new_value)
+                        })
+                        .ok()
+                        .flatten()
                     {
                         let some = self.render_option_variant2("Some");
                         quote! {
@@ -918,7 +1005,9 @@ where
                         });
                     }
                 } else {
-                    if let Some(prop_default) = self.default_impl(state, prop_id, &new_value)? {
+                    if let Some(prop_default) = self.at(state, id, relation.clone(), |state| {
+                        self.default_impl(state, prop_id, &new_value)
+                    })? {
                         let prop_ident = format_ident!("{}", prop_info.rust_name);
                         rendered_properties.push(quote! {
                             #prop_ident: #prop_default
@@ -961,6 +1050,7 @@ where
             struct_info.deny_unknown_fields,
             value,
             id,
+            None,
         )?;
 
         Ok(self.generate(|| {
@@ -1071,11 +1161,19 @@ where
                     reason: format!("unit variant {} carries no payload", variant_name),
                 }),
                 VariantDetails::Item(item_id) => {
-                    let item = self.default_impl(state, item_id, var_value)?;
+                    let item = self.at(state, id, variant.relation(), |state| {
+                        self.default_impl(state, item_id, var_value)
+                    })?;
                     Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
                 }
                 VariantDetails::Tuple(items) => {
-                    let elems = self.default_impl_tuple_items(state, items, var_value, id)?;
+                    let elems = self.default_impl_tuple_items(
+                        state,
+                        items,
+                        var_value,
+                        id,
+                        variant.relation(),
+                    )?;
                     Ok(elems
                         .map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
                 }
@@ -1086,6 +1184,7 @@ where
                         enum_info.deny_unknown_fields,
                         var_value,
                         id,
+                        Some(&variant.relation()),
                     )?;
                     Ok(self.generate(|| {
                         (
@@ -1165,7 +1264,9 @@ where
             // alongside the payload's own keys; walk the payload's type
             // against the tag-stripped object exactly as Struct does.
             VariantDetails::Item(item_id) => {
-                let item = self.default_impl(state, item_id, &inner_value)?;
+                let item = self.at(state, id, variant.relation(), |state| {
+                    self.default_impl(state, item_id, &inner_value)
+                })?;
                 Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             VariantDetails::Struct(props) => {
@@ -1175,6 +1276,7 @@ where
                     enum_info.deny_unknown_fields,
                     &inner_value,
                     id,
+                    Some(&variant.relation()),
                 )?;
                 Ok(self.generate(|| {
                     (
@@ -1250,11 +1352,19 @@ where
                 )
             })),
             (VariantDetails::Item(item_id), Some(content_value)) => {
-                let item = self.default_impl(state, item_id, content_value)?;
+                let item = self.at(state, id, variant.relation(), |state| {
+                    self.default_impl(state, item_id, content_value)
+                })?;
                 Ok(item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None)))
             }
             (VariantDetails::Tuple(items), Some(content_value)) => {
-                let elems = self.default_impl_tuple_items(state, items, content_value, id)?;
+                let elems = self.default_impl_tuple_items(
+                    state,
+                    items,
+                    content_value,
+                    id,
+                    variant.relation(),
+                )?;
                 Ok(elems.map(|elems| (quote! { #type_ident::#var_ident( #( #elems ),* ) }, None)))
             }
             (VariantDetails::Struct(props), Some(content_value)) => {
@@ -1264,6 +1374,7 @@ where
                     enum_info.deny_unknown_fields,
                     content_value,
                     id,
+                    Some(&variant.relation()),
                 )?;
                 Ok(self.generate(|| {
                     (
@@ -1318,13 +1429,15 @@ where
                     // value so this opens the door for infinite recursion if
                     // we don't add the guard.
                     VariantDetails::Item(item_id) => self
-                        .expansion_guard_default_impl(state, item_id, value)
+                        .at(state, id, variant.relation(), |state| {
+                            self.expansion_guard_default_impl(state, item_id, value)
+                        })
                         .ok()
                         .map(|item| {
                             item.map(|item| (quote! { #type_ident::#var_ident(#item) }, None))
                         }),
                     VariantDetails::Tuple(items) => self
-                        .default_impl_tuple_items(state, items, value, id)
+                        .default_impl_tuple_items(state, items, value, id, variant.relation())
                         .ok()
                         .map(|elems| {
                             elems.map(|elems| {
@@ -1338,6 +1451,7 @@ where
                             enum_info.deny_unknown_fields,
                             value,
                             id,
+                            Some(&variant.relation()),
                         )
                         .ok()
                         .map(|rendered| {
@@ -1404,6 +1518,7 @@ where
             &tuple_struct.fields,
             &serde_json::Value::Array(fields_arr.to_vec()),
             id,
+            Relation::Element,
         )?;
 
         // Anything past the fixed fields belongs to `rest`.
@@ -1411,7 +1526,9 @@ where
             .rest
             .as_ref()
             .map(|rest_id| {
-                self.default_impl(state, rest_id, &serde_json::Value::Array(rest_arr.to_vec()))
+                self.at(state, id, Relation::Element, |state| {
+                    self.default_impl(state, rest_id, &serde_json::Value::Array(rest_arr.to_vec()))
+                })
             })
             .transpose()?;
 

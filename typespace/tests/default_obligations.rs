@@ -124,3 +124,53 @@ fn generated_property_default_needs_nothing_of_its_type() {
         "no Default impl for Inner"
     );
 }
+
+// A flattened property's fields render inside the OUTER type's
+// `Default` impl, so the outer type owes `Default` of what they hold
+// and the flattened type itself owes nothing. The conflict has to say
+// so by the path it walked: `Foo` reaches `Thing` through `inner`,
+// and `Bar` is only a step along the way.
+//
+// The default walk raises the obligation from inside `Bar`, one hop
+// below where it started, so an obligation carries the whole path it
+// walked rather than the relation where it was raised.
+//
+// `Bar` fails here too, twice over and for its own reasons: it has a
+// required property, which rules `Default` out for it entirely, and
+// its `#[serde(default)]` property charges `Thing` through the seed
+// in `required_resolution` that runs for every type. Neither reaches
+// `Foo`, and neither is what this test reads. They are why the error
+// carries three conflicts rather than one.
+#[test]
+fn a_flattened_obligation_names_the_path_it_walked() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_required_trait(TypespaceTrait::Default),
+        {
+            native ::ext::Thing: Clone + !Default;
+
+            #[default = { "bar": 1 }]
+            struct Foo {
+                #[flatten]
+                inner: Bar,
+            }
+            struct Bar {
+                bar: u32,
+                #[default]
+                thing: ::ext::Thing,
+            }
+        }
+    );
+
+    let Err(error) = builder.finalize(no_cycles) else {
+        panic!("Thing cannot implement Default");
+    };
+
+    assert!(
+        error.to_string().contains(
+            "    required because `Bar` passes the requirement to its field `thing`\n\
+             \x20   required because `Foo` passes the requirement to its field `inner`\n"
+        ),
+        "the path from Foo to Thing runs through `inner` and then \
+         `thing`:\n{error}"
+    );
+}

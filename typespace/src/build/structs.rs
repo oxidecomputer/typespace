@@ -591,16 +591,34 @@ impl<Id> StructProperty<Id> {
             return Ok(BTreeSet::new());
         };
 
-        // A property's own default value renders as a `defaults::`
-        // function reached on a deserialize path, so its natives are
-        // seeded as requirements rather than made conditional on
-        // `Default`. Only the `Deserialize` obligations apply here.
+        // A property's own default value renders as a generated function in
+        // the defaults `mod` that only a deserialize path calls. Any native
+        // types initialized by that default value must implement `Deserialize`.
+        //
+        // The walk raises a second kind of obligation, which this filter must
+        // remove. Wherever it reaches a struct with a Default-state property
+        // that the value leaves out, the generated function writes `prop:
+        // Default::default()`, so that property's type needs Default. The set
+        // returned here names only ids, and everything in it is seeded as a
+        // Deserialize requirement, so letting one through would charge the
+        // wrong trait rather than merely charge one twice.
+        //
+        // Omitting them instead of widening this channel to carry a trait is
+        // safe only because required_resolution separately charges Default to
+        // the type of every Default-state property of every type, which
+        // already covers every pair the walk can find. If that seed ever
+        // narrows to the types that actually deserialize, these have to come
+        // back.
         Ok(typespace
             .check_default(value, &self.type_id)?
             .into_iter()
-            .filter_map(|(required, _, target)| {
-                (required == crate::TypespaceTrait::Deserialize).then_some(target)
-            })
+            .filter_map(
+                |crate::Obligation {
+                     required, target, ..
+                 }| {
+                    (required == crate::TypespaceTrait::Deserialize).then_some(target)
+                },
+            )
             .collect())
     }
 }

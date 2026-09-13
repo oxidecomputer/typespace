@@ -550,7 +550,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::Enum(Enum { variants, .. }) => {
                 let mut out = Vec::new();
                 for variant in variants {
-                    let relation = Relation::Variant(variant.rust_name.clone());
+                    let relation = variant.relation();
                     match &variant.details {
                         VariantDetails::Unit => {}
                         VariantDetails::Item(id) => {

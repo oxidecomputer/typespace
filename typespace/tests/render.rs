@@ -5976,7 +5976,7 @@ fn flattened_default_value_supplies_the_flattened_property() {
 #[test]
 fn a_default_value_that_is_never_rendered_requires_nothing() {
     let builder = typespace_builder!(Settings::minimal(), {
-        native ::ext::Thing: Clone;
+        native ::ext::Thing: Clone + !Deserialize;
 
         #[default = ["x", 7]]
         struct Holder(::ext::Thing, u32);

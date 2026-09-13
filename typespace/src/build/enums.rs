@@ -923,6 +923,16 @@ impl<Id> EnumVariant<Id> {
     pub fn details(&self) -> &VariantDetails<Id> {
         &self.details
     }
+
+    /// How a requirement reaches this variant's payload.
+    ///
+    /// One relation covers the whole payload, whether that is an item,
+    /// a tuple, or a set of struct-shaped fields; see
+    /// [`Relation::Variant`](crate::error::Relation::Variant) for why a
+    /// field of a struct-shaped variant cannot be named here.
+    pub(crate) fn relation(&self) -> crate::error::Relation {
+        crate::error::Relation::Variant(self.rust_name.clone())
+    }
 }
 
 impl<Id: Clone> EnumVariant<Id> {

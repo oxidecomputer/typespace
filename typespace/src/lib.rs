@@ -387,23 +387,42 @@ impl<Id> TypespaceBuilder<Id> {
     }
 }
 
+/// What rendering a value obliges of some other type.
+#[derive(Debug, Clone)]
+pub(crate) struct Obligation<Id> {
+    /// The trait the target must implement. This is not always the
+    /// trait being asked about where the obligation is weighed: a
+    /// value renders inside one type's impl and may oblige a
+    /// different trait of what it constructs.
+    pub(crate) required: TypespaceTrait,
+    /// The hops from the type whose value this is to the target.
+    pub(crate) path: Vec<error::PathStep<Id>>,
+    /// The type that must implement `required`.
+    pub(crate) target: Id,
+}
+
 /// What checking every attached default value learned.
 ///
-/// The two halves differ in kind and must not be merged. `deserialized`
-/// is UNCONDITIONAL: a property's own default value renders as a
-/// `defaults::` function that the owner's deserialize path calls, so
-/// each native the value reaches must implement `Deserialize`, and the
-/// requirement is seeded. `whole_type` is CONDITIONAL: a whole-type
-/// default renders inside a `Default` impl that trait resolution may
-/// never grant, so its obligations are evaluated by `feasibility` when
-/// it answers for `Default`, and never seeded.
+/// Both halves hold requirements that apply only if the owner renders
+/// the value. They differ in which trait makes it render. `whole_type`
+/// is conditional on `Default`, since the value lives inside a
+/// `Default` impl, so `feasibility` evaluates its obligations when it
+/// answers for that trait. `deserialized` is conditional on
+/// `Deserialize`, since a property's own value renders as a
+/// `defaults::` function that only a deserialize path calls.
 #[derive(Debug)]
 pub(crate) struct DefaultChecks<Id> {
     /// Per type carrying a whole-type default, what rendering that
-    /// value obliges: `(trait, relation, target)`.
-    pub(crate) whole_type: BTreeMap<Id, Vec<(TypespaceTrait, error::Relation, Id)>>,
+    /// value obliges, with each obligation's path running from the
+    /// type named by the key to its target.
+    pub(crate) whole_type: BTreeMap<Id, Vec<Obligation<Id>>>,
     /// Each native a property-level default value reaches, against the
     /// type whose value first reached it.
+    // TODO 9/12/2026
+    // required_resolution seeds these unconditionally, so a type that
+    // never deserializes still pays for the natives in its property
+    // defaults. They belong with whole_type's obligations, under a
+    // `Deserialize` antecedent in place of `Default`'s.
     pub(crate) deserialized: BTreeMap<Id, Id>,
 }
 
@@ -637,8 +656,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
             }
 
             // A property's own default value renders as a `defaults::`
-            // function, reached whenever the owner deserializes. Its
-            // natives are seeded as requirements, as before.
+            // function that only a deserialize path calls. Its natives
+            // are seeded as requirements even so.
             let mut natives = BTreeSet::new();
             match typ {
                 Type::Struct(struct_info) => {
@@ -904,9 +923,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // unknown fields has no flattened property.
         self.check_type_structure()?;
 
-        // Check type defaults. The walk also reports which natives the
-        // values reach; those are constructed by deserialization, and
-        // resolve_traits seeds the Deserialize requirement from them.
+        // Check type defaults. The walk also reports what rendering each
+        // value obliges of other types, which splits two ways. A
+        // whole-type value renders inside the Default impl, so
+        // feasibility weighs its obligations when it answers for that
+        // trait. A property-level value's natives are constructed by
+        // deserialization, and resolve_traits seeds Deserialize from
+        // them.
         let default_checks = self.check_type_defaults()?;
 
         let Self {

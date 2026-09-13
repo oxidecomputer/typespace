@@ -76,17 +76,19 @@ impl<Id> Native<Id> {
         self.container.provisions()
     }
 
-    /// Create a native type. `path` is the Rust type path emitted
-    /// verbatim into generated code; `impls` is the set of traits the
-    /// type is known to implement unconditionally, consulted when
-    /// trait requirements propagate to it during finalization;
-    /// `parameters` are the IDs of its generic type parameters, if any.
+    /// Create a native type. `path` is the Rust type path emitted verbatim
+    /// into generated code (it should typically start with `::` to avoid
+    /// conflicts); `impls` is the set of traits the type is known to implement
+    /// unconditionally, consulted when trait requirements propagate to it
+    /// during finalization; `parameters` are the IDs of its generic type
+    /// parameters, if any.
     ///
     /// Every trait outside `impls` is one the type is known not to
-    /// implement. A declarer that cannot answer for a trait says so
-    /// with [`with_unknown`](Self::with_unknown) or
-    /// [`with_rest_unknown`](Self::with_rest_unknown); one that
-    /// implements a trait only when a type parameter does says so with
+    /// implement, which [`with_disposition`](Self::with_disposition) can be
+    /// used to express explicitly. A declarer that cannot answer for a trait
+    /// says so with [`with_unknown`](Self::with_unknown) or
+    /// [`with_rest_unknown`](Self::with_rest_unknown); one that implements a
+    /// trait only when a type parameter does says so with
     /// [`with_disposition`](Self::with_disposition) and
     /// [`TraitProvision::IfParameters`].
     ///

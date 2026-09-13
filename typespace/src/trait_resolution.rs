@@ -197,7 +197,7 @@ use crate::build::{
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
 use crate::settings::{ContainerType, OptionalNullable, Settings, path_text};
-use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
+use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 /// A contained child edge classified against the settings.
 ///
@@ -483,11 +483,20 @@ enum Feasibility<Id> {
     IfAllChildren,
     /// The type requires some (or none! but usually not all) of its children
     /// to implement the trait.
-    IfSomeChildren(Vec<(TypespaceTrait, Relation, Id)>),
+    IfSomeChildren(Vec<Obligation<Id>>),
     /// No derive and no manual impl exists for this kind of type and trait;
     /// the reason is the one a [`TraitConflict`] reports if the trait was
     /// required.
     Impossible(OffenderReason),
+}
+
+/// The path for an obligation that lands on a type's own child,
+/// which is the single step from that type to the child.
+fn one_hop<Id: Clone>(type_id: &Id, relation: Relation) -> Vec<PathStep<Id>> {
+    vec![PathStep {
+        type_id: type_id.clone(),
+        relation,
+    }]
 }
 
 /// The vocabulary word for [`OffenderReason::TypeCannotImplement`]'s
@@ -565,13 +574,16 @@ where
                         // value where it has one, and
                         // Default::default() otherwise. Only the
                         // second of those calls the property type's
-                        // The default walk already worked out what
-                        // rendering this value obliges, including for a
-                        // flattened property, whose fields appear inline
-                        // and which therefore has no wire name to look
-                        // for. Reading its answer keeps one source of
-                        // truth; deriving a second one here is what made
-                        // a flattened property look unsupplied.
+                        // Default.
+                        //
+                        // The walk that checked the value worked out
+                        // which properties those are, including for a
+                        // flattened property, whose fields appear
+                        // inline and which therefore has no wire name
+                        // to look for. Reading its answer keeps one
+                        // source of truth; deriving a second one here
+                        // is what made a flattened property look
+                        // unsupplied.
                         Feasibility::IfSomeChildren(
                             default_checks
                                 .whole_type
@@ -601,12 +613,10 @@ where
                             .properties
                             .iter()
                             .filter(|prop| matches!(prop.state, StructPropertyState::Default))
-                            .map(|prop| {
-                                (
-                                    TypespaceTrait::Default,
-                                    Relation::Field(prop.rust_name.clone()),
-                                    prop.type_id.clone(),
-                                )
+                            .map(|prop| Obligation {
+                                required: TypespaceTrait::Default,
+                                path: one_hop(type_id, Relation::Field(prop.rust_name.clone())),
+                                target: prop.type_id.clone(),
                             })
                             .collect();
                         Feasibility::IfSomeChildren(obligations)
@@ -673,7 +683,11 @@ where
                     Feasibility::IfSomeChildren(
                         ty.contained_children_related()
                             .into_iter()
-                            .map(|ContainedChild { relation, id, .. }| (trait_name, relation, id))
+                            .map(|ContainedChild { relation, id, .. }| Obligation {
+                                required: trait_name,
+                                path: one_hop(type_id, relation),
+                                target: id,
+                            })
                             .collect(),
                     )
                 } else {
@@ -704,8 +718,10 @@ where
                         None => Feasibility::IfSomeChildren(
                             ty.contained_children_related()
                                 .into_iter()
-                                .map(|ContainedChild { relation, id, .. }| {
-                                    (trait_name, relation, id)
+                                .map(|ContainedChild { relation, id, .. }| Obligation {
+                                    required: trait_name,
+                                    path: one_hop(type_id, relation),
+                                    target: id,
                                 })
                                 .collect(),
                         ),
@@ -905,6 +921,13 @@ where
     // Default. Note that this is default without a value **only**. Properties
     // that are Optional or DefaultValue don't require `Default` (nor,
     // obviously, does Required).
+    //
+    // TODO 9/12/2026
+    // Only a Deserialize impl expands #[serde(default)], so this is
+    // conditional on the owner receiving Deserialize, and seeding it
+    // for every type charges one that never deserializes. The
+    // conflict it raises even says the property "deserializes with
+    // #[serde(default)]" of a type with no deserialize path.
     for (type_id, ty) in types.iter() {
         for prop in serde_default_properties(ty) {
             work.push_back(WorkItem::init_default(
@@ -918,6 +941,11 @@ where
     // A native-typed position in a default value is constructed in
     // generated code by deserializing it (default.rs's Type::Native
     // arm), so the value requires Deserialize of the native type.
+    //
+    // TODO 9/12/2026
+    // A property-level value reaches generated code only through the
+    // owner's `defaults::` call, so this too is conditional on the
+    // owner receiving Deserialize rather than a requirement to seed.
     for (native_id, owner_id) in &default_checks.deserialized {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
     }
@@ -1132,12 +1160,19 @@ where
                     ]
                     .contains(&trait_name)
                 );
-                for (required, relation, child_id) in obligations {
+                for obligation in obligations {
+                    // The walk's path starts where the value does,
+                    // which is this type, so it continues the path the
+                    // requirement took to get here.
+                    let mut path = path.clone();
+                    path.extend(obligation.path);
                     work.push_back(WorkItem {
-                        target: child_id,
-                        traits: [required].into_iter().collect::<TypespaceTraitSet>(),
+                        target: obligation.target,
+                        traits: [obligation.required]
+                            .into_iter()
+                            .collect::<TypespaceTraitSet>(),
                         origin: origin.clone(),
-                        path: hop(relation),
+                        path,
                     });
                 }
             }
@@ -1594,12 +1629,14 @@ where
             // which is not always the trait being asked about here: a
             // default value renders inside one impl and may oblige
             // another trait of what it constructs.
-            Feasibility::IfSomeChildren(obligations) => {
-                obligations.iter().all(|(required, _, obligated)| {
-                    has.get(obligated)
+            Feasibility::IfSomeChildren(obligations) => obligations.iter().all(
+                |Obligation {
+                     required, target, ..
+                 }| {
+                    has.get(target)
                         .is_some_and(|traits| traits.contains(required))
-                })
-            }
+                },
+            ),
         }
     } else {
         unnamed_provides(ty, trait_name, settings, &mut child_has)

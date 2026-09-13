@@ -552,9 +552,18 @@ pub struct PathStep<Id> {
 pub enum Relation {
     /// A struct property with the given Rust name.
     Field(String),
-    /// An enum variant with the given Rust name; covers the variant's
-    /// payload whether it is an item, a tuple, or a struct-shaped set
-    /// of fields.
+    /// An enum variant with the given Rust name.
+    ///
+    /// This names the variant's whole payload: an item, every element
+    /// of a tuple, and every field of a struct-shaped variant all hop
+    /// through this one relation. That is a limitation rather than the
+    /// intent. A [`PathStep`] pairs a relation with the id of the type
+    /// it left, and a variant has no id of its own, so a struct-shaped
+    /// variant's field cannot be reached in a second step and there is
+    /// no relation that names a variant and a field together. A path
+    /// through such a variant therefore identifies the field only by
+    /// the type it arrives at, which is ambiguous when two fields of
+    /// the variant share a type.
     Variant(String),
     /// The element type of a vec, set, array, tuple, or option.
     Element,

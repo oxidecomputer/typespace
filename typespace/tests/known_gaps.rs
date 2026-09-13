@@ -194,3 +194,64 @@ fn allow_list_newtype_renders_from_str_and_display() {
         "no Display impl for an allow-list newtype granted the trait"
     );
 }
+
+// Serde expands `#[serde(default)]` inside a `Deserialize` impl and
+// nowhere else, so a property in the `Default` state charges its type
+// only when the owner deserializes. `required_resolution` seeds the
+// charge for every `Default`-state property of every type, with no
+// filter, so a type with no deserialize path pays it anyway.
+//
+// Nothing here requires `Deserialize` or `Default` of `Holder`, so
+// nothing it generates ever calls `Thing::default()`. The conflict
+// that finalize raises even asserts the premise it lacks: "a property
+// of `Holder` deserializes with `#[serde(default)]`".
+//
+// The fix is the one the whole-type case already has: `feasibility`
+// answers for the trait that would render the call, so these belong
+// with the obligations it returns for `Deserialize` rather than in
+// the work queue at startup.
+#[test]
+#[ignore]
+fn serde_default_charges_only_a_type_that_deserializes() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        native ::ext::Thing: Clone + !Default;
+
+        struct Holder {
+            #[default]
+            thing: ::ext::Thing,
+        }
+    });
+
+    builder
+        .finalize(no_cycles)
+        .expect("nothing deserializes Holder, so nothing calls Thing::default()");
+}
+
+// A property's own default value renders as a `defaults::` function,
+// which only a deserialize path calls, so the natives that value
+// reaches owe `Deserialize` only when the owner deserializes.
+// `required_resolution` seeds them for every such property of every
+// type instead.
+//
+// Nothing here requires `Deserialize` of `Holder`, so no `defaults::`
+// function is emitted and `Thing` is never deserialized, yet finalize
+// refuses the graph.
+//
+// See `serde_default_charges_only_a_type_that_deserializes`: the two
+// are the same defect with the same fix.
+#[test]
+#[ignore]
+fn a_property_default_value_charges_only_a_type_that_deserializes() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        native ::ext::Thing: Clone + !Deserialize;
+
+        struct Holder {
+            #[default = "x"]
+            thing: ::ext::Thing,
+        }
+    });
+
+    builder
+        .finalize(no_cycles)
+        .expect("nothing deserializes Holder, so no defaults:: function is emitted");
+}
