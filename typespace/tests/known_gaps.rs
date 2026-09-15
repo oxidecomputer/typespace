@@ -255,3 +255,52 @@ fn a_property_default_value_charges_only_a_type_that_deserializes() {
         .finalize(no_cycles)
         .expect("nothing deserializes Holder, so no defaults:: function is emitted");
 }
+
+// A requirement that reaches a generic native stops there when the
+// native's declaration cannot answer for the trait, so a generated
+// type sitting in its parameter is never asked for an impl it would
+// have supplied.
+//
+// Required resolution reads an `Unknown` provision optimistically:
+// `container_split` puts it in neither the conflict bucket nor the
+// pass-through bucket, so the requirement is satisfied at the native
+// and goes no further. For a parameterless native that is the whole
+// story. For `::ext::Wrapper<Inner>`, where the truth is almost always
+// `Wrapper<T>: Hash where T: Hash`, it means `Inner` never derives
+// `Hash` and the emitted `HashSet<Wrapper<Inner>>` does not compile.
+//
+// Reading an unanswered trait as `IfParameters` rather than `Always`
+// would push the requirement to `Inner`, refuse nothing, and cost
+// nothing where the native has no parameters. Note ahl's estimate,
+// 2026-09-12: a generic native with an unanswered trait is expected
+// "very infrequently".
+#[test]
+#[ignore]
+fn an_unknown_trait_on_a_generic_native_reaches_its_parameters() {
+    let builder = typespace_builder!(
+        Settings::minimal().with_set_type(ContainerType::hash_set()),
+        {
+            native ::ext::Wrapper<Inner>: Clone + ..;
+
+            struct Inner {
+                a: u32,
+            }
+
+            struct Holder {
+                keys: Set<::ext::Wrapper<Inner>>,
+            }
+        }
+    );
+
+    let typespace = builder
+        .finalize(no_cycles)
+        .expect("an unknown provision satisfies a requirement");
+
+    assert!(
+        typespace
+            .get_type(&"Inner".to_string())
+            .has_impl(TypespaceTrait::Hash),
+        "the set demands Hash of its element, so Inner has to derive it \
+         for HashSet<Wrapper<Inner>> to compile"
+    );
+}
