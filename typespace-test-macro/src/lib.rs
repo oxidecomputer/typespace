@@ -191,10 +191,10 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// A bound can also leave a trait explicitly unspecified: `?Tr` marks `Tr` as
 /// unknown, and `..` marks every trait the list does not name unknown. A
 /// required trait that a native leaves unknown passes; a desired one is not
-/// granted. `!Tr` marks `Tr` as known known be **un**-implemented: it carves
+/// granted. `!Tr` marks `Tr` as known to be **un**-implemented: it carves
 /// an exception out of `..`, or (without `..`) makes explicit what is already
-/// tru for an unspecified trait--which is worth expressing when is related to
-/// the absense of a particular trait. `*Tr` marks `Tr` implemented when every
+/// true for an unspecified trait--which is worth expressing when a test turns
+/// on the absence of a particular trait. `*Tr` marks `Tr` implemented when every
 /// one of the native's own type parameters implements it--the bound a generic
 /// native states for a trait its parameter decides, the same way `Vec<T>:
 /// Clone` depends on `T: Clone`.
