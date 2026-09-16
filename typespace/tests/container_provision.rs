@@ -785,7 +785,8 @@ fn hash_map_refuses_a_required_ord() {
             && matches!(conflict.required, TypespaceTrait::Ord)
             && matches!(
                 &conflict.reason,
-                OffenderReason::Primitive { type_name } if type_name == "map"
+                OffenderReason::ContainerMissingImpl { type_name }
+                    if type_name == "::std::collections::HashMap"
             )
     }));
 }

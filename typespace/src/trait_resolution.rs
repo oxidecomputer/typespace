@@ -1150,10 +1150,7 @@ where
         } else {
             // TODO 9/12/2026
             // Can I put the whole block above into here?
-            assert!(
-                !ty.is_named(),
-                "the named-type branch above handles every named type"
-            );
+            assert!(!ty.is_named(), "the branch above handles every named type");
 
             // An unnamed type answers the same three questions
             // whatever it is: which of the required traits it can
@@ -1161,7 +1158,7 @@ where
             // do, and which children those are. A leaf has no children
             // and the loop does nothing.
             let (bad, pass) = unnamed_split(ty, &traits, settings);
-            conflict(bad, unnamed_offender(ty));
+            conflict(bad, unnamed_offender(ty, settings));
             if !pass.is_empty() {
                 for (relation, child_id) in unnamed_children(ty) {
                     work.push_back(WorkItem {
@@ -1314,20 +1311,27 @@ fn unnamed_split<Id>(
 }
 
 /// What a conflict at an unnamed type names as the offender.
-fn unnamed_offender<Id>(ty: &Type<Id>) -> OffenderReason {
-    // TODO 9/12/2026
-    // Should the type name come from the configured container?
+///
+/// A native and a configured container both reach here because a
+/// declaration said they never provide the trait, which the consumer
+/// can restate; both name themselves by the path that declaration
+/// carries. Everything else is a built-in that cannot provide it at
+/// all, and names itself by how it renders.
+fn unnamed_offender<Id>(ty: &Type<Id>, settings: &Settings) -> OffenderReason {
+    let container_path = |container: &ContainerType| OffenderReason::ContainerMissingImpl {
+        type_name: path_text(container.path()),
+    };
     let type_name = match ty {
         Type::Native(native) => {
             return OffenderReason::NativeMissingImpl {
                 type_name: path_text(native.path()),
             };
         }
+        Type::Vec(_) => return container_path(&settings.vec_type),
+        Type::Set(_) => return container_path(&settings.set_type),
+        Type::Map(..) => return container_path(&settings.map_type),
         Type::Option(_) => "Option",
         Type::Box(_) => "Box",
-        Type::Vec(_) => "Vec",
-        Type::Set(_) => "set",
-        Type::Map(..) => "map",
         Type::Array(..) => "array",
         Type::Tuple(_) => "tuple",
         Type::Unit => "()",
@@ -1336,7 +1340,7 @@ fn unnamed_offender<Id>(ty: &Type<Id>) -> OffenderReason {
         Type::Integer(name) | Type::Float(name) => name,
         Type::JsonValue => "serde_json::Value",
         Type::Never => "json_serde::Absent",
-        all_named_types!(_) => unreachable!("named types take the branch above"),
+        all_named_types!(_) => unreachable!("caller passes only unnamed types"),
     };
     OffenderReason::Primitive {
         type_name: type_name.to_string(),
@@ -1468,7 +1472,7 @@ pub(crate) fn unnamed_provides<Id>(
     child_has: &mut dyn FnMut(&Id) -> bool,
 ) -> bool {
     match ty {
-        all_named_types!(_) => unreachable!(),
+        all_named_types!(_) => unreachable!("caller passes only unnamed types"),
 
         // A native answers exactly as a configured container does,
         // through the same table and the same helper: unconditionally,

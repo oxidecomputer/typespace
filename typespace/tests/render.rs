@@ -2574,13 +2574,15 @@ fn test_never_under_container_display_conflict() {
     };
 
     // Vec<T> implements Display for no T, so the conflict is reported
-    // at the container rather than passed down to the Never.
+    // at the container rather than passed down to the Never, and it
+    // names the container by the path it was configured with.
     assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
     let conflict = &conflicts[0];
     assert_eq!(conflict.required, TypespaceTrait::Display);
     assert!(matches!(
         &conflict.reason,
-        OffenderReason::Primitive { type_name } if type_name == "Vec"
+        OffenderReason::ContainerMissingImpl { type_name }
+            if type_name == "::std::vec::Vec"
     ));
 }
 

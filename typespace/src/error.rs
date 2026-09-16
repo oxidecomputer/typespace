@@ -439,6 +439,12 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                 "native type `{type_name}` (id `{offender}`) does not \
                  declare the required trait `{required}`"
             )?,
+            OffenderReason::ContainerMissingImpl { type_name } => write!(
+                f,
+                "the configured container `{type_name}` (id \
+                 `{offender}`) does not provide the required trait \
+                 `{required}`"
+            )?,
             OffenderReason::TypeCannotImplement { kind } => write!(
                 f,
                 "the generated {kind} with id `{offender}` cannot \
@@ -616,6 +622,18 @@ pub enum OffenderReason {
     /// cannot answer for it.
     NativeMissingImpl {
         /// The Rust type path of the native type.
+        type_name: String,
+    },
+    /// The configured vec, set, or map type declares that it never
+    /// provides the trait. Fixable the same way
+    /// [`OffenderReason::NativeMissingImpl`] is: state the provision
+    /// differently with
+    /// [`with_provisions`](crate::settings::ContainerType::with_provisions),
+    /// or configure a container that provides the trait.
+    ContainerMissingImpl {
+        /// The Rust type path the container was configured with,
+        /// which is the name the consumer named it by rather than the
+        /// prelude shortcut generated code may render.
         type_name: String,
     },
     /// A generated type that cannot implement the trait in any form:
