@@ -118,7 +118,7 @@
 //!
 //! `Ord` requires both `PartialOrd` and `Eq`. Both `Eq` and `PartialOrd`
 //! require `PartialEq` (and transitively, `Ord` requires `PartialEq`). Each
-//! requirement is expanded through [`close_supertraits`] during traversal
+//! requirement is expanded through [`expand_supertraits`] during traversal
 //! initialization. Poisoning is expanded through [`strip_dependents`] in
 //! reverse e.g. removing `PartialEq` also removes `Eq`, `PartialOrd`, and
 //! `Ord`.
@@ -127,7 +127,7 @@
 //! similarity? Could they (do they) share a source of truth?
 //!
 //! Desired traits carry one extra rule: a supertrait granted by
-//! [`close_supertraits`] is not wanted for its own sake, so phase 2
+//! [`expand_supertraits`] is not wanted for its own sake, so phase 2
 //! grants each desired trait together with its supertraits or grants none of
 //! them. If `Eq` was desired, but not satisfiable, we don't leave behind, say,
 //! `PartialEq` if it is not also specifically desired.
@@ -408,7 +408,7 @@ where
 /// settings-required set, container obligations, and the serde-default and
 /// default-value seeds), so a requirement enters the queue with the
 /// supertraits it needs.
-fn close_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
+fn expand_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     if traits.contains(&TypespaceTrait::Ord) {
         traits.add(TypespaceTrait::PartialOrd);
         traits.add(TypespaceTrait::Eq);
@@ -806,7 +806,7 @@ where
         ) -> Self {
             Self {
                 target: child_id.clone(),
-                traits: close_supertraits(traits.clone()),
+                traits: expand_supertraits(traits.clone()),
                 origin: RequirementOrigin::ContainerParameter {
                     container: parent_id.clone(),
                     relation,
@@ -817,7 +817,7 @@ where
 
         fn init_default(parent_id: &Id, relation: Relation, child_id: &Id) -> Self {
             let default_required =
-                close_supertraits([TypespaceTrait::Default].into_iter().collect());
+                expand_supertraits([TypespaceTrait::Default].into_iter().collect());
             Self {
                 target: child_id.clone(),
                 traits: default_required,
@@ -831,7 +831,7 @@ where
 
         fn init_deserialize(parent_id: &Id, child_id: &Id) -> Self {
             let deserialize_required =
-                close_supertraits([TypespaceTrait::Deserialize].into_iter().collect());
+                expand_supertraits([TypespaceTrait::Deserialize].into_iter().collect());
             Self {
                 target: child_id.clone(),
                 traits: deserialize_required,
@@ -964,7 +964,7 @@ where
     // Traits required via Settings::with_required_trait seed the trait
     // set of every named type.
     if !settings.required_traits.is_empty() {
-        let required = close_supertraits(settings.required_traits.clone());
+        let required = expand_supertraits(settings.required_traits.clone());
         for (type_id, ty) in types.iter() {
             if ty.is_named() {
                 work.push_back(WorkItem::init_global(type_id, required.clone()));
@@ -1181,7 +1181,7 @@ where
 
 /// `trait_name` and every trait that cannot survive without it.
 ///
-/// The supertrait closure run backwards: `Ord` needs `PartialOrd`,
+/// The supertrait expansion run backward: `Ord` needs `PartialOrd`,
 /// `Eq`, and `PartialEq`, and `Eq` and `PartialOrd` each need
 /// `PartialEq`; `Copy` needs `Clone`. A type that loses one of those
 /// loses everything resting on it.
@@ -1243,11 +1243,11 @@ fn container_split(
     traits: &TypespaceTraitSet,
 ) -> (Vec<TypespaceTrait>, TypespaceTraitSet) {
     let (bad, pass) = provision_split(traits, |tt| declaration.provision(tt));
-    // Re-close the forwarded set: dropping a trait the container
+    // Re-expand the forwarded set: dropping a trait the container
     // provides unconditionally can leave a subtrait behind without its
     // supertraits, and a parameter that absorbed `Eq` with no
     // `PartialEq` derives code that does not compile.
-    (bad, close_supertraits(pass))
+    (bad, expand_supertraits(pass))
 }
 
 /// Split `traits` by `provision`: a trait answered
@@ -1259,8 +1259,8 @@ fn container_split(
 /// [`provision_applies`] is its desired-phase counterpart, answering
 /// one trait at a time instead of splitting a set.
 ///
-/// The returned pass-through set is not re-closed under
-/// [`close_supertraits`]; `container_split`, in [`required_resolution`],
+/// The returned pass-through set is not re-expanded under
+/// [`expand_supertraits`]; `container_split`, in [`required_resolution`],
 /// does that itself where a configured container's own obligations
 /// require it.
 fn provision_split(
@@ -1285,9 +1285,9 @@ fn provision_split(
 ///
 /// A native and the configurable vec, set, and map types answer from
 /// their own declaration, so they go through [`container_split`],
-/// which re-closes the pass-through set under [`close_supertraits`].
+/// which re-expands the pass-through set under [`expand_supertraits`].
 /// Everything else answers from the [`unnamed_provision`] table, which
-/// needs no re-closing: the only trait any of those provides
+/// needs no re-expansion: the only trait any of those provides
 /// unconditionally is an `Option`'s `Default`, and `Default` has no
 /// supertraits to leave stranded.
 fn unnamed_split<Id>(
@@ -1685,7 +1685,7 @@ fn desired_resolution<Id>(
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
 {
     // Expand to include transitive dependencies of each desired trait.
-    let desired = close_supertraits(settings.desired_traits.clone());
+    let desired = expand_supertraits(settings.desired_traits.clone());
     if desired.is_empty() {
         return;
     }
@@ -1763,7 +1763,7 @@ fn desired_resolution<Id>(
     let grant_groups = settings
         .desired_traits
         .iter()
-        .map(|trait_name| close_supertraits([*trait_name].into_iter().collect()))
+        .map(|trait_name| expand_supertraits([*trait_name].into_iter().collect()))
         .collect::<Vec<_>>();
 
     for (type_id, survivors) in state.has {
@@ -2287,7 +2287,7 @@ mod tests {
     /// to every comparison trait, or the emitted derive would not
     /// compile.
     #[test]
-    fn supertrait_closure_expands_ord() {
+    fn required_ord_expands_to_supertraits() {
         let builder = typespace_builder!(
             Settings::minimal().with_required_trait(TypespaceTrait::Ord),
             {
@@ -2410,11 +2410,11 @@ mod tests {
         );
     }
 
-    /// Desiring `Ord` alone desires every comparison trait: the
-    /// supertrait closure runs over the desired demand set as well, or
-    /// a granted `Ord` would render a derive that does not compile.
+    /// Desiring `Ord` alone desires every comparison trait: supertrait
+    /// expansion runs over the desired demand set as well, or a
+    /// granted `Ord` would render a derive that does not compile.
     #[test]
-    fn desired_request_closure_expands_ord() {
+    fn desired_ord_expands_to_supertraits() {
         let builder = typespace_builder!(minimal_with_desired([TypespaceTrait::Ord]), {
             struct S {
                 name: String,
@@ -2644,7 +2644,7 @@ mod tests {
         );
     }
 
-    /// Stripping runs the supertrait closure in reverse: losing
+    /// Stripping runs the supertrait expansion in reverse: losing
     /// `PartialEq` also loses `Eq`, `PartialOrd`, and `Ord`, whatever
     /// the constituents claim about those traits on their own.
     ///
@@ -2652,9 +2652,9 @@ mod tests {
     /// `Ord`, and `Hash` with neither `PartialEq` nor `PartialOrd`--so
     /// that a per-trait answer and a closed answer differ: taken one
     /// trait at a time the struct would keep `Eq` and `Ord`, and only
-    /// the reverse closure removes them.
+    /// the reverse expansion removes them.
     #[test]
-    fn strip_closure_removes_supertrait_dependents() {
+    fn stripping_removes_supertrait_dependents() {
         let mut builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
@@ -3131,7 +3131,7 @@ mod tests {
 
     /// `!Tr` carves an exception out of `..`: the trait it names is
     /// known missing and conflicts when required, while the rest of the
-    /// requirement's supertrait closure stays unknown and passes.
+    /// requirement's supertrait expansion stays unknown and passes.
     #[test]
     fn required_trait_conflicts_on_native_excepted_from_rest_unknown() {
         let builder = typespace_builder!(
@@ -4466,9 +4466,9 @@ mod tests {
         }
     }
 
-    /// A trait dropped by the strip closure is logged like any other.
+    /// A trait dropped by [`strip_dependents`] is logged like any other.
     #[test]
-    fn desired_skip_log_covers_strip_closure_removals() {
+    fn desired_skip_log_covers_strip_dependents_removals() {
         capture_skip_log();
 
         let mut builder = typespace_builder!(
@@ -4483,7 +4483,8 @@ mod tests {
         // The macro has no syntax for native types, so this one is
         // inserted by hand under the id the field references. It
         // declares Eq and Ord without the partial pair on purpose: the
-        // holder's Eq and Ord die only by the strip closure.
+        // holder's Eq and Ord die only because stripping removes their
+        // dependents.
         builder
             .insert(
                 "StripWeird".to_string(),
