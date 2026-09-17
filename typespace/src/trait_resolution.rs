@@ -1184,7 +1184,7 @@ where
 /// The supertrait expansion run backward: `Ord` needs `PartialOrd`,
 /// `Eq`, and `PartialEq`, and `Eq` and `PartialOrd` each need
 /// `PartialEq`; `Copy` needs `Clone`. A type that loses one of those
-/// loses everything resting on it.
+/// loses everything depending on it.
 fn strip_dependents(trait_name: TypespaceTrait) -> impl Iterator<Item = TypespaceTrait> {
     let dependents: &'static [TypespaceTrait] = match trait_name {
         TypespaceTrait::PartialEq => &[
@@ -4471,30 +4471,20 @@ mod tests {
     fn desired_skip_log_covers_strip_dependents_removals() {
         capture_skip_log();
 
-        let mut builder = typespace_builder!(
+        // StripWeird declares Eq and Ord and nothing else, which the
+        // absent traits make a hard "never". The holder therefore
+        // loses PartialEq and PartialOrd to ordinary poisoning, and
+        // loses Eq and Ord only as dependents of those two.
+        let builder = typespace_builder!(
             minimal_with_desired([TypespaceTrait::Eq, TypespaceTrait::Ord]),
             {
+                native weird::StripWeird: Eq + Ord;
+
                 struct StripHolder {
-                    odd: StripWeird,
+                    odd: weird::StripWeird,
                 }
             }
         );
-
-        // The macro has no syntax for native types, so this one is
-        // inserted by hand under the id the field references. It
-        // declares Eq and Ord without the partial pair on purpose: the
-        // holder's Eq and Ord die only because stripping removes their
-        // dependents.
-        builder
-            .insert(
-                "StripWeird".to_string(),
-                Type::Native(Native::new(
-                    "weird::StripWeird",
-                    trait_set([TypespaceTrait::Eq, TypespaceTrait::Ord]),
-                    Vec::new(),
-                )),
-            )
-            .unwrap();
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
@@ -4508,7 +4498,7 @@ mod tests {
             TypespaceTrait::Eq,
             TypespaceTrait::Ord,
         ] {
-            let line = skip_line(trait_name, "StripHolder", "StripWeird");
+            let line = skip_line(trait_name, "StripHolder", "weird::StripWeird");
             assert!(skip_logged(&line), "missing skip line: {line}");
         }
     }
