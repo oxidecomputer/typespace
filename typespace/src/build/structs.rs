@@ -1432,6 +1432,17 @@ impl<Id> NewtypeStruct<Id> {
             } if patterns.is_empty() => Some("string"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
             NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
+            // The two schemas every value satisfies. Whether a longer
+            // schema does too is not a question a syntactic check can
+            // answer, so these two are where the check stops.
+            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Bool(true))) => {
+                Some("JSON schema")
+            }
+            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Object(keywords)))
+                if keywords.is_empty() =>
+            {
+                Some("JSON schema")
+            }
             _ => None,
         };
 
@@ -1548,7 +1559,11 @@ pub enum NewtypeConstraints {
     /// Fallback constraint
     ///
     /// Verify data against the given JSON schema (using the crate
-    /// `jsonschema` for runtime validation).
+    /// `jsonschema` for runtime validation). The value is a JSON
+    /// schema, so a JSON object or a boolean; validation serializes the
+    /// inner value and checks the result against it, which means the
+    /// inner type must implement `serde::Serialize`. Trait resolution
+    /// requires that of it.
     JsonSchema(JsonValue),
 }
 
@@ -1982,7 +1997,158 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
             NewtypeConstraints::Array { .. } => todo!(),
-            NewtypeConstraints::JsonSchema(_json_value) => todo!(),
+
+            // The fallback constraint. The source schema said more than
+            // the other constraints can state, so the consumer rendered
+            // as much of it as it could and the rest is checked at run
+            // time: serialize the inner value to a `serde_json::Value`
+            // and validate that against the stored schema. The inner
+            // type is therefore anything at all, and the one thing this
+            // arm demands of it is `Serialize`, which trait resolution
+            // seeds for it (`json_schema_validated_inner` in
+            // `trait_resolution.rs`).
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                typespace.add_error_mod(out);
+
+                let schema_string = serde_json::to_string(schema).unwrap();
+
+                // A newtype's Display is the inner value's Display, as
+                // it is for an unconstrained newtype: a value that
+                // exists has already been validated.
+                let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
+                // Parsing produces an inner value, which the
+                // constraint then checks, so both failures land in
+                // `ConversionError`. The inner type's own parse error
+                // carries no `Display` bound, so its message cannot be
+                // forwarded.
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str)
+                                -> ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                let value = <#inner_ident as ::std::str::FromStr>::from_str(value)
+                                    .map_err(|_| "could not be parsed as the inner type")?;
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+                    }
+                });
+
+                // Deserializing produces an inner value, which the
+                // `TryFrom` impl below then checks, so the schema is
+                // consulted in exactly one place and a value built in
+                // Rust is checked the same way as one off the wire.
+                // Deserializing a `serde_json::Value` instead would
+                // save the trip back out through `to_value`, but it
+                // would restrict the impl to self-describing formats
+                // and write the check twice.
+                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    quote! {
+                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                            fn deserialize<D>(
+                                deserializer: D,
+                            ) -> ::std::result::Result<Self, D::Error>
+                            where
+                                D: ::serde::Deserializer<'de>,
+                            {
+                                Self::try_from(
+                                    <#inner_ident>::deserialize(deserializer)?,
+                                )
+                                .map_err(|e| {
+                                    <D::Error as ::serde::de::Error>::custom(
+                                        e.to_string(),
+                                    )
+                                })
+                            }
+                        }
+                    }
+                });
+
+                // This is the one type whose exact schema is in hand,
+                // so it reports that schema rather than the inner
+                // type's. The keywords go in verbatim, through
+                // `extensions`: a stored schema may be written against
+                // any draft, and schemars 0.8 models draft-07, so
+                // anything read into its typed keyword fields would
+                // have to be translated back out again.
+                let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let schema_value = match schema {
+                        serde_json::Value::Bool(value) => quote! {
+                            ::schemars::schema::Schema::Bool(#value)
+                        },
+                        _ => quote! {
+                            ::schemars::schema::Schema::Object(
+                                ::schemars::schema::SchemaObject {
+                                    extensions: ::serde_json::from_str::<
+                                        ::serde_json::Map<
+                                            ::std::string::String,
+                                            ::serde_json::Value,
+                                        >,
+                                    >(#schema_string)
+                                        .unwrap()
+                                        .into_iter()
+                                        .collect(),
+                                    ..::std::default::Default::default()
+                                },
+                            )
+                        },
+                    };
+                    quote! {
+                        impl ::schemars::JsonSchema for #name_ident {
+                            fn schema_name() -> ::std::string::String {
+                                #name.to_string()
+                            }
+
+                            fn json_schema(
+                                _: &mut ::schemars::r#gen::SchemaGenerator
+                            ) -> ::schemars::schema::Schema {
+                                #schema_value
+                            }
+                        }
+                    }
+                });
+
+                quote! {
+                    #display_impl
+                    #from_str_impl
+
+                    // This is effectively the constructor for this type.
+                    impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
+                        type Error = self::error::ConversionError;
+
+                        fn try_from(
+                            value: #inner_ident
+                        ) -> ::std::result::Result<Self, self::error::ConversionError>
+                        {
+                            static VALIDATOR: ::std::sync::LazyLock<::jsonschema::Validator> =
+                                ::std::sync::LazyLock::new(|| {
+                                    let schema = ::serde_json::from_str(#schema_string)
+                                        .unwrap();
+                                    ::jsonschema::Validator::new(&schema).unwrap()
+                                });
+                            let json = ::serde_json::to_value(&value)
+                                .map_err(|e| e.to_string())?;
+                            VALIDATOR.validate(&json).map_err(|e| e.to_string())?;
+                            Ok(Self(value))
+                        }
+                    }
+
+                    #deserialize_impl
+                    #json_schema_impl
+                }
+            }
         }
     }
 }

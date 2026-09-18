@@ -192,7 +192,9 @@
 //! - [jsonschema](https://crates.io/crates/jsonschema): required if
 //!   the output contains a [`build::NewtypeStruct`] whose
 //!   [`build::NewtypeConstraints::JsonSchema`] carries a schema. The
-//!   conversion validates the value against that schema.
+//!   conversion serializes the inner value and validates the result
+//!   against that schema, through a `::jsonschema::Validator` built
+//!   once in a `LazyLock`.
 //! - [json-serde](https://crates.io/crates/json-serde): required if
 //!   the output contains any of:
 //!   - a property with [`build::StructPropertyState::Optional`] whose

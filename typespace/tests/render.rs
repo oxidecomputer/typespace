@@ -5116,6 +5116,140 @@ fn test_render_constrained_newtype_allow_list() {
     }
 }
 
+// The fallback constraint. `Coords` renders the part of the source
+// schema typespace can state, and the schema itself carries the rest
+// (`multipleOf`), checked at run time against the serialized value. Both
+// entry points run the check: the `TryFrom` constructor and the
+// hand-written `Deserialize`.
+//
+// Struct builders are off so that `Coords` owns no inherent impl: the
+// newtype's `impl From<EvenCoords> for Coords` is attributed to `Coords`
+// by the classifier in tests/item_order.rs, which reads ownership from
+// the locally declared side and has no way to tell a newtype's
+// out-of-Self conversion from an into-Self one when both sides are
+// declared in the same file.
+#[test]
+fn test_render_constrained_newtype_json_schema() {
+    let schema = serde_json::json! {{
+        "type": "object",
+        "properties": {
+            "x": { "type": "integer", "multipleOf": 2 },
+            "y": { "type": "integer" },
+        },
+        "required": ["x", "y"],
+    }};
+
+    let ts = {
+        let mut builder = typespace_builder!(Settings::maximal().with_struct_builder(false), {
+            struct Coords {
+                x: i64,
+                y: i64,
+            }
+        });
+
+        builder
+            .insert(
+                "EvenCoords".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Coords".to_string())
+                        .name("EvenCoords")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            schema.clone(),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_json_schema.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let even = EvenCoords::try_from(Coords { x: 2, y: 5 }).unwrap();
+        assert_eq!(even.x, 2);
+        EvenCoords::try_from(Coords { x: 3, y: 5 }).expect_err("x is odd");
+
+        // The hand-written Deserialize runs the same check.
+        assert_eq!(
+            serde_json::from_str::<EvenCoords>(r#"{"x":2,"y":5}"#).unwrap(),
+            even
+        );
+        serde_json::from_str::<EvenCoords>(r#"{"x":3,"y":5}"#).expect_err("x is odd");
+
+        // The JsonSchema impl reports the schema the value is checked
+        // against, keyword for keyword, rather than the schema of the
+        // type it wraps.
+        let mut generator = schemars::r#gen::SchemaGenerator::default();
+        assert_eq!(
+            serde_json::to_value(<EvenCoords as schemars::JsonSchema>::json_schema(
+                &mut generator
+            ))
+            .unwrap(),
+            schema
+        );
+    }
+}
+
+// The same constraint over a `String`, which can carry Display and
+// FromStr where the struct above cannot. The schema is an `anyOf` of two
+// string constraints, which `NewtypeConstraints::String` has no way to
+// state: either the value starts with "a" or it is at most three
+// characters long.
+#[test]
+fn test_render_constrained_newtype_json_schema_string() {
+    let schema = serde_json::json! {{
+        "anyOf": [
+            { "type": "string", "pattern": "^a" },
+            { "type": "string", "maxLength": 3 },
+        ],
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "Terse".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("Terse")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include(
+        "tests/output/test_render_constrained_newtype_json_schema_string.rs",
+        out
+    )]
+    fn inner() {
+        use import::*;
+
+        // FromStr parses the inner type and then checks the result.
+        let terse = "wx".parse::<Terse>().unwrap();
+        assert_eq!(terse.to_string(), "wx");
+        "alphabet"
+            .parse::<Terse>()
+            .expect("an a-word of any length");
+        "wxyz"
+            .parse::<Terse>()
+            .expect_err("neither an a-word nor terse");
+
+        assert_eq!(serde_json::from_str::<Terse>("\"wx\"").unwrap(), terse);
+        serde_json::from_str::<Terse>("\"wxyz\"").expect_err("neither an a-word nor terse");
+    }
+}
+
+// `feasibility` in `trait_resolution.rs` answers `ManuallyRealizable`
+
 // `feasibility` in `trait_resolution.rs` answers `IfSomeChildren`
 // for Display and FromStr on two kinds of type, and the renderer writes
 // the impls that answer stands for:
@@ -5742,6 +5876,33 @@ fn allow_list_value_on_a_native_requires_deserialize() {
         &conflict.reason,
         OffenderReason::NativeMissingImpl { type_name } if type_name == "chrono::NaiveDate"
     ));
+}
+
+// A JSON schema every value satisfies constrains nothing. Only the two
+// schemas that say so outright are caught: whether a longer schema
+// admits everything is not a question a check at this level can answer.
+#[test]
+fn vacuous_json_schema_constraints_are_rejected() {
+    for schema in [serde_json::json!(true), serde_json::json!({})] {
+        let result = NewtypeStruct::new("string".to_string())
+            .name("Vacuous")
+            .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                schema.clone(),
+            )))
+            .build();
+
+        let Err(err) = result else {
+            panic!("the schema `{schema}` admits every value and is rejected");
+        };
+        assert!(
+            matches!(
+                &err,
+                Error::VacuousConstraints { name, kind }
+                    if name == "Vacuous" && *kind == "JSON schema"
+            ),
+            "expected VacuousConstraints, got: {err}"
+        );
+    }
 }
 
 #[test]

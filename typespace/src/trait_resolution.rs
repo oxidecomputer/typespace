@@ -41,6 +41,9 @@
 //!   call to `Default::default()` so their types must implement `Default`.
 //! - native types inside an explicit default value; generated code constructs
 //!   these native types by deserializing, so the value demands `Deserialize`.
+//! - the inner type of a newtype whose constraint is a JSON schema; the
+//!   check serializes the inner value and validates the result, so that type
+//!   demands `Serialize`.
 //!
 //! We descend the type graph with a work queue rather than recursion. Each
 //! item in the work queue represents a required work set, a target type; it
@@ -782,6 +785,22 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
     }
 }
 
+/// The inner type of `ty`, if `ty` is a newtype constrained by a JSON
+/// schema.
+///
+/// Its `TryFrom` impl checks a value by serializing it and validating
+/// the result against the schema, so the inner type has to implement
+/// `Serialize` whatever the consumer asked for.
+fn json_schema_validated_inner<Id>(ty: &Type<Id>) -> Option<&Id> {
+    match ty {
+        Type::NewtypeStruct(newtype) => match &newtype.constraints {
+            NewtypeConstraints::JsonSchema(_) => Some(&newtype.inner),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn required_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
@@ -838,6 +857,17 @@ where
                 target: child_id.clone(),
                 traits: deserialize_required,
                 origin: RequirementOrigin::DefaultValue(parent_id.clone()),
+                path: Default::default(),
+            }
+        }
+
+        fn init_schema_check(parent_id: &Id, child_id: &Id) -> Self {
+            let serialize_required =
+                expand_supertraits([TypespaceTrait::Serialize].into_iter().collect());
+            Self {
+                target: child_id.clone(),
+                traits: serialize_required,
+                origin: RequirementOrigin::SchemaCheck(parent_id.clone()),
                 path: Default::default(),
             }
         }
@@ -949,6 +979,18 @@ where
     // arm), so the value requires Deserialize of the native type.
     for (native_id, owner_id) in &default_checks.deserialized {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
+    }
+
+    // A newtype constrained by a JSON schema checks a value by
+    // serializing it and validating the result against that schema, so
+    // the inner type must implement Serialize. The check is written
+    // into the TryFrom impl, which every such newtype gets whatever its
+    // trait set holds, so the requirement stands even where the
+    // consumer asked for no serde traits at all.
+    for (type_id, ty) in types.iter() {
+        if let Some(inner_id) = json_schema_validated_inner(ty) {
+            work.push_back(WorkItem::init_schema_check(type_id, inner_id));
+        }
     }
 
     // Traits required via Settings::with_required_trait seed the trait
@@ -5038,6 +5080,82 @@ mod tests {
         assert!(!is_irrefutable(&ts, "Patterned"));
         assert!(!is_irrefutable(&ts, "Allowed"));
         assert!(!is_irrefutable(&ts, "Denied"));
+    }
+
+    /// The JSON schema constraint checks a value by serializing it, so
+    /// resolution requires `Serialize` of the inner type even where
+    /// the consumer asked for no traits at all. The requirement lands on
+    /// the inner type alone: the newtype itself keeps the empty set
+    /// minimal settings give it.
+    #[test]
+    fn json_schema_constraint_seeds_serialize_on_the_inner_type() {
+        let mut builder = typespace_builder!(Settings::minimal(), {
+            struct Inner {
+                a: String,
+            }
+        });
+        builder
+            .insert(
+                "Checked".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Inner".to_string())
+                        .name("Checked")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            serde_json::json!({ "type": "object" }),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&ts, "Inner"),
+            [TypespaceTrait::Serialize].into_iter().collect(),
+        );
+        assert_eq!(built_traits(&ts, "Checked"), TypespaceTraitSet::empty());
+    }
+
+    /// The seeded requirement conflicts like any other: a native that
+    /// declares no `Serialize` cannot be wrapped by a newtype whose
+    /// constraint is a JSON schema, and the conflict names the newtype
+    /// as the origin.
+    #[test]
+    fn json_schema_constraint_conflicts_without_serialize() {
+        let mut builder = TypespaceBuilder::<String>::new(Settings::minimal());
+        builder
+            .insert(
+                "Opaque".to_string(),
+                Type::Native(Native::new(
+                    "opaque::Opaque",
+                    TypespaceTraitSet::empty(),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Checked".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Opaque".to_string())
+                        .name("Checked")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            serde_json::json!({ "type": "string" }),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+            panic!("expected the seeded Serialize requirement to conflict");
+        };
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Serialize);
+        assert_eq!(conflicts[0].offender, "Opaque");
+        assert!(matches!(
+            &conflicts[0].origin,
+            RequirementOrigin::SchemaCheck(id) if id == "Checked"
+        ));
     }
 
     /// Nothing outside `Type::String`, an unconstrained newtype, and a
