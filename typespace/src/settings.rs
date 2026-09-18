@@ -420,6 +420,57 @@ impl Settings {
 /// one expression with [`ContainerType::new`] and
 /// [`with_provisions`](Self::with_provisions), rather than building it
 /// up one [`with_provision`](Self::with_provision) call at a time.
+///
+/// # Deserializing a declaration
+///
+/// A `ContainerType` deserializes from a map, so a consumer that reads
+/// its settings from a file states container declarations there rather
+/// than in code. Keys are kebab-case and unknown keys are rejected.
+///
+/// A declaration takes one of two forms. It names the preset it
+/// behaves as with `like`, and every other key adjusts that preset; or
+/// it states its own `path` and `obligations`, and claims only what
+/// rendering assumes. Naming neither is an error, as is stating a
+/// `path` without `obligations`.
+///
+/// | key | | |
+/// |---|---|---|
+/// | `like` | the preset to start from | `btree-map`, `hash-map`, `vec`, `option`, `btree-set`, `hash-set` |
+/// | `path` | the path the container renders as | any Rust type path |
+/// | `obligations` | what it demands of each parameter, in order | a list of trait lists |
+/// | `provides` | per-trait answers, replacing the preset's | a map of trait to answer |
+///
+/// Trait names are kebab-case: `from-str`, `partial-eq`, `json-schema`
+/// and so on. A `provides` answer is `always`, `never`, `if-parameters`,
+/// or `unknown`; see [`crate::TraitProvision`]. Any
+/// trait `provides` leaves out keeps whatever the preset said, or, for
+/// the `path` form, whatever rendering assumes.
+///
+/// An ordered map at another path, adjusting the preset:
+///
+/// ```
+/// # use typespace::settings::ContainerType;
+/// let declared = serde_json::from_str::<ContainerType>(
+///     r#"{
+///         "like": "btree-map",
+///         "path": "::im::OrdMap",
+///         "obligations": [["ord", "clone"], ["clone"]],
+///         "provides": { "hash": "never" }
+///     }"#,
+/// )
+/// .unwrap();
+/// ```
+///
+/// A container with no matching preset, stating its own path and what
+/// it demands of its one parameter:
+///
+/// ```
+/// # use typespace::settings::ContainerType;
+/// let declared = serde_json::from_str::<ContainerType>(
+///     r#"{ "path": "::im::Vector", "obligations": [["clone"]] }"#,
+/// )
+/// .unwrap();
+/// ```
 #[derive(Clone, Deserialize)]
 #[serde(try_from = "ContainerTypeRepr")]
 pub struct ContainerType {
