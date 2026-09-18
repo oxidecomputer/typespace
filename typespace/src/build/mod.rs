@@ -3,93 +3,30 @@
 //! Construction-side vocabulary for assembling a typespace.
 //!
 //! These are the types a consumer assembles and inserts into a
-//! [`TypespaceBuilder`](crate::TypespaceBuilder).
-//! [`Type`] is the sum of every kind of type a typespace can hold; the
-//! shape types ([`Struct`], [`Enum`], [`NewtypeStruct`], and friends)
-//! describe named types in detail. Types refer to one another by ID,
-//! never by containment. The finalized, queryable counterparts of these
-//! types live in [`view`](crate::view); names are mirrored across the
-//! two modules (for example [`EnumVariant`] here and
-//! [`view::EnumVariant`](crate::view::EnumVariant) are the construction
-//! and finalized-view forms of the same concept).
+//! [`TypespaceBuilder`](crate::TypespaceBuilder). [`Type`] is the sum of every
+//! kind of type a typespace can hold; the shape types ([`Struct`], [`Enum`],
+//! [`NewtypeStruct`], and friends) describe named types in detail. Types refer
+//! to one another by ID. The finalized, queryable counterparts of these types
+//! live in [`view`](crate::view); IDs and names are mirrored across the two
+//! modules (for example [`EnumVariant`] here and
+//! [`view::EnumVariant`](crate::view::EnumVariant) are the construction and
+//! finalized-view forms of the same concept).
 //!
-//! # Canonical item order
+//! - [`Struct`] represents a normal `struct` with named fields.
+//! - [`Enum`] represents a normal `enum` with variants of different kinds.
+//! - [`UnitStruct`] has a single, customizable JSON value (which is why its
+//!   use pulls in `serde_json` as a dependency).
+//! - [`TupleStruct`] represents a `struct` with enumerated fields. Unlike
+//!   vanilla `serde` it may have an optional remainder field that is flattened
+//!   into the serialized sequence.
+//! - [`NewtypeStruct`] represents a `struct` wrapper around a type; that
+//!   wrapper may have optional constraints on the held type.
+//! - [`TypeAlias`] is rendered as `type X = Y`.
 //!
-//! Each named type renders as a group of items under one type name.
-//! Within that group, every `render` function places its pieces in
-//! this order (a one-line "Canonical item order: see build::mod"
-//! comment at each render site points back here instead of repeating
-//! the list):
+//! # Rendering as Rust code
 //!
-//! 1. The declaration: doc comment, then custom (extra) attributes,
-//!    then the derive attribute, then the serde attribute, then the
-//!    `pub struct` / `pub enum` / `pub type` itself.
-//! 2. `Deref`, then `From<Self> for Inner`, then `From<Inner> for
-//!    Self` (newtype only).
-//! 3. `Display`, then `FromStr`, then `TryFrom<&str>`, then
-//!    `TryFrom<String>`.
-//! 4. `TryFrom<Inner> for Self`, the constrained-newtype constructor
-//!    (allow-list and deny-list newtypes; a string-constrained
-//!    newtype's constructor is its `TryFrom<&str>` from bucket 3, so
-//!    this bucket is empty for it).
-//! 5. `Default`.
-//! 6. Enum per-variant payload conversions, `From<Payload> for Self`,
-//!    in variant declaration order.
-//! 7. The inherent `impl Type { pub fn builder() }`.
-//! 8. `Deserialize`, then `JsonSchema`.
-//!
-//! This is the order typify 1 already emits across its fixtures, so
-//! the two generators agree during the typespace integration without
-//! churning typify's fixtures.
-//!
-//! Two further points are part of the rule rather than exceptions to
-//! it:
-//!
-//! - The `builder` mod carries its own application of this order,
-//!   under its own item key: the builder struct declaration, then its
-//!   `Default`, then its inherent setters impl, then `TryFrom<Builder>
-//!   for Type`, then `From<Type> for Builder`.
-//! - The `error` mod is a fixed, hand-authored literal and is exempt
-//!   from this order entirely.
-//!
-//! # Intended order
-//!
-//! Once the typespace integration lands and typify 1's renderer is
-//! deleted, nothing needs to match its emission order any longer, and
-//! the plan is to adopt the order below instead:
-//!
-//! A. Definition: doc comment, custom attributes, derive attribute,
-//!    serde attribute, declaration.
-//! B. Type-specific impls: for a struct, the builder; for a newtype,
-//!    `Deref`, then the conversions out of `Self`, then the
-//!    conversions into `Self`; for an enum, the per-variant payload
-//!    conversions.
-//! C. String conversions: `TryFrom<&str>`, then `TryFrom<String>`.
-//! D. Custom impls: `Default`, `Display`, `FromStr`, `Serialize`,
-//!    `Deserialize`, `JsonSchema`.
-//!
-//! `TryFrom<&str>` and `TryFrom<String>` assert what the type *is*: a
-//! string that is not any old string. That belongs high, near the
-//! declaration, in bucket C. `FromStr` is interpretation--"one could
-//! read this string as meaning this"--which is closer to
-//! `Deserialize`, so it belongs with the hand-written impls in bucket
-//! D instead.
-//!
-//! The order in force above carries a concrete wart this order fixes:
-//! for a string-constrained newtype, `FromStr` delegates to
-//! `TryFrom<&str>`, so the order in force places a caller (`FromStr`,
-//! in bucket 3) above the implementation it calls (`TryFrom<&str>`,
-//! also in bucket 3, but `FromStr` is emitted first). The intended
-//! order puts `TryFrom<&str>` in bucket C, ahead of `FromStr` in
-//! bucket D, so the callee always precedes its caller.
-//!
-//! The two orders also disagree about `Default` and an enum's
-//! per-variant payload conversions, and that disagreement is
-//! deliberate rather than a typo in either list: typify 1 emits
-//! `Default` first, so the order in force does too, while the intended
-//! order groups the variant conversions with the other type-specific
-//! conversions in bucket B and leaves `Default` among the hand-written
-//! impls in bucket D.
+//! Each named type renders along with its associated `impl` blocks. See
+//! [`Typespace::to_codespace`](crate::Typespace::to_codespace).
 
 mod alias;
 mod common;

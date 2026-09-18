@@ -453,16 +453,20 @@ pub(crate) fn leaf_provides<Id>(
         // FromStr.
         Type::Unit => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
 
-        // TODO 9/12/2026
-        // This doesn't seem quite right; a raw Never shouldn't be
-        // Absent; only an Option<Never>
-
-        // ::json_serde::Absent derives Clone, Debug, Default, Eq,
-        // Hash, Ord, PartialEq, and PartialOrd, and hand-writes
-        // Serialize, Deserialize, and (under the schemars08 and
-        // schemars1 features) JsonSchema; it has no Display or
-        // FromStr impl (see json-serde/src/lib.rs).
-        Type::Never => Some(!CONTAINER_UNSUPPORTED.contains(&trait_name)),
+        // ::json_serde::Never is an enum with no values. It derives Clone,
+        // Copy, Debug, Eq, Hash, Ord, PartialEq, and PartialOrd, and
+        // hand-writes Serialize, Deserialize, and (under the schemars08 and
+        // schemars1 features) JsonSchema. It has no Display or FromStr, and
+        // deliberately no Default (since it can't be constructed).
+        //
+        // An Optional property of this type renders as ::json_serde::Absent
+        // instead, which *does* have Default. That substitution happens at the
+        // property, which emits the `default` attribute itself rather than
+        // asking here, so this answers for the type as it renders everywhere
+        // *other* than that one context.
+        Type::Never => Some(
+            !CONTAINER_UNSUPPORTED.contains(&trait_name) && trait_name != TypespaceTrait::Default,
+        ),
 
         // Floating-point types have no total ordering, no equality
         // relation, and no hash.
@@ -1339,7 +1343,7 @@ fn unnamed_offender<Id>(ty: &Type<Id>, settings: &Settings) -> OffenderReason {
         Type::Boolean => "bool",
         Type::Integer(name) | Type::Float(name) => name,
         Type::JsonValue => "serde_json::Value",
-        Type::Never => "json_serde::Absent",
+        Type::Never => "json_serde::Never",
         all_named_types!(_) => unreachable!("caller passes only unnamed types"),
     };
     OffenderReason::Primitive {

@@ -1917,13 +1917,6 @@ fn test_never_in_vec() {
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
         assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[]}"#).is_ok());
 
-        // An element cannot be serialized: Absent's Serialize always
-        // errors.
-        let full = import::VecHolder {
-            values: vec![::json_serde::Absent],
-        };
-        assert!(serde_json::to_string(&full).is_err());
-
         // Any element on the wire fails to deserialize.
         assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[null]}"#).is_err());
         assert!(serde_json::from_str::<import::VecHolder>(r#"{"values":[1]}"#).is_err());
@@ -1947,12 +1940,6 @@ fn test_never_in_set() {
         let empty = import::SetHolder { values: Vec::new() };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
         assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[]}"#).is_ok());
-
-        let full = import::SetHolder {
-            values: vec![::json_serde::Absent],
-        };
-        assert!(serde_json::to_string(&full).is_err());
-
         assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[null]}"#).is_err());
         assert!(serde_json::from_str::<import::SetHolder>(r#"{"values":[1]}"#).is_err());
     }
@@ -1977,11 +1964,6 @@ fn test_never_in_map_value() {
         };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"entries":{}}"#);
         assert!(serde_json::from_str::<import::MapValueHolder>(r#"{"entries":{}}"#).is_ok());
-
-        let full = import::MapValueHolder {
-            entries: std::collections::BTreeMap::from([("k".to_string(), ::json_serde::Absent)]),
-        };
-        assert!(serde_json::to_string(&full).is_err());
 
         assert!(
             serde_json::from_str::<import::MapValueHolder>(r#"{"entries":{"k":null}}"#).is_err()
@@ -2008,12 +1990,6 @@ fn test_never_in_map_key() {
         };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"entries":{}}"#);
         assert!(serde_json::from_str::<import::MapKeyHolder>(r#"{"entries":{}}"#).is_ok());
-
-        let full = import::MapKeyHolder {
-            entries: std::collections::BTreeMap::from([(::json_serde::Absent, "v".to_string())]),
-        };
-        assert!(serde_json::to_string(&full).is_err());
-
         assert!(serde_json::from_str::<import::MapKeyHolder>(r#"{"entries":{"k":"v"}}"#).is_err());
     }
 }
@@ -2035,11 +2011,6 @@ fn test_never_nullable() {
         let null = import::NullableHolder { value: None };
         assert_eq!(serde_json::to_string(&null).unwrap(), r#"{"value":null}"#);
         assert!(serde_json::from_str::<import::NullableHolder>(r#"{"value":null}"#).is_ok());
-
-        let present = import::NullableHolder {
-            value: Some(::json_serde::Absent),
-        };
-        assert!(serde_json::to_string(&present).is_err());
 
         assert!(serde_json::from_str::<import::NullableHolder>(r#"{"value":1}"#).is_err());
 
@@ -2160,11 +2131,6 @@ fn test_never_optional_nullable() {
             serde_json::from_str::<import::OptionalNullableHolder>(r#"{"value":null}"#).is_ok()
         );
         assert!(serde_json::from_str::<import::OptionalNullableHolder>(r#"{"value":1}"#).is_err());
-
-        let present = import::OptionalNullableHolder {
-            value: Some(::json_serde::Absent),
-        };
-        assert!(serde_json::to_string(&present).is_err());
     }
 }
 
@@ -2468,11 +2434,6 @@ fn test_never_in_nested_vec() {
         assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[]}"#).is_ok());
         assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[[]]}"#).is_ok());
         assert!(serde_json::from_str::<import::NestedHolder>(r#"{"values":[[1]]}"#).is_err());
-
-        let deep = import::NestedHolder {
-            values: vec![vec![::json_serde::Absent]],
-        };
-        assert!(serde_json::to_string(&deep).is_err());
     }
 }
 

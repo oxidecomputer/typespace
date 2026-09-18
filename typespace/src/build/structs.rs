@@ -307,9 +307,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             );
 
             // The builder mod is a separate application of the canonical
-            // item order (see build::mod) under its own item key: decl,
-            // Default, setters, TryFrom<Builder> for Type, From<Type>
-            // for Builder.
+            // item order under its own item key: decl, Default, setters,
+            // TryFrom<Builder> for Type, From<Type> for Builder. It is
+            // BUILDER_ORDER in tests/item_order.rs.
             let value_ident = if prop_ident.is_empty() {
                 quote! { _value }
             } else {
@@ -471,7 +471,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             serde.push(quote! { deny_unknown_fields });
         }
 
-        // Canonical item order: see build::mod.
+        // Canonical item order: see tests/item_order.rs.
         quote! {
             #description
             #( #attrs )*
@@ -845,7 +845,7 @@ impl UnitStruct {
         let derive_attr = typespace.render_derives(&traits, extra_derives, false);
         let attrs = typespace.render_attrs(extra_attrs);
 
-        // Canonical item order: see build::mod.
+        // Canonical item order: see tests/item_order.rs.
         quote! {
             #description
             #( #attrs )*
@@ -1277,7 +1277,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         let rest_ident_iter = rest_ident.into_iter();
 
-        // Canonical item order: see build::mod.
+        // Canonical item order: see tests/item_order.rs.
         quote! {
             #description
             #( #attrs )*
@@ -1569,7 +1569,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let mut serde_attr = SerdeDerives::new(&traits).attrs();
         serde_attr.push(quote! { transparent });
 
-        // Canonical item order: see build::mod.
+        // Canonical item order: see tests/item_order.rs.
         quote! {
             #description
             #( #attrs )*

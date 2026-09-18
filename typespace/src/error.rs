@@ -1,6 +1,50 @@
 // Copyright 2026 Oxide Computer Company
 
 //! The error type, and the detail types its messages are built from.
+//!
+//! Everything a consumer can get wrong reports through [`Error`], from
+//! a `build()` call on a half-assembled type through insertion and on
+//! to [`finalize`](crate::TypespaceBuilder::finalize). Most variants
+//! name one thing and are done. Trait conflicts are the exception, and
+//! they are worth knowing how to read.
+//!
+//! # Reading a trait conflict
+//!
+//! [`Error::TraitConflicts`] carries a [`TraitConflict`] per failure,
+//! and each answers four questions.
+//!
+//! Where the requirement came from is [`RequirementOrigin`]. A trait
+//! named in [`Settings`](crate::settings::Settings) applies to every
+//! named type; a container demands traits of its parameters, a map key
+//! needing `Ord` for instance; and a default value demands traits of
+//! what it constructs.
+//!
+//! How it arrived is [`TraitConflict::path`], a run of [`PathStep`]s
+//! from the origin to the offender. Each step names a type and the
+//! [`Relation`] the requirement took out of it, and the `Display` impl
+//! renders the run innermost first, rustc style, so the last line read
+//! is where the demand started.
+//!
+//! Who could not satisfy it is [`TraitConflict::offender`], an id.
+//!
+//! Why is [`OffenderReason`], and it is the part that says what to do
+//! about it. [`OffenderReason::Primitive`] is a built-in that cannot
+//! implement the trait in any form, an `f64` asked for `Ord` say, so
+//! the demand has to change rather than the type.
+//! [`OffenderReason::NativeMissingImpl`] and
+//! [`OffenderReason::ContainerMissingImpl`] are declarations that said
+//! they do not provide the trait, so amending the declaration fixes
+//! them. [`OffenderReason::TypeCannotImplement`] means rendering has no
+//! implementation for that trait on that kind of type.
+//! [`OffenderReason::IrrefutableVariantPayload`] is narrower: an
+//! untagged enum could implement `FromStr`, but a payload that parses
+//! every string would make every later variant unreachable, so the
+//! trait is refused instead of emitted as a trap.
+//!
+//! One offending type reachable along several paths reports once per
+//! path. Conflicts are not deduplicated to a root cause, so a single
+//! missing impl low in the graph can produce a long list that says the
+//! same thing many ways.
 
 use crate::TypespaceTrait;
 
@@ -247,8 +291,8 @@ where
 
     /// A position that requires a value has `Type::Never` as its type.
     ///
-    /// `Never` renders as `::json_serde::Absent`, which can be neither
-    /// serialized nor deserialized, so it says something only where the
+    /// `Never` renders as `::json_serde::Never`, which has no values at
+    /// all, so it says something only where the
     /// construct holding it can leave it out: a property that may be
     /// absent, either side of a map, or the element of a vec, a set, or
     /// a zero-length array. An `Option<Never>` is a value of its own,

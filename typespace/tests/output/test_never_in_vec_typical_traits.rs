@@ -1,6 +1,6 @@
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct TypicalVecHolder {
-    pub values: ::std::vec::Vec<::json_serde::Absent>,
+    pub values: ::std::vec::Vec<::json_serde::Never>,
 }
 impl TypicalVecHolder {
     pub fn builder() -> builder::TypicalVecHolder {
@@ -12,7 +12,7 @@ pub mod builder {
     #[derive(Clone, Debug)]
     pub struct TypicalVecHolder {
         values: ::std::result::Result<
-            ::std::vec::Vec<::json_serde::Absent>,
+            ::std::vec::Vec<::json_serde::Never>,
             ::std::string::String,
         >,
     }
@@ -26,7 +26,7 @@ pub mod builder {
     impl TypicalVecHolder {
         pub fn values<T>(mut self, value: T) -> Self
         where
-            T: ::std::convert::TryInto<::std::vec::Vec<::json_serde::Absent>>,
+            T: ::std::convert::TryInto<::std::vec::Vec<::json_serde::Never>>,
             T::Error: ::std::fmt::Display,
         {
             self.values = value

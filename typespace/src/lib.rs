@@ -2,12 +2,160 @@
 
 //! Semantic model of Rust types for code generation.
 //!
-//! The crate is organized around the type lifecycle: consumers create a
-//! [`TypespaceBuilder`] from [`settings::Settings`], assemble types
-//! from the [`build`] module's vocabulary, insert them, and call
-//! [`TypespaceBuilder::finalize`] to produce a [`Typespace`]. A finalized
-//! typespace renders code via [`Typespace::to_codespace`] and answers
-//! queries through the [`view`] module's types.
+//! The crate is organized around the code generation lifecycle: consumers
+//! create a [`TypespaceBuilder`] from [`settings::Settings`], assemble types
+//! from the [`build`] module's vocabulary, insert them with
+//! [`TypespaceBuilder::insert`], and call [`TypespaceBuilder::finalize`] to
+//! produce a [`Typespace`]. A finalized typespace renders code via
+//! [`Typespace::to_codespace`] and answers queries through the [`view`]
+//! module's types.
+//!
+//! # Using Typespace
+//!
+//! Here's a small example, constructing a single named type:
+//!
+//! ```
+//! use typespace::build::{Struct, StructProperty, StructPropertyState, Type};
+//! use typespace::settings::Settings;
+//! use typespace::{no_cycles, TypespaceBuilder, TypespaceTrait};
+//!
+//! let settings = Settings::minimal()
+//!     .with_required_trait(TypespaceTrait::Serialize)
+//!     .with_required_trait(TypespaceTrait::Deserialize);
+//! let mut builder = TypespaceBuilder::<String>::new(settings);
+//!
+//! // Ids are the consumer's to choose. These two types are unnamed, so
+//! // they render inline wherever they are referenced rather.
+//! builder.insert("str".to_string(), Type::String)?;
+//! builder.insert("u32".to_string(), Type::Integer("u32".to_string()))?;
+//!
+//! let pet = Struct::new()
+//!     .name("Pet")
+//!     .properties([
+//!         StructProperty::new("name", "str".to_string()),
+//!         StructProperty::new("age", "u32".to_string())
+//!             .with_state(StructPropertyState::Default),
+//!         StructProperty::new("breed", "str".to_string())
+//!             .with_state(StructPropertyState::Optional),
+//!     ])
+//!     .build()?;
+//! builder.insert("Pet".to_string(), pet)?;
+//!
+//! // finalize resolves traits and breaks containment cycles. This graph
+//! // has no cycles, so `no_cycles` asserts none are found.
+//! let code: codespace::Codespace =
+//!     builder.finalize(no_cycles)?.to_codespace();
+//! let rust = code.into_stream();
+//!
+//! # assert!(rust.to_string().contains("pub struct Pet"));
+//! # Ok::<(), typespace::error::Error<String>>(())
+//! ```
+//!
+//! The produces Rust code like this:
+//! ```
+//! #[derive(::serde::Deserialize, ::serde::Serialize)]
+//! pub struct Pet {
+//!     pub name: ::std::string::String,
+//!     #[serde(default)]
+//!     pub age: u32,
+//!     pub breed: Option<::std::string::String>,
+//! }
+//! ```
+//!
+//! # Details
+//!
+//! ## Named and unnamed types
+//!
+//! Typespace allows the construction of named and unnamed types. Named types
+//! are custom type definitions that result in a generated type definition such
+//! as a `struct Foo { .. }`  or `enum Bar { .. }`; unnamed types include
+//! anonymous tuples with a collection of types or a parameterized `Vec`. Named
+//! types get their own generated type block with associated `impl` blocks;
+//! unnamed types are rendered inline.
+//!
+//! ## Struct fields: optionality and defaults
+//!
+//! A struct field (or a field of a struct-style enum variant) has several
+//! associated states.
+//!
+//! - Required: the field must always be present; this is modeled as a bare
+//!   type with no special `serde` attributes.
+//! - Optional: the field may be absent; the specific `serde` attributes
+//!   may depend on [`settings::Settings`].
+//! - Default: the field if absent takes its value from the `Default` impl for
+//!   the field's type (`#[serde(default)]`).
+//! - DefaultValue: the field if absent takes its value from the specific,
+//!   specified value (that is produced by a generated function).
+//!
+//! In addition, [`settings::Settings`] provides for special handling
+//! of fields that are both Optional and represented by the Rust `Option` type.
+//! Such a field may be absent, `null`, or another value. See
+//! [`settings::OptionalNullable`].
+//!
+//! ## Type defaults
+//!
+//! In addition to a field having a default value, any generated `struct` or
+//! `enum` type (a named type, as above) may have an explicit default value.
+//! This causes an implementation of the `Default` trait to be generated for
+//! the type (if `Default` is one of the output traits).
+//!
+//! ## Trait resolution
+//!
+//! Consumers may specify relevant traits for the Rust code output. *Required*
+//! traits are generated for each type. If a type is unable to satisfy that
+//! requirement, construction of the [`Typespace`] fails during
+//! [`TypespaceBuilder::finalize`]. *Desired* traits are generated if
+//! possible--if a type is unable to implement a particular trait, that's
+//! ignored during `finalize`.
+//!
+//! Trait resolution occurs in two main passes. A forward pass propagates
+//! required traits to all types and, in the case of failure, produces a list
+//! of all unsatisfiable conditions along with their reasons (for debugging). A
+//! reverse pass (i.e. from types that don't implement a given trait to the
+//! types that refer to it) "poisons" desired traits so that they are absent
+//! from types whose transitive references wouldn't support them.
+//!
+//! ## Breaking containment cycles
+//!
+//! Also during finalization, containment cycles in the type graph are broken
+//! by inserting `Box` types. No attempt is made to optimize exactly how cycles
+//! are broken (e.g. to minimize the number of inserted `Box`es), but in
+//! practice the generated code has not suffered.
+//!
+//! # Generation
+//!
+//! Code generation has some nuances, enumerated here:
+//!
+//! ## Never vs. Absent
+//!
+//! A [`Type::Never`] represents a type that can never be instantiated. It is
+//! typically rendered as `::json_serde::Never` (an `enum` with no variants).
+//! However, if a `Never` type appears as an
+//! [`Optional`](build::StructPropertyState) field in a `struct` (or
+//! `struct`-like `enum` variant), it is rendered as `::json_serde::Absent` to
+//! ensure proper handling by `serde` and `schemars`.
+//!
+//! ## Special `enum`s
+//!
+//! A tagged `enum` composed *only* of unit variants is treated like a value;
+//! the generated type implements each of the following traits (if they're in
+//! the specified trait set): `Eq`, `PartialEq`, `Ord`, `PartialOrd`, `Hash`,
+//! `Clone`, `Copy`, `Display`, and `FromStr`.
+//!
+//! An untagged `enum` composed exclusively of
+//! [`Item`](build::VariantDetails::Item) variants may implement `Display` and
+//! `FromStr` if the type for each item also does so.
+//!
+//! ## Generated modules
+//!
+//! Some default values require the generation of a function to produce those
+//! values. Those functions live in a generated `defaults` module.
+//!
+//! With [`Settings::with_struct_builder`] enabled, the generated builder
+//! machinery lives in a `builder` module.
+//!
+//! If there are types that include implementations of fallible conversions, the
+//! `error` mod is generated to contain the error.
 //!
 //! # Dependencies of generated code
 //!
@@ -15,21 +163,18 @@
 //! on. Crates containing generating code must declare them as dependencies.
 //! Which crates are needed depends on the constructs in the output:
 //!
-//! - [serde](https://crates.io/crates/serde), with the `derive`
-//!   feature: required by every generated struct, enum, newtype
-//!   struct, unit struct, and tuple struct whose trait set holds
-//!   [`TypespaceTrait::Serialize`] or [`TypespaceTrait::Deserialize`];
-//!   each is emitted with serde derives or hand-written
-//!   `Serialize`/`Deserialize` impls. Settings that require neither
-//!   trait produce no derive, no impl, and no `#[serde(..)]`
+//! - [serde](https://crates.io/crates/serde), with the `derive` feature:
+//!   required by generated structs, enums, newtype structs, unit structs, and
+//!   tuple structs whose trait set holds [`TypespaceTrait::Serialize`] or
+//!   [`TypespaceTrait::Deserialize`]; each is emitted with serde derives or
+//!   hand-written `Serialize`/`Deserialize` impls. Settings that require
+//!   neither trait produce no derive, no impl, and no `#[serde(..)]`
 //!   attribute, and so no dependency.
-//! - [serde_json](https://crates.io/crates/serde_json): required if
+//! - [serde_json](https://crates.io/crates/serde_json): required when
 //!   the output contains a [`build::Type::JsonValue`] (rendered as
-//!   `::serde_json::Value`), a [`build::Native`] property with
-//!   [`build::StructPropertyState::DefaultValue`] (the generated default
-//!   function calls `::serde_json::from_str`), or a
-//!   [`build::UnitStruct`] (its `Deserialize` impl compares input
-//!   against the fixed JSON representation).
+//!   `::serde_json::Value`), and in several situations that involve
+//!   deserializing a type from a JSON value such as default value handling and
+//!   deserializing various types.
 //! - [regress](https://crates.io/crates/regress): required if the
 //!   output contains a [`build::NewtypeStruct`] whose
 //!   [`build::NewtypeConstraints::String`] carries a pattern. Each
@@ -52,8 +197,8 @@
 //!   - a [`build::TupleStruct`] with a `rest` field (its serde impls use
 //!     `::json_serde::FlattenedSequenceSerializer` and
 //!     `::json_serde::FlattenedSequenceDeserializer`);
-//!   - an optional [`build::Type::Never`] (rendered as
-//!     `::json_serde::Absent`);
+//!   - the [`build::Type::Never`] (rendered as ::json_serde::Never or--if
+//!     optional-- `::json_serde::Absent`);
 //!   - a custom type to represent a field whose value may be absent,
 //!     null, or a type value, specified with
 //!     [`settings::OptionalNullable::CustomType`].
@@ -718,7 +863,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
     /// Reject `Type::Never` in any position that requires a value.
     ///
-    /// `Never` renders as `::json_serde::Absent`, a type that can be
+    /// `Never` renders as `::json_serde::Never`, a type that can be
     /// neither serialized nor deserialized, so it says something only
     /// where the construct holding it can leave it out: a struct
     /// property that may be absent
@@ -1511,7 +1656,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 Std::Unqualified => quote! { String },
             },
             Type::JsonValue => quote! { ::serde_json::Value },
-            Type::Never => quote! { ::json_serde::Absent },
+            Type::Never => quote! { ::json_serde::Never },
             Type::Unit => quote! { () },
         }
     }

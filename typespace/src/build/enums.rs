@@ -291,8 +291,8 @@ impl<Id> Enum<Id> {
 /// The bespoke impls an all-unit-variant or all-untagged-item-variant
 /// enum carries: `Display`, `FromStr`, and the `TryFrom<&str>`/
 /// `TryFrom<String>` impls `FromStr` implies. Kept apart so the caller
-/// can place each piece per the canonical item order (see build::mod)
-/// instead of emitting them as one block.
+/// can place each piece per the canonical item order (see
+/// tests/item_order.rs) instead of emitting them as one block.
 #[derive(Default)]
 struct EnumSpecialImpls {
     display_impl: TokenStream,
@@ -475,7 +475,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             try_from_impl,
         } = special_impls;
 
-        // Canonical item order: see build::mod.
+        // Canonical item order: see tests/item_order.rs.
         quote! {
             // TODO I want to have the original Id available
             #description
@@ -500,7 +500,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     /// the `TryFrom<&str>`/`TryFrom<String>` impls `FromStr` implies.
     ///
     /// These traits **must** be manually implemented. Canonical item
-    /// order: see build::mod; the caller places the returned pieces.
+    /// order: see tests/item_order.rs; the caller places the returned
+    /// pieces.
     fn render_tagged_unit_variant_impls(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
@@ -594,7 +595,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
     /// `FromStr`, plus the `TryFrom<&str>`/`TryFrom<String>` impls
     /// `FromStr` implies.
     ///
-    /// Canonical item order: see build::mod; the caller places the
+    /// Canonical item order: see tests/item_order.rs; the caller places the
     /// returned pieces.
     fn render_untagged_item_variant_impls(
         &self,
