@@ -168,55 +168,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// descending into each child through this same method; a type
     /// alias forwards to its target.
     pub fn has_impl(&self, trait_: TypespaceTrait) -> bool {
-        self.has_trait(trait_, &mut BTreeSet::new())
-    }
-
-    /// The recursive worker behind [`Type::has_impl`]; `seen` holds
-    /// the ids on the walk's current path, and a revisit answers
-    /// `false`.
-    fn has_trait(&self, trait_: TypespaceTrait, seen: &mut BTreeSet<Id>) -> bool {
-        if !seen.insert(self.id.clone()) {
-            return false;
-        }
-        let answer = match self.typ {
-            build::Type::Enum(e) => e
-                .common
-                .built
-                .as_ref()
-                .is_some_and(|b| b.traits.contains(&trait_)),
-            build::Type::Struct(s) => s
-                .common
-                .built
-                .as_ref()
-                .is_some_and(|b| b.traits.contains(&trait_)),
-            build::Type::NewtypeStruct(n) => n
-                .common
-                .built
-                .as_ref()
-                .is_some_and(|b| b.traits.contains(&trait_)),
-            build::Type::UnitStruct(u) => u
-                .common
-                .built
-                .as_ref()
-                .is_some_and(|b| b.traits.contains(&trait_)),
-            build::Type::TupleStruct(t) => t
-                .common
-                .built
-                .as_ref()
-                .is_some_and(|b| b.traits.contains(&trait_)),
-            // A type alias has no impl site of its own; its answer is
-            // entirely its target's, exactly as required resolution
-            // treats it (see `Feasibility::IfAllChildren`).
-            build::Type::TypeAlias(a) => self.typespace.get_type(&a.target).has_trait(trait_, seen),
-            typ => crate::trait_resolution::unnamed_provides(
-                typ,
-                trait_,
-                &self.typespace.settings,
-                &mut |child_id| self.typespace.get_type(child_id).has_trait(trait_, seen),
-            ),
-        };
-        seen.remove(self.id);
-        answer
+        crate::has_trait(
+            &self.typespace.types,
+            &self.typespace.settings,
+            self.id,
+            trait_,
+            &mut BTreeSet::new(),
+        )
     }
 }
 

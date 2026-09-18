@@ -3687,9 +3687,9 @@ fn test_default_impossible_required_property() {
 
 /// `Default` on the struct shapes that carry no property states.
 ///
-/// A tuple struct and a unit struct answer `IfAllChildren` and pick the trait
-/// up as a derive. A newtype struct answers `Impossible`, so it gets
-/// neither a derive nor an impl.
+/// All three answer `IfAllChildren` and pick the trait up as a derive,
+/// since none of them carries an attached default value. A newtype that
+/// does carry one is the separate case below.
 ///
 // ATTN REVIEWER: typify1 never derives `Default` for any of these three
 // shapes; its only `derive_set.insert("Default")` is in the struct path.
@@ -3726,6 +3726,89 @@ fn test_default_other_struct_shapes() {
             import::NewtypeShape(String::new())
         );
     }
+}
+
+/// A newtype struct with an attached default value renders a `Default`
+/// impl that constructs the value.
+///
+/// The other shapes derive `Default` from their contents. A newtype
+/// with a value of its own cannot: a derive would produce the inner
+/// type's default and quietly ignore what was asked for. So the value
+/// has to become a hand-written impl, which is what
+/// `NewtypeStruct::render` writes.
+#[test]
+fn newtype_with_an_attached_default_renders_the_impl() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 3]
+        struct Count(u32);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+    assert!(
+        rendered.contains("impl ::std::default::Default for Count"),
+        "no Default impl for Count in:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Count(3_u32)"),
+        "the impl does not construct the attached value in:\n{rendered}"
+    );
+    // The derive would ignore the value, so it must not also appear.
+    let derive_line = rendered
+        .lines()
+        .find(|line| line.contains("derive") && line.contains("Count"))
+        .unwrap_or("");
+    assert!(
+        !derive_line.contains("Default"),
+        "Count both derives and hand-writes Default: {derive_line}"
+    );
+}
+
+/// The impl is withheld when constructing the value would need
+/// something the value's own contents cannot provide.
+///
+/// Rendering the value is what creates the need: a native inside it is
+/// built by deserializing, so the value demands `Deserialize` of that
+/// native. A native that does not declare it leaves the demand unmet,
+/// and `Default` is merely desired here, so it drops rather than
+/// failing the build.
+#[test]
+fn default_is_withheld_when_the_value_needs_an_unmet_trait() {
+    // Nothing global demands Deserialize here, so the only thing
+    // asking it of the native is the default value's construction.
+    let settings = Settings::minimal().with_desired_trait(TypespaceTrait::Default);
+    let builder = typespace_builder!(settings, {
+        native ::ext::Opaque: Clone;
+        native ::ext::Readable: Clone + Deserialize;
+
+        #[default = "whatever"]
+        struct Wrapped(::ext::Opaque);
+
+        #[default = { x: "whatever" }]
+        struct Wrapped2{ x: ::ext::Opaque }
+
+        #[default = "whatever"]
+        struct Fine(::ext::Readable);
+
+        #[default = { x: "whatever" }]
+        struct Fine2{ x: ::ext::Readable }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+
+    assert!(
+        !rendered.contains("Default for Wrapped"),
+        "Wrapped got a Default impl the value cannot construct:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Default for Fine2"),
+        "Fine2 met the obligation and still got no Default impl:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Default for Wrapped2"),
+        "Wrapped2 got a Default impl the value cannot construct:\n{rendered}"
+    );
 }
 
 /// `Default` on the struct shapes that carry no property states, under
@@ -3991,6 +4074,17 @@ fn test_default_value_shapes_accepted() {
             serde_json::from_str::<import::Marker>(r#""marker""#).unwrap(),
             import::Marker
         );
+
+        assert_eq!(import::Counted::default(), import::Counted(3));
+        assert_eq!(import::Weight::default(), import::Weight(1.5));
+        assert_eq!(
+            import::Addressed::default(),
+            import::Addressed("127.0.0.1".parse().unwrap())
+        );
+        // Written the long way because clippy objects to
+        // `Marker::default()` on a unit struct, and the point here is
+        // that the impl exists at all.
+        assert_eq!(<import::Marker as Default>::default(), import::Marker);
     }
 }
 

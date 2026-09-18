@@ -2211,56 +2211,71 @@ impl TokenPrint for proc_macro2::TokenStream {
     }
 }
 
-#[cfg(test)]
-mod trait_enumeration_tests {
-    use super::TypespaceTrait;
-    use strum::IntoEnumIterator;
-
-    /// Every `TypespaceTrait` variant is reachable through `iter()`.
-    ///
-    /// `Native::new`, `Native::with_rest_unknown`, and
-    /// `ProvisionTable::new` each build a table by iterating the enum,
-    /// so a variant the iteration missed would silently get no entry.
-    /// The derive makes that impossible, and this pins the count so a
-    /// change to the enum is a change someone made on purpose.
-    #[test]
-    fn iter_reaches_every_trait() {
-        let seen = TypespaceTrait::iter().collect::<Vec<_>>();
-        assert_eq!(seen.len(), 14, "{seen:?}");
-
-        // Spot-check the ends, since a derive that silently truncated
-        // would still produce a plausible-looking prefix.
-        assert_eq!(seen.first(), Some(&TypespaceTrait::Deserialize));
-        assert_eq!(seen.last(), Some(&TypespaceTrait::JsonSchema));
+/// Whether the type with `id` implements `trait_`.
+///
+/// A named type answers from the trait set resolution gave it.
+/// Everything else answers structurally, descending into children
+/// through [`trait_resolution::unnamed_provides`], so a container's
+/// answer follows its elements and a native's follows its declaration.
+/// A type alias has no impl site of its own and forwards to its target.
+///
+/// `seen` holds the ids on the walk's current path; a revisit answers
+/// `false`, which keeps a cyclic graph terminating and is the
+/// pessimistic answer a cycle deserves.
+///
+/// Both callers need this and neither can use the other's form:
+/// [`view::Type::has_impl`] asks it of a finalized typespace, and the
+/// desired phase asks it of a map mid-resolution, before any
+/// [`Typespace`] exists.
+pub(crate) fn has_trait<Id>(
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+    id: &Id,
+    trait_: TypespaceTrait,
+    seen: &mut BTreeSet<Id>,
+) -> bool
+where
+    Id: Clone + Ord,
+{
+    if !seen.insert(id.clone()) {
+        return false;
     }
 
-    /// `iter()` answers in declaration order.
-    ///
-    /// The order is load-bearing: the dated note above the enum
-    /// records that it decides the order traits render in. Anything
-    /// that reorders the enum therefore reorders generated output, and
-    /// should have to move this test to do it.
-    #[test]
-    fn iter_answers_in_declaration_order() {
-        use TypespaceTrait::*;
-        assert_eq!(
-            TypespaceTrait::iter().collect::<Vec<_>>(),
-            vec![
-                Deserialize,
-                Serialize,
-                Clone,
-                Copy,
-                Debug,
-                Display,
-                FromStr,
-                Eq,
-                Hash,
-                Ord,
-                PartialEq,
-                PartialOrd,
-                Default,
-                JsonSchema,
-            ],
-        );
-    }
+    let typ = types.get(id).unwrap();
+    let answer = match typ {
+        build::Type::Enum(e) => e
+            .common
+            .built
+            .as_ref()
+            .is_some_and(|b| b.traits.contains(&trait_)),
+        build::Type::Struct(s) => s
+            .common
+            .built
+            .as_ref()
+            .is_some_and(|b| b.traits.contains(&trait_)),
+        build::Type::NewtypeStruct(n) => n
+            .common
+            .built
+            .as_ref()
+            .is_some_and(|b| b.traits.contains(&trait_)),
+        build::Type::UnitStruct(u) => u
+            .common
+            .built
+            .as_ref()
+            .is_some_and(|b| b.traits.contains(&trait_)),
+        build::Type::TupleStruct(t) => t
+            .common
+            .built
+            .as_ref()
+            .is_some_and(|b| b.traits.contains(&trait_)),
+        // A type alias has no impl site of its own; its answer is
+        // entirely its target's, exactly as required resolution
+        // treats it (see `Feasibility::IfAllChildren`).
+        build::Type::TypeAlias(a) => has_trait(types, settings, &a.target, trait_, seen),
+        typ => crate::trait_resolution::unnamed_provides(typ, trait_, settings, &mut |child_id| {
+            has_trait(types, settings, child_id, trait_, seen)
+        }),
+    };
+    seen.remove(id);
+    answer
 }

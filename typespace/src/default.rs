@@ -331,7 +331,7 @@ where
     /// Render `id`'s type with its generic arguments left off.
     ///
     /// That is how the path to one of the type's variants or
-    /// associated functions is spelled.
+    /// associated functions is written.
     fn render_base_type(&self, id: &Id) -> TokenStream {
         TypespaceRenderer::new(self.types, self.settings).render_raw_type(id)
     }

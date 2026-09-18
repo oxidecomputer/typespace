@@ -190,6 +190,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use log::debug;
+use strum::IntoEnumIterator;
 
 use crate::build::{
     ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
@@ -670,15 +671,15 @@ where
         },
 
         Type::NewtypeStruct(NewtypeStruct { common, .. }) => match trait_name {
-            // An attached default value needs a hand-written impl that
-            // NewtypeStruct::render does not write. Claiming the trait
-            // would derive one that ignores the value, or fail to
-            // compile where the inner type has no Default.
-            // TYPIFY COMPAT: the typify_compat half only; the attached
-            // default value half stands on its own.
-            TypespaceTrait::Default if settings.typify_compat || common.default().is_some() => {
-                cannot_implement()
-            }
+            // TYPIFY COMPAT: typify doesn't implement a default for newtypes.
+            TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
+            TypespaceTrait::Default if common.default.is_some() => Feasibility::IfSomeChildren(
+                default_checks
+                    .whole_type
+                    .get(type_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
             _ => Feasibility::IfAllChildren,
         },
 
@@ -1702,11 +1703,23 @@ fn desired_resolution<Id>(
         },
     );
 
+    let has = types
+        .keys()
+        .map(|type_id| {
+            let mut all_traits = desired.clone();
+            for t in TypespaceTrait::iter() {
+                if !all_traits.contains(&t)
+                    && crate::has_trait(types, settings, type_id, t, &mut BTreeSet::new())
+                {
+                    all_traits.add(t);
+                }
+            }
+            (type_id.clone(), all_traits)
+        })
+        .collect();
+
     let mut state = Poison {
-        has: types
-            .keys()
-            .map(|type_id| (type_id.clone(), desired.clone()))
-            .collect(),
+        has,
         queue: VecDeque::new(),
     };
 
@@ -2463,6 +2476,43 @@ mod tests {
         let expected = trait_set([TypespaceTrait::Eq, TypespaceTrait::PartialEq]);
         assert_eq!(built_traits(&typespace, "Outer"), expected);
         assert_eq!(built_traits(&typespace, "Inner"), expected);
+    }
+
+    /// An obligation is answered by what the target actually has, not
+    /// by what happens to be desired.
+    ///
+    /// Constructing a native inside a default value needs `Deserialize`
+    /// of that native, so the value obliges a trait other than the one
+    /// being decided. `Deserialize` here is required rather than
+    /// desired, which is the ordinary arrangement, and the native
+    /// declares it. `Default` must therefore be granted.
+    ///
+    /// The desired phase's map was once seeded with nothing but the
+    /// desired set, which made an obligation naming any other trait
+    /// unsatisfiable and dropped `Default` from every type whose
+    /// attached default reached a native. Nothing said so; the trait
+    /// merely went missing.
+    #[test]
+    fn an_obligation_sees_a_trait_that_is_required_rather_than_desired() {
+        let builder = typespace_builder!(
+            Settings::minimal()
+                .with_required_trait(TypespaceTrait::Deserialize)
+                .with_desired_trait(TypespaceTrait::Default),
+            {
+                native ::ext::Readable: Clone + Deserialize;
+
+                #[default = { "x": "whatever" }]
+                struct Holder {
+                    x: ::ext::Readable,
+                }
+            }
+        );
+
+        let typespace = builder.finalize(no_cycles).unwrap();
+        assert!(
+            built_traits(&typespace, "Holder").contains(&TypespaceTrait::Default),
+            "the value's Deserialize obligation went unseen",
+        );
     }
 
     /// An alias has no impl site of its own, so its desired outcome is

@@ -477,7 +477,7 @@ fn has_impl_answers_for_unit_and_tuple_structs() {
 // holds a named type, but here the only named type is the alias, which
 // forwards rather than answering. The walk must answer a conservative
 // false instead of recursing forever. Built raw: the macro's
-// name-as-id grammar has no way to spell a Box, so the graph cannot be
+// name-as-id grammar cannot name a Box, so the graph cannot be
 // written with it.
 #[test]
 fn has_impl_survives_an_alias_cycle_through_a_box() {

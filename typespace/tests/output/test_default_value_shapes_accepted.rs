@@ -17,6 +17,11 @@ impl ::std::convert::From<::std::net::IpAddr> for Addressed {
         Self(value)
     }
 }
+impl ::std::default::Default for Addressed {
+    fn default() -> Self {
+        Addressed(::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"").unwrap())
+    }
+}
 #[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq)]
 #[serde(transparent)]
 pub struct Blob(pub ::serde_json::Value);
@@ -34,6 +39,11 @@ impl ::std::convert::From<Blob> for ::serde_json::Value {
 impl ::std::convert::From<::serde_json::Value> for Blob {
     fn from(value: ::serde_json::Value) -> Self {
         Self(value)
+    }
+}
+impl ::std::default::Default for Blob {
+    fn default() -> Self {
+        Blob(::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}").unwrap())
     }
 }
 pub type Count = u32;
@@ -54,6 +64,11 @@ impl ::std::convert::From<Counted> for Count {
 impl ::std::convert::From<Count> for Counted {
     fn from(value: Count) -> Self {
         Self(value)
+    }
+}
+impl ::std::default::Default for Counted {
+    fn default() -> Self {
+        Counted(3_u32)
     }
 }
 #[derive(Debug, Default, PartialEq)]
@@ -105,5 +120,10 @@ impl ::std::convert::From<Weight> for f64 {
 impl ::std::convert::From<f64> for Weight {
     fn from(value: f64) -> Self {
         Self(value)
+    }
+}
+impl ::std::default::Default for Weight {
+    fn default() -> Self {
+        Weight(1.5_f64)
     }
 }
