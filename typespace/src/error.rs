@@ -171,6 +171,29 @@ where
         property: String,
     },
 
+    /// A struct flattens a property whose type serde cannot flatten.
+    ///
+    /// `#[serde(flatten)]` splices the property's own keys into the
+    /// object the struct serializes as, so the property's value has to
+    /// serialize as an object itself. serde enforces this only when it
+    /// runs, failing with "can only flatten structs and maps"; the code
+    /// compiles either way. typespace refuses the graph instead, so the
+    /// mistake surfaces at generation rather than on the first value
+    /// that reaches the wire.
+    #[error(
+        "`{type_name}` flattens the property `{property}`, whose type \
+         does not serialize as an object; serde can flatten only a \
+         struct, an enum, or a map"
+    )]
+    FlattenNonObject {
+        /// The name of the struct carrying the property.
+        type_name: String,
+        /// The Rust name of the flattened property. A struct may
+        /// flatten several; the first offender in declaration order is
+        /// named.
+        property: String,
+    },
+
     /// Two types in the typespace share a name.
     ///
     /// Names come from the consumer, which is responsible for

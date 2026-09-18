@@ -24,11 +24,20 @@
 //!   resulting in an error.
 //! - `deny_unknown_fields` alongside a flattened property is refused by
 //!   `finalize`, since serde cannot honor the pair.
+//! - A flattened property's type must serialize as an object, which
+//!   `finalize` checks through any stack of options, boxes, aliases,
+//!   and newtype structs. A scalar, a sequence, or a tuple is refused.
 //!
 //! typify 1 implements the routing in `value_for_struct_props`
 //! (typify-impl/src/value.rs), requiring the flattened type to be a
-//! struct, an option of one, or a map. typespace has no such structural
-//! check yet; see the journal.
+//! struct, an option of one, or a map. typespace enforces the
+//! equivalent rule in `check_type_structure`, differing on two points.
+//! It looks through the option rather than admitting any option, so a
+//! flattened `Optional<u32>` is refused here and admitted there, even
+//! though serde fails on it as surely as on a bare `u32`. And it admits
+//! an enum, which serializes as an object under each of serde's three
+//! tagged representations; an untagged enum is judged one variant at a
+//! time.
 
 use typespace::{
     TypespaceTrait,
@@ -339,4 +348,256 @@ fn a_flattened_map_leaves_claimed_keys_to_their_properties() {
         "`something` is claimed by its own property and must not also \
          land in the flattened map: {body}"
     );
+}
+
+/// serde can only flatten a value that serializes as an object, so a
+/// property whose type is a scalar is refused.
+///
+/// Nothing in the generated code would say so: `#[serde(flatten)]`
+/// compiles against any `Serialize` type and fails only when a value
+/// reaches the wire, with "can only flatten structs and maps".
+#[test]
+fn a_flattened_scalar_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Outer {
+            a: u32,
+            #[flatten]
+            count: u32,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened scalar");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// An option is judged by what it wraps.
+///
+/// typify 1 admits any option at all, which lets a flattened
+/// `Option<u32>` through: it serializes cleanly while it holds `None`
+/// and fails the moment it holds a value. The option is transparent to
+/// flattening, so the answer is the inner type's.
+#[test]
+fn a_flattened_option_of_a_scalar_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Outer {
+            a: u32,
+            #[flatten]
+            count: Optional<u32>,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened option of a scalar");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// A sequence serializes as an array, so flattening one is refused.
+#[test]
+fn a_flattened_sequence_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Outer {
+            a: u32,
+            #[flatten]
+            items: Vec<u32>,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened sequence");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// The error names the struct and the offending property.
+#[test]
+fn the_flatten_error_names_the_struct_and_the_property() {
+    let builder = typespace_builder!(settings(), {
+        struct Outer {
+            a: u32,
+            #[flatten]
+            label: String,
+        }
+    });
+
+    let Err(Error::FlattenNonObject {
+        type_name,
+        property,
+    }) = builder.finalize(no_cycles)
+    else {
+        panic!("expected finalize to reject a flattened string");
+    };
+    assert_eq!(type_name, "Outer");
+    assert_eq!(property, "label");
+}
+
+/// A box, an alias, and a newtype struct each pass the flatten through
+/// to what they wrap, so each answers as its inner type does.
+#[test]
+fn flattening_reaches_through_transparent_wrappers() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        type AliasOfInner = Inner;
+
+        struct NewtypeOfInner(AliasOfInner);
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            inner: Box<NewtypeOfInner>,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
+}
+
+/// A newtype struct wrapping a scalar is refused for the same reason,
+/// reached the same way.
+#[test]
+fn a_flattened_newtype_of_a_scalar_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Count(u32);
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            count: Count,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened newtype of a scalar");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// A tagged enum serializes as an object whatever its variants hold,
+/// because the tag is itself a key. An externally tagged unit variant
+/// is the case worth naming: unflattened it serializes as a bare
+/// string, and flattened serde writes it as the variant name keying a
+/// `null`.
+#[test]
+fn a_flattened_tagged_enum_is_allowed() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        enum Tagged {
+            Unit,
+            Payload(Inner),
+            Scalar(u32),
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            tagged: Tagged,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
+}
+
+/// An untagged enum writes whatever its selected variant writes, so
+/// every variant has to serialize as an object.
+#[test]
+fn a_flattened_untagged_enum_of_objects_is_allowed() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[untagged]
+        enum Either {
+            Named { c: u32 },
+            Wrapped(Inner),
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            either: Either,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
+}
+
+/// One variant that serializes as something other than an object is
+/// enough to refuse the whole enum: the value that selects it is the
+/// value that fails.
+#[test]
+fn a_flattened_untagged_enum_with_a_scalar_variant_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[untagged]
+        enum Either {
+            Wrapped(Inner),
+            Bare(u32),
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            either: Either,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened untagged enum with a scalar variant");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// An untagged unit variant is refused too. It serializes as nothing,
+/// which leaves deserialization no key to recognize the variant by, so
+/// the round trip fails rather than the serialization.
+#[test]
+fn a_flattened_untagged_enum_with_a_unit_variant_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[untagged]
+        enum Either {
+            Wrapped(Inner),
+            Nothing,
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            either: Either,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened untagged enum with a unit variant");
+    };
+    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+}
+
+/// A flattened map is admitted, which the default-value tests above
+/// already rely on; this states it as a rule of its own.
+#[test]
+fn a_flattened_map_is_allowed() {
+    let builder = typespace_builder!(settings(), {
+        struct Outer {
+            a: u32,
+            #[flatten]
+            rest: Map<String, u32>,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
 }
