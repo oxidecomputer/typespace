@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+use strum::IntoEnumIterator;
 
-use crate::{ALL_TRAITS, TraitProvision, TypespaceTrait, TypespaceTraitSet};
+use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 // TODO 7/18/2025
 // I wanted to get this started to think through various settings that we might
@@ -886,8 +887,7 @@ impl ProvisionTable {
     /// the parameters.
     fn new(never: &[TypespaceTrait], always: &[TypespaceTrait]) -> Self {
         Self(
-            ALL_TRAITS
-                .into_iter()
+            TypespaceTrait::iter()
                 .map(|trait_| {
                     let provision = match (never.contains(&trait_), always.contains(&trait_)) {
                         (true, _) => TraitProvision::Never,
@@ -911,9 +911,8 @@ impl ProvisionTable {
             TypespaceTrait::Deserialize,
             TypespaceTrait::Default,
         ];
-        let never = ALL_TRAITS
-            .into_iter()
-            .filter(|trait_| !forwarded.contains(trait_))
+        let never = TypespaceTrait::iter()
+            .filter(|tt| !forwarded.contains(tt))
             .collect::<Vec<_>>();
         Self::new(&never, &[TypespaceTrait::Default])
     }

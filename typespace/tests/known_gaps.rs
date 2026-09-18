@@ -143,7 +143,7 @@ fn json_value_property_in_default_state_renders() {
 // gets neither impl.
 //
 // `feasibility` in `trait_resolution.rs` answers
-// `ManuallyRealizable(vec![])` for both traits on any constrained
+// `IfSomeChildren(vec![])` for both traits on any constrained
 // newtype: a constrained newtype's FromStr parses the inner value and
 // then validates it, so the inner type owes nothing. The allow/deny arm
 // of `render_constraint_impl` in `build/structs.rs` then writes

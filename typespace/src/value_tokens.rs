@@ -30,13 +30,19 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
                 // serde_json::Number cannot hold one, so any f64 read
                 // out of a Number converts back.
                 quote! {
-                    ::serde_json::Value::Number(::serde_json::Number::from_f64(#n).unwrap())
+                    ::serde_json::Value::Number(
+                        ::serde_json::Number::from_f64(#n).unwrap()
+                    )
                 }
             } else {
-                // A number that is none of i64, u64, or f64 (possible
-                // only under serde_json's arbitrary_precision feature)
-                // has no literal form here.
-                panic!("Invalid number")
+                // A number, the fourth kind! Practically this happens if
+                // serde_json's arbitrary_precision feature is enabled.
+                let value_as_str = number.to_string();
+                quote! {
+                    ::serde_json::from_str::<::serde_json::Value>(
+                        #value_as_str
+                    ).unwrap()
+                }
             }
         }
         serde_json::Value::String(s) => quote! {
@@ -60,6 +66,36 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
                     ::serde_json::Map::from_iter([#(#entries),*])
                 )
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::value_tokens;
+
+    /// The three number kinds that have a Rust literal form.
+    ///
+    /// The fourth kind, a number that is none of i64, u64, or f64,
+    /// exists only when serde_json's `arbitrary_precision` feature is
+    /// on. That feature belongs to the consumer's build rather than to
+    /// typespace, so no test here can construct one; see the comment
+    /// on that arm.
+    #[test]
+    fn each_number_kind_renders() {
+        let cases = [
+            ("-7", "from (- 7i64)"),
+            // Above i64::MAX, so as_i64 declines and as_u64 answers.
+            ("18446744073709551615", "from (18446744073709551615u64)"),
+            ("1.5", "from_f64 (1.5f64)"),
+        ];
+        for (literal, expected) in cases {
+            let value = serde_json::from_str::<serde_json::Value>(literal).unwrap();
+            let rendered = value_tokens(&value).to_string();
+            assert!(
+                rendered.contains(expected),
+                "{literal} rendered as {rendered}, wanted {expected}",
+            );
         }
     }
 }

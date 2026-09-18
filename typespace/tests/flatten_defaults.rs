@@ -7,22 +7,21 @@
 //! outer struct names the inner struct's fields directly, and the walk
 //! in `default.rs` routes each key to whichever property claims it.
 //!
-//! The rules these tests pin:
+//! The rules these tests validate:
 //!
-//! - A named property claims its own key first. A flattened property
-//!   receives only what is left, which is what serde does at
-//!   deserialization and what keeps a flattened map from swallowing
-//!   the outer struct's own properties.
-//! - Every flattened property receives the same leftover keys and
-//!   takes what it recognizes, so two flattened properties each end up
-//!   with their own.
+//! - A named property claims its own key first. A flattened property receives
+//!   only what is left unclaimed, which is what serde does at deserialization
+//!   and what keeps a flattened map from swallowing the outer struct's own
+//!   properties.
+//! - Every flattened property receives the same leftover keys and takes what
+//!   it recognizes, so two flattened properties each end up with their own.
 //! - A key nothing claims is tolerated, matching serde, except under
-//!   `deny_unknown_fields`, where it is an error. The strictness of
-//!   the default-value check follows the strictness the struct itself
-//!   declares.
-//! - A value a flattened property cannot use leaves an optional one
-//!   absent rather than failing the whole walk, so a malformed value
-//!   there is indistinguishable from a deliberately absent one.
+//!   `deny_unknown_fields`, where it is an error. The strictness of the
+//!   default-value check follows the strictness the struct itself declares.
+//!   Note that `deny_unknown_fields` is incompatible with `flatten`.
+//! - If a flattened property is optional, then not satisfying that properties
+//!   own required values simply leaves the value as absent rather than
+//!   resulting in an error.
 //! - `deny_unknown_fields` alongside a flattened property is refused by
 //!   `finalize`, since serde cannot honor the pair.
 //!
@@ -168,8 +167,7 @@ fn two_flattened_properties_each_claim_their_own_keys() {
     assert!(body.contains("c: Some(3_u32)"), "{body}");
 }
 
-/// A key no property claims, with no flattened property to absorb it,
-/// is a mistake in the default value and `finalize` says so.
+/// A key no property claims is not allowed with `deny_unknown_fields`.
 ///
 /// typify silently drops such a key. Rejecting it is the stricter
 /// reading, and it matches how the walk already treats a required

@@ -1,8 +1,10 @@
 // Copyright 2026 Oxide Computer Company
 
+use strum::IntoEnumIterator;
+
 use crate::error::Error;
 use crate::settings::ContainerType;
-use crate::{ALL_TRAITS, TraitProvision, TypespaceTrait, TypespaceTraitSet};
+use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 /// An externally defined type emitted by its Rust path; construct one
 /// with [`Native::new`] or [`Native::new_string_like`].
@@ -97,9 +99,8 @@ impl<Id> Native<Id> {
     /// Panics if `path` cannot be parsed as a Rust type.
     pub fn new(path: &str, impls: TypespaceTraitSet, parameters: Vec<Id>) -> Self {
         let always = impls.iter().copied().collect::<Vec<_>>();
-        let never = ALL_TRAITS
-            .into_iter()
-            .filter(|trait_| !impls.contains(trait_))
+        let never = TypespaceTrait::iter()
+            .filter(|tt| !impls.contains(tt))
             .collect::<Vec<_>>();
         let obligations = vec![TypespaceTraitSet::empty(); parameters.len()];
         Self {
@@ -151,11 +152,10 @@ impl<Id> Native<Id> {
     /// extension has: it names a Rust type and the little it knows
     /// about it, and has no way to state anything further.
     pub fn with_rest_unknown(self) -> Self {
-        let rest = ALL_TRAITS
-            .into_iter()
-            .filter(|trait_| {
+        let rest = TypespaceTrait::iter()
+            .filter(|tt| {
                 matches!(
-                    self.disposition(*trait_),
+                    self.disposition(*tt),
                     TraitProvision::Never | TraitProvision::Unknown
                 )
             })

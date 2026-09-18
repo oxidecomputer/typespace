@@ -206,7 +206,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
                 .is_some_and(|b| b.traits.contains(&trait_)),
             // A type alias has no impl site of its own; its answer is
             // entirely its target's, exactly as required resolution
-            // treats it (see `Feasibility::Forward`).
+            // treats it (see `Feasibility::IfAllChildren`).
             build::Type::TypeAlias(a) => self.typespace.get_type(&a.target).has_trait(trait_, seen),
             typ => crate::trait_resolution::unnamed_provides(
                 typ,

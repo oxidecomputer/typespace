@@ -157,6 +157,14 @@
 //! If there are types that include implementations of fallible conversions, the
 //! `error` mod is generated to contain the error.
 //!
+//! ## When `Default` requires `serde_json`
+//!
+//! Types or fields may have associated default values. The value is
+//! constructde by generated code explicitly (i.e. without `Deserialize`). The
+//! exception is Native types. Since the construction of a native type
+//! is--necessarily--beyond the knowledge of typespace, the generated code
+//! constructs it with a call to [`serde_json::from_str`].
+//!
 //! # Dependencies of generated code
 //!
 //! Rendered code can reference crates that typespace itself does not depend
@@ -169,12 +177,13 @@
 //!   [`TypespaceTrait::Deserialize`]; each is emitted with serde derives or
 //!   hand-written `Serialize`/`Deserialize` impls. Settings that require
 //!   neither trait produce no derive, no impl, and no `#[serde(..)]`
-//!   attribute, and so no dependency.
+//!   attribute (and so no dependency).
 //! - [serde_json](https://crates.io/crates/serde_json): required when
 //!   the output contains a [`build::Type::JsonValue`] (rendered as
-//!   `::serde_json::Value`), and in several situations that involve
-//!   deserializing a type from a JSON value such as default value handling and
-//!   deserializing various types.
+//!   `::serde_json::Value`), in several situations that involve
+//!   serializing or deserializing a type from a JSON value such as default
+//!   value handling and deserializing various types (see above), or when
+//!   a `schemars::JsonSchema` implementation includes a default value.
 //! - [regress](https://crates.io/crates/regress): required if the
 //!   output contains a [`build::NewtypeStruct`] whose
 //!   [`build::NewtypeConstraints::String`] carries a pattern. Each
@@ -290,7 +299,9 @@ use crate::settings::{OptionalNullable, Settings, Std};
 // TODO 9/3/2026
 // The order of these turns out to be the output order; that's probably wrong
 // or we want to sort these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, strum::EnumIter,
+)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum TypespaceTrait {
@@ -446,25 +457,6 @@ impl TypespaceTraitSet {
         self.0.difference(&other.0)
     }
 }
-
-// REVIEW: this seems like it's likely going to fall out of date when we add a new variants.
-/// Every trait typespace tracks, in declaration order.
-pub(crate) const ALL_TRAITS: [TypespaceTrait; 14] = [
-    TypespaceTrait::Deserialize,
-    TypespaceTrait::Serialize,
-    TypespaceTrait::Clone,
-    TypespaceTrait::Copy,
-    TypespaceTrait::Debug,
-    TypespaceTrait::Display,
-    TypespaceTrait::FromStr,
-    TypespaceTrait::Eq,
-    TypespaceTrait::Hash,
-    TypespaceTrait::Ord,
-    TypespaceTrait::PartialEq,
-    TypespaceTrait::PartialOrd,
-    TypespaceTrait::Default,
-    TypespaceTrait::JsonSchema,
-];
 
 /// What a [`build::Native`] or a configured container
 /// ([`settings::ContainerType`]) declares about one trait.
@@ -1189,7 +1181,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::NewtypeStruct(n) => {
                     let name = n.common.built_name().to_string();
-                    let tokens = n.render(self, &mut out);
+                    let tokens = n.render(id, self, &mut out);
                     out.cs().add_item(name, tokens);
                 }
                 Type::TypeAlias(a) => {
@@ -2216,5 +2208,59 @@ impl TokenPrint for proc_macro2::TokenStream {
         self.into_iter()
             .map(|tt| tt.to_string())
             .collect::<String>()
+    }
+}
+
+#[cfg(test)]
+mod trait_enumeration_tests {
+    use super::TypespaceTrait;
+    use strum::IntoEnumIterator;
+
+    /// Every `TypespaceTrait` variant is reachable through `iter()`.
+    ///
+    /// `Native::new`, `Native::with_rest_unknown`, and
+    /// `ProvisionTable::new` each build a table by iterating the enum,
+    /// so a variant the iteration missed would silently get no entry.
+    /// The derive makes that impossible, and this pins the count so a
+    /// change to the enum is a change someone made on purpose.
+    #[test]
+    fn iter_reaches_every_trait() {
+        let seen = TypespaceTrait::iter().collect::<Vec<_>>();
+        assert_eq!(seen.len(), 14, "{seen:?}");
+
+        // Spot-check the ends, since a derive that silently truncated
+        // would still produce a plausible-looking prefix.
+        assert_eq!(seen.first(), Some(&TypespaceTrait::Deserialize));
+        assert_eq!(seen.last(), Some(&TypespaceTrait::JsonSchema));
+    }
+
+    /// `iter()` answers in declaration order.
+    ///
+    /// The order is load-bearing: the dated note above the enum
+    /// records that it decides the order traits render in. Anything
+    /// that reorders the enum therefore reorders generated output, and
+    /// should have to move this test to do it.
+    #[test]
+    fn iter_answers_in_declaration_order() {
+        use TypespaceTrait::*;
+        assert_eq!(
+            TypespaceTrait::iter().collect::<Vec<_>>(),
+            vec![
+                Deserialize,
+                Serialize,
+                Clone,
+                Copy,
+                Debug,
+                Display,
+                FromStr,
+                Eq,
+                Hash,
+                Ord,
+                PartialEq,
+                PartialOrd,
+                Default,
+                JsonSchema,
+            ],
+        );
     }
 }

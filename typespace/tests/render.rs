@@ -3687,7 +3687,7 @@ fn test_default_impossible_required_property() {
 
 /// `Default` on the struct shapes that carry no property states.
 ///
-/// A tuple struct and a unit struct answer `Derivable` and pick the trait
+/// A tuple struct and a unit struct answer `IfAllChildren` and pick the trait
 /// up as a derive. A newtype struct answers `Impossible`, so it gets
 /// neither a derive nor an impl.
 ///
@@ -3867,7 +3867,7 @@ fn test_comparison_derives_typify_compat_off() {
 
 /// An enum carrying a whole-type default value renders no `Default`.
 ///
-/// `feasibility` answers `ManuallyRealizable` for such an enum, so
+/// `feasibility` answers `IfSomeChildren` for such an enum, so
 /// `Default` is in its trait set, but nothing writes the impl.
 ///
 // ATTN REVIEWER: this is the gap the `TODO 9/4/2026` in `enums.rs`
@@ -4912,7 +4912,7 @@ fn test_render_constrained_newtype_allow_list() {
     }
 }
 
-// `feasibility` in `trait_resolution.rs` answers `ManuallyRealizable`
+// `feasibility` in `trait_resolution.rs` answers `IfSomeChildren`
 // for Display and FromStr on two kinds of type, and the renderer writes
 // the impls that answer stands for:
 //
@@ -4929,7 +4929,7 @@ fn test_render_constrained_newtype_allow_list() {
 // pin the impls, so a renderer that dropped one would panic rather
 // than emit a type missing the trait it was granted.
 
-// `feasibility` answers `ManuallyRealizable(inner)` for both traits,
+// `feasibility` answers `IfSomeChildren(inner)` for both traits,
 // and required resolution grants them: the `String` inner satisfies the
 // forwarded obligations.
 #[test]
@@ -5058,7 +5058,7 @@ fn maximal_settings_newtype_renders() {
     );
 }
 
-// `feasibility` answers `ManuallyRealizable` with the payload types as
+// `feasibility` answers `IfSomeChildren` with the payload types as
 // obligations, and both payloads (`String`, `u32`) satisfy them, so
 // finalization grants the trait and `Enum::render` writes the impl.
 #[test]

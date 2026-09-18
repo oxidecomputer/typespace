@@ -1520,6 +1520,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
     pub(crate) fn render(
         &self,
+        id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
@@ -1528,7 +1529,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 TypeCommon {
                     name,
                     description,
-                    default: _,
+                    default,
                     built:
                         Some(TypeCommonBuilt {
                             traits,
@@ -1562,6 +1563,22 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let constraint_impl = self.render_constraint_impl(typespace, out, &mut traits);
 
+        let default_impl = traits.contains(&TypespaceTrait::Default).then(|| {
+            if let Some(JsonValue(default_value)) = default {
+                traits.remove(TypespaceTrait::Default);
+                let body = typespace.generate_default_value_for_impl(default_value, id);
+                quote! {
+                    impl ::std::default::Default for #name_ident {
+                        fn default() -> Self {
+                            #body
+                        }
+                    }
+                }
+            } else {
+                Default::default()
+            }
+        });
+
         let derive_attr = typespace.render_derives(&traits, extra_derives, wraps_string);
         let attrs = typespace.render_attrs(extra_attrs);
 
@@ -1593,6 +1610,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             }
 
             #constraint_impl
+            #default_impl
         }
     }
 
@@ -1621,21 +1639,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         match constraints {
             NewtypeConstraints::None => {
-                // An unconstrained newtype parses and prints according to its inner
-                // value.
-
-                // does: `feasibility` grants both traits with an obligation on
-                // the inner type, so both impls forward to it. A constrained
-                // newtype takes both traits out of the set inside
-                // `render_constraint_impl`, so `remove` answers false here and
-                // neither impl is written twice.
-                //
-                // TYPIFY COMPAT: a newtype directly over `String` takes the
-                // value verbatim, so its FromStr cannot fail and it gets no
-                // TryFrom impls. Every other inner type parses, so FromStr
-                // forwards to the inner type's and the two TryFrom impls
-                // forward to that.
+                // An unconstrained newtype parses and prints according to its
+                // inner value.
                 let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    // TYPIFY COMPAT: a newtype directly over `String` takes
+                    // the value verbatim, so its FromStr cannot fail and it
+                    // gets no TryFrom impls. Every other inner type parses, so
+                    // FromStr forwards to the inner type's and the two TryFrom
+                    // impls forward to that.
                     let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
                     if wraps_string {
                         quote! {

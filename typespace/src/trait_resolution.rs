@@ -530,27 +530,24 @@ fn type_kind<Id>(ty: &Type<Id>) -> &'static str {
 
 /// Consult the end-state feasibility table for `trait_name` on `ty`.
 ///
-/// Only called for named types ([`Type::is_named`]); the table is
-/// documented in full in the trait propagation design plan. In brief:
-/// `Display` and `FromStr` have no derive and are impossible on plain
-/// structs and tuple structs and on unit structs (their serde impls
-/// are already hand-written, but that says nothing about rendering
-/// text); newtype structs forward both to their inner type (a
-/// constrained newtype's `FromStr` validates instead, with no
-/// obligation); enums realize both with a hand-written impl when every
-/// variant is a simple unit variant, or by forwarding to variant
-/// payloads when the enum is untagged, and are otherwise impossible.
-/// The two part company at one place: an untagged enum whose `FromStr`
-/// would be decided by a payload that parses every string goes without
-/// `FromStr` while keeping `Display`.
-/// `Default` needs every constituent to implement it, unless the type
-/// carries an attached default value, in which case the manual impl
-/// needs nothing further (an enum with no attached default value has
-/// no derive and no invented `#[default]` variant, so it is
-/// impossible). Every other trait derives normally--`Copy` included:
-/// `Derivable` already means every contained child must have the
-/// trait, which is exactly `derive(Copy)`'s own condition, so no
-/// separate case is needed for it.
+/// Only called for named types ([`Type::is_named`]). `Display` and `FromStr`
+/// have no derive and are impossible on plain structs and tuple structs and on
+/// unit structs (their serde impls are already hand-written, but that says
+/// nothing about rendering text); newtype structs forward both to their inner
+/// type (a constrained newtype's `FromStr` validates instead, with no
+/// obligation); enums realize both with a hand-written impl when every variant
+/// is a simple unit variant, or by forwarding to variant payloads when the
+/// enum is untagged with only item variants, and are otherwise impossible.
+///
+/// There's one additional caveat: an untagged enum that has a variant that
+/// accepts all strings would effectively shadow other variants. In such a
+/// case, we don't provide `FromStr` while we still may provide `Display`
+///
+/// `Default` needs every child to implement it, unless the type carries an
+/// attached default value, in which case the manual impl needs nothing further
+/// (an enum with no attached default value has no derive and no invented
+/// `#[default]` variant, so it is impossible). Every other trait is handled
+/// normally.
 fn feasibility<Id>(
     types: &BTreeMap<Id, Type<Id>>,
     type_id: &Id,
