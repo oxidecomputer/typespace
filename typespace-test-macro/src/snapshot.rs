@@ -165,16 +165,25 @@ fn expand_inner(
             let __snapshot_path = ::std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join(#filename);
             let __content: ::std::string::String = #pretty;
-            let __needs_update = match ::std::fs::read_to_string(&__snapshot_path) {
-                Ok(ref existing) => existing != &__content,
-                Err(_) => true,
-            };
-            if __needs_update {
-                if let Some(parent) = __snapshot_path.parent() {
-                    ::std::fs::create_dir_all(parent).ok();
-                }
-                ::std::fs::write(&__snapshot_path, __content)
-                    .expect("failed to write snapshot");
+            // Compare with line endings normalized: the rendered output
+            // always carries Unix line endings, while a checkout on
+            // Windows converts the snapshot file to CRLF, and comparing
+            // the bytes would report every snapshot as changed.
+            let __existing = ::std::fs::read_to_string(&__snapshot_path)
+                .unwrap_or_default();
+            if ::newline_converter::dos2unix(&__existing)
+                != ::newline_converter::dos2unix(&__content)
+            {
+                // Without EXPECTORATE=overwrite this panics with a
+                // unified diff and leaves the file alone, so a test run
+                // reports what changed instead of rewriting the
+                // snapshot under the reader.
+                ::expectorate::assert_contents(&__snapshot_path, &__content);
+                // Only reachable under EXPECTORATE=overwrite, which
+                // rewrote the file above. The `include_str!` at the top
+                // makes the next build recompile against the new
+                // contents; stop here rather than run the body against
+                // the `import` module built from the old ones.
                 panic!(
                     "snapshot updated, run tests again: {}",
                     __snapshot_path.display()

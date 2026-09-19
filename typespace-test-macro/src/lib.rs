@@ -18,12 +18,24 @@ mod snapshot;
 ///
 /// The annotated function is replaced by an inline block that:
 /// 1. Evaluates the expression, pretty-prints it, and compares against
-///    the snapshot file; rewrites the file and panics if the two differ.
+///    the snapshot file; panics with a unified diff if the two differ.
 /// 2. Embeds the snapshot file content as `mod import { ... }` (read at
 ///    macro expansion time).
 /// 3. Runs the original function body.
 ///
 /// The annotated function must have no parameters.
+///
+/// The comparison in step 1 normalizes line endings, so a snapshot that
+/// a Windows checkout converted to CRLF still matches the rendered
+/// output.
+///
+/// A differing snapshot is reported, not rewritten. Run with
+/// `EXPECTORATE=overwrite` to accept the new output: the macro writes
+/// the file and panics telling you to re-run, since the `import` module
+/// in step 2 was built from the old contents.
+///
+/// The expansion calls `expectorate` and `newline_converter`, so a crate
+/// using this macro needs both as dev-dependencies.
 ///
 /// Setting `TYPESPACE_SNAPSHOT_NO_INCLUDE` to any non-empty value skips
 /// steps 2 and 3: the expression is evaluated and written to the snapshot
