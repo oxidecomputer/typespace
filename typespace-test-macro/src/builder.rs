@@ -2540,8 +2540,9 @@ mod tests {
 
     /// `#[deny_unknown_fields]` on a struct and an enum: lowers to a
     /// `.deny_unknown_fields()` call in the builder chain. Rendering
-    /// does not read the flag yet, so this only proves the lowering
-    /// compiles and the type builds, not any effect on output.
+    /// emits it as a serde attribute; that effect is pinned by the
+    /// `test_deny_unknown_fields_*` tests in typespace's render suite,
+    /// and this snapshot covers only the lowering.
     #[test]
     fn test_deny_unknown_fields() {
         let out = expand_pretty(quote! {
@@ -2561,11 +2562,12 @@ mod tests {
         expectorate::assert_contents("tests/output/test_deny_unknown_fields.rs", &out);
     }
 
-    /// `#[derive = [..]]` and `#[attr = [..]]` on each shape of named
+    /// `#[derive = [..]]` and `#[attr = [..]]` on each kind of named
     /// type: they lower to `.extra_derives(..)` / `.extra_attrs(..)`
-    /// calls in the builder chain. Rendering does not read either list
-    /// yet, so this only proves the lowering compiles and the types
-    /// build, not any effect on output.
+    /// calls in the builder chain. What the lists do to rendered
+    /// output is pinned by the `test_extra_derives_*` tests in
+    /// typespace's render suite; this snapshot covers only the
+    /// lowering.
     #[test]
     fn test_extra_derives_and_attrs() {
         let out = expand_pretty(quote! {

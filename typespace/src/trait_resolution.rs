@@ -3530,8 +3530,7 @@ mod tests {
     // a phase-1 grant meeting a phase-2 removal, the container and leaf
     // answers the desired phase reads, untagged enums, cycles entered
     // from any member, the causal chain the skip log carries, and the
-    // depth resolution has to survive. Each states what typespace
-    // should do, which is not always what it does.
+    // depth resolution has to survive.
 
     /// A supertrait is granted on its own account only when desired.
     #[test]
