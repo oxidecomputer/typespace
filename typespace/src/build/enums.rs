@@ -270,20 +270,21 @@ impl<Id> Enum<Id> {
     pub(crate) fn check_field_defaults(
         &self,
         typespace: &TypespaceBuilder<Id>,
-    ) -> Result<BTreeSet<Id>, Error<Id>>
+        owner_id: &Id,
+    ) -> Result<Vec<crate::Obligation<Id>>, Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         self.variants
             .iter()
-            .try_fold(BTreeSet::new(), |natives, variant| match &variant.details {
+            .try_fold(Vec::new(), |obligations, variant| match &variant.details {
                 VariantDetails::Struct(items) => {
-                    items.iter().try_fold(natives, |mut natives, prop| {
-                        natives.extend(prop.check_defaults(typespace)?);
-                        Ok(natives)
+                    items.iter().try_fold(obligations, |mut obligations, prop| {
+                        obligations.extend(prop.check_defaults(typespace, owner_id)?);
+                        Ok(obligations)
                     })
                 }
-                _ => Ok(natives),
+                _ => Ok(obligations),
             })
     }
 }

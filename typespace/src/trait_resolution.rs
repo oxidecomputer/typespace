@@ -31,19 +31,29 @@
 //! ## Phase 1: required traits flow down to children
 //!
 //! [`required_resolution`] initializes its traversal with every place a
-//! REQUIREMENT originates:
+//! REQUIREMENT originates unconditionally:
 //!
 //! - [`Settings::with_required_trait`] at every named type.
 //! - container obligations--what Map, Set, Vec, and a declared
 //!   optional-nullable wrapper require of their type parameters (if
 //!   anything).
-//! - properties rendered with `#[serde(default)]`; these are populated via a
-//!   call to `Default::default()` so their types must implement `Default`.
-//! - native types inside an explicit default value; generated code constructs
-//!   these native types by deserializing, so the value demands `Deserialize`.
 //! - the inner type of a newtype whose constraint is a JSON schema; the
 //!   check serializes the inner value and validates the result, so that type
-//!   demands `Serialize`.
+//!   demands `Serialize` whatever the consumer asked for.
+//! - the natives an allow or deny list value reaches; the `TryFrom` impl that
+//!   renders the list constructs them by deserializing, and is always
+//!   carried, so they demand `Deserialize` whatever the consumer asked for.
+//!
+//! Two more requirements spawn mid-traversal, when `Deserialize` reaches a
+//! named type, because both describe code that renders inside its
+//! `Deserialize` impl and nowhere else ([`deserialize_charges`]):
+//!
+//! - properties rendered with `#[serde(default)]`; these are populated via a
+//!   call to `Default::default()` so their types must implement `Default`.
+//! - what a property-level default value obliges; its generated `defaults::`
+//!   function constructs native types by deserializing them and fills each
+//!   `#[serde(default)]` property the value leaves out of a struct it
+//!   constructs from that property type's `Default`.
 //!
 //! We descend the type graph with a work queue rather than recursion. Each
 //! item in the work queue represents a required work set, a target type; it
@@ -804,6 +814,54 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
     }
 }
 
+/// What deserializing a named type obliges beyond its children's own
+/// `Deserialize`, paired with the origin a conflict reports.
+///
+/// Serde expands `#[serde(default)]` into a call to the property
+/// type's `Default`, and a property-level default value renders as a
+/// `defaults::` function whose obligations the value walk recorded in
+/// `DefaultChecks::property_values`. Both render inside the
+/// `Deserialize` impl and nowhere else, so both phases weigh them
+/// where that trait is: `required_resolution` charges them when it
+/// arrives at the type, and `provides` refuses the grant while one is
+/// unmet. The counterpart, under a `Deserialize` antecedent, of the
+/// whole-type obligations `feasibility` weighs for `Default`.
+fn deserialize_charges<Id>(
+    type_id: &Id,
+    ty: &Type<Id>,
+    default_checks: &crate::DefaultChecks<Id>,
+) -> Vec<(RequirementOrigin<Id>, Obligation<Id>)>
+where
+    Id: Clone + Ord,
+{
+    serde_default_properties(ty)
+        .into_iter()
+        .map(|prop| {
+            (
+                RequirementOrigin::PropertyDefault(type_id.clone()),
+                Obligation {
+                    required: TypespaceTrait::Default,
+                    path: one_hop(type_id, Relation::Field(prop.rust_name.clone())),
+                    target: prop.type_id.clone(),
+                },
+            )
+        })
+        .chain(
+            default_checks
+                .property_values
+                .get(type_id)
+                .into_iter()
+                .flatten()
+                .map(|obligation| {
+                    (
+                        RequirementOrigin::DefaultValue(type_id.clone()),
+                        obligation.clone(),
+                    )
+                }),
+        )
+        .collect::<Vec<_>>()
+}
+
 fn required_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
@@ -839,17 +897,15 @@ where
             }
         }
 
-        fn init_default(parent_id: &Id, relation: Relation, child_id: &Id) -> Self {
-            let default_required =
-                expand_supertraits([TypespaceTrait::Default].into_iter().collect());
+        /// One charge from [`deserialize_charges`], enqueued because
+        /// `Deserialize` reached the type its origin names.
+        fn init_charge(charge: (RequirementOrigin<Id>, Obligation<Id>)) -> Self {
+            let (origin, obligation) = charge;
             Self {
-                target: child_id.clone(),
-                traits: default_required,
-                origin: RequirementOrigin::PropertyDefault(parent_id.clone()),
-                path: vec![PathStep {
-                    type_id: parent_id.clone(),
-                    relation,
-                }],
+                target: obligation.target,
+                traits: expand_supertraits([obligation.required].into_iter().collect()),
+                origin,
+                path: obligation.path,
             }
         }
 
@@ -970,26 +1026,11 @@ where
         }
     }
 
-    // A property whose state is StructPropertyState::Default renders as
-    // #[serde(default)], and serde's derive expands that into a call to
-    // T::default() on the property's type, so that type must implement
-    // Default. Note that this is default without a value **only**. Properties
-    // that are Optional or DefaultValue don't require `Default` (nor,
-    // obviously, does Required).
-    for (type_id, ty) in types.iter() {
-        for prop in serde_default_properties(ty) {
-            work.push_back(WorkItem::init_default(
-                type_id,
-                Relation::Field(prop.rust_name.clone()),
-                &prop.type_id,
-            ));
-        }
-    }
-
-    // A native-typed position in a default value is constructed in
-    // generated code by deserializing it (default.rs's Type::Native
-    // arm), so the value requires Deserialize of the native type.
-    for (native_id, owner_id) in &default_checks.deserialized {
+    // A native-typed position in an allow or deny list value is
+    // constructed in generated code by deserializing it (default.rs's
+    // Type::Native arm), inside a `TryFrom` impl the newtype always
+    // carries, so the value requires Deserialize of the native type.
+    for (native_id, owner_id) in &default_checks.list_values {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
     }
 
@@ -1098,6 +1139,18 @@ where
                     Feasibility::IfAllChildren => {
                         built_traits.add(trait_name);
                         all_children.push(trait_name);
+                        // Deserializing is what renders #[serde(default)]
+                        // and the defaults:: functions, so their charges
+                        // wait for the trait to arrive here rather than
+                        // seeding the queue: a type nothing deserializes
+                        // never pays them.
+                        if trait_name == TypespaceTrait::Deserialize {
+                            work.extend(
+                                deserialize_charges(&target, ty, default_checks)
+                                    .into_iter()
+                                    .map(WorkItem::init_charge),
+                            );
+                        }
                     }
                     Feasibility::IfSomeChildren(obligations) => {
                         built_traits.add(trait_name);
@@ -1634,17 +1687,33 @@ where
             // A wrapped property edge answers from the declared custom
             // optional-nullable wrapper, exactly as required resolution
             // routes it; every other edge asks the child directly.
+            // Granting Deserialize also needs what #[serde(default)]
+            // and the defaults:: functions call, exactly the charges
+            // the required phase enqueues when the trait arrives.
             Feasibility::IfAllChildren => {
-                classify_edges(ty, types, settings)
-                    .into_iter()
-                    .all(|edge| match edge {
-                        Edge::Wrapped {
-                            container,
-                            value_id,
-                            ..
-                        } => container_provides(container, trait_name, || child_has(&value_id)),
-                        Edge::Plain(_, child_id) => child_has(&child_id),
-                    })
+                let charges_met = trait_name != TypespaceTrait::Deserialize
+                    || deserialize_charges(type_id, ty, default_checks).iter().all(
+                        |(
+                            _,
+                            Obligation {
+                                required, target, ..
+                            },
+                        )| {
+                            has.get(target)
+                                .is_some_and(|traits| traits.contains(required))
+                        },
+                    );
+                charges_met
+                    && classify_edges(ty, types, settings)
+                        .into_iter()
+                        .all(|edge| match edge {
+                            Edge::Wrapped {
+                                container,
+                                value_id,
+                                ..
+                            } => container_provides(container, trait_name, || child_has(&value_id)),
+                            Edge::Plain(_, child_id) => child_has(&child_id),
+                        })
             }
             // Each obligation names the trait its target must have,
             // which is not always the trait being asked about here: a
@@ -1989,21 +2058,25 @@ mod tests {
 
     /// A property in the `Default` state renders as
     /// `#[serde(default)]`, and serde's derive expands that into a call
-    /// to `T::default()`, so the property's type is required to
-    /// implement `Default`. A type that cannot is a finalization error
-    /// naming the field it came from.
+    /// to `T::default()` inside the `Deserialize` impl, so when the
+    /// owner deserializes the property's type is required to implement
+    /// `Default`. A type that cannot is a finalization error naming the
+    /// field it came from.
     #[test]
     fn serde_default_property_conflicts_when_type_cannot_default() {
-        let builder = typespace_builder!(Settings::minimal(), {
-            struct Inner {
-                count: u32,
-            }
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Deserialize),
+            {
+                struct Inner {
+                    count: u32,
+                }
 
-            struct Outer {
-                #[default]
-                inner: Inner,
+                struct Outer {
+                    #[default]
+                    inner: Inner,
+                }
             }
-        });
+        );
 
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
@@ -2036,22 +2109,25 @@ mod tests {
 
     /// A struct-shaped enum variant renders its fields through the same
     /// path a struct's go through, `#[serde(default)]` included, so a
-    /// property in the `Default` state there makes the same
-    /// requirement.
+    /// property in the `Default` state there makes the same requirement
+    /// of a deserializing owner.
     #[test]
     fn serde_default_property_in_variant_conflicts() {
-        let builder = typespace_builder!(Settings::minimal(), {
-            struct Inner {
-                count: u32,
-            }
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Deserialize),
+            {
+                struct Inner {
+                    count: u32,
+                }
 
-            enum Shape {
-                Rect {
-                    #[default]
-                    inner: Inner,
-                },
+                enum Shape {
+                    Rect {
+                        #[default]
+                        inner: Inner,
+                    },
+                }
             }
-        });
+        );
 
         let Err(err) = builder.finalize(no_cycles) else {
             panic!("finalization unexpectedly succeeded");
@@ -2078,31 +2154,34 @@ mod tests {
 
     /// The type of a property in the `Default` state takes `Default`
     /// when it can. The requirement lands on that type alone: the
-    /// struct holding the property is not required to implement
-    /// anything.
+    /// deserializing struct holding the property is not required to
+    /// implement `Default` itself.
     #[test]
     fn serde_default_property_grants_default_to_its_type() {
-        let builder = typespace_builder!(Settings::minimal(), {
-            struct Inner {
-                #[default]
-                count: u32,
-            }
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Deserialize),
+            {
+                struct Inner {
+                    #[default]
+                    count: u32,
+                }
 
-            struct Outer {
-                #[default]
-                inner: Inner,
+                struct Outer {
+                    #[default]
+                    inner: Inner,
+                }
             }
-        });
+        );
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
         assert_eq!(
             built_traits(&typespace, "Inner"),
-            trait_set([TypespaceTrait::Default])
+            trait_set([TypespaceTrait::Default, TypespaceTrait::Deserialize])
         );
         assert_eq!(
             built_traits(&typespace, "Outer"),
-            TypespaceTraitSet::empty()
+            trait_set([TypespaceTrait::Deserialize])
         );
     }
 
@@ -2111,21 +2190,30 @@ mod tests {
     /// nothing of the element type.
     #[test]
     fn serde_default_property_requirement_stops_at_vec() {
-        let builder = typespace_builder!(Settings::minimal(), {
-            struct Tag {
-                id: u32,
-            }
+        let builder = typespace_builder!(
+            Settings::minimal().with_required_trait(TypespaceTrait::Deserialize),
+            {
+                struct Tag {
+                    id: u32,
+                }
 
-            struct S {
-                #[default]
-                tags: Vec<Tag>,
+                struct S {
+                    #[default]
+                    tags: Vec<Tag>,
+                }
             }
-        });
+        );
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
-        assert_eq!(built_traits(&typespace, "Tag"), TypespaceTraitSet::empty());
-        assert_eq!(built_traits(&typespace, "S"), TypespaceTraitSet::empty());
+        assert_eq!(
+            built_traits(&typespace, "Tag"),
+            trait_set([TypespaceTrait::Deserialize])
+        );
+        assert_eq!(
+            built_traits(&typespace, "S"),
+            trait_set([TypespaceTrait::Deserialize])
+        );
     }
 
     /// A required trait that a type can neither derive nor realize
