@@ -1111,7 +1111,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                             fn expecting(&self, formatter: &mut ::std::fmt::Formatter)
                                 -> ::std::fmt::Result
                             {
-                                // TODO could we specify the type here?
                                 formatter.write_str("a sequence")
                             }
 
@@ -1151,7 +1150,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         });
 
         // TODO 9/10/2026
-        // Do we only want to do this if `rest` is Some?
+        // Do we only want to do this if `rest` is Some? Or do we want to err
+        // on the side of more generated and less derive impls?
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
             let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
                 assert!(rest_ident.is_some());
@@ -1772,7 +1772,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 });
 
                 // TODO if the sub_type is a string we could probably impl
-                // TryFrom<&str> as well and FromStr.
+                // TryFrom<&str> as well and FromStr. But we don't want to for
+                // non-strings where the vibe of FromStr is more "parse me".
 
                 let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| quote! {});
                 let display_impl = traits.remove(TypespaceTrait::Display).then(|| quote! {});

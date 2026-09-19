@@ -160,10 +160,10 @@
 //! ## When `Default` requires `serde_json`
 //!
 //! Types or fields may have associated default values. The value is
-//! constructde by generated code explicitly (i.e. without `Deserialize`). The
+//! constructed by generated code explicitly (i.e. without `Deserialize`). The
 //! exception is Native types. Since the construction of a native type
 //! is--necessarily--beyond the knowledge of typespace, the generated code
-//! constructs it with a call to [`serde_json::from_str`].
+//! constructs it with a call to `serde_json::from_str`.
 //!
 //! # Dependencies of generated code
 //!
@@ -183,7 +183,7 @@
 //!   `::serde_json::Value`), in several situations that involve
 //!   serializing or deserializing a type from a JSON value such as default
 //!   value handling and deserializing various types (see above), or when
-//!   a `schemars::JsonSchema` implementation includes a default value.
+//!   a `schemars::JsonSchema` implementation requires it.
 //! - [regress](https://crates.io/crates/regress): required if the
 //!   output contains a [`build::NewtypeStruct`] whose
 //!   [`build::NewtypeConstraints::String`] carries a pattern. Each
@@ -255,36 +255,6 @@ use crate::output::Outputspace;
 use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
 use crate::settings::{OptionalNullable, Settings, Std};
 
-// 6/25/2025
-// I think I need a builder form e.g. of an enum or struct and then the
-// finalized form which probably is basically what typify shows today in its
-// public interface.
-
-// 7/11/2025
-// Thinking through some options on this one. At first I really wanted this to
-// be a generic interface that I might be able to use separate from typify. But
-// as I got into it, it was kind of a pain in the neck, and hard to keep
-// everything straight. So I decided to have it use numeric IDs for the types
-// and just map to and from the SchemaRef.
-//
-// That also kind of sucks because I lose the context of the SchemaRef e.g. if
-// I need to report errors. As much as I hate it, I think I should just embed
-// SchemaRef everywhere, get all the way through it, and then figure out if I
-// can clean up the boundaries.
-//
-// At a minimum it seems like I need several different forms of a type:
-// - Builder -- used to create *de novo* types. It would seem convenient to be
-//   able to express these in terms of SchemaRef only. A builder type should be
-//   able to (generically) tell you its dependencies. It's not really meant for
-//   user interaction beyond that.
-// - Internal -- used both before and after finalization; opaque to external
-//   consumers. It's where we might incrementally build the thing. (TODO and
-//   probably requires a bunch more figuring out)
-// - External -- for external consumers of the typify crate e.g. progenitor.
-//   This should only work (probably?) for finalized types. But there might be
-//   situations where we need to know a little about types before finalization.
-//   Something else to consider.
-
 /// A trait that typespace tracks for generated and native types.
 ///
 /// Uses of a type impose trait requirements that
@@ -295,10 +265,6 @@ use crate::settings::{OptionalNullable, Settings, Std};
 /// the required traits among its `impls` (or leave them unknown). A
 /// requirement that a type cannot satisfy--`Ord` on a float, say--produces an
 /// error.
-
-// TODO 9/3/2026
-// The order of these turns out to be the output order; that's probably wrong
-// or we want to sort these.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, strum::EnumIter,
 )]
@@ -404,9 +370,8 @@ impl std::fmt::Display for TypespaceTrait {
 
 /// An unordered collection of [`TypespaceTrait`] values.
 ///
-/// Used, for example, for the traits a [`build::Native`] type declares
-/// that it implements. Build one with [`TypespaceTraitSet::empty`] and
-/// [`TypespaceTraitSet::add`], or collect from an iterator of traits.
+/// Build one with [`TypespaceTraitSet::empty`] and [`TypespaceTraitSet::add`],
+/// or collect from an iterator of traits.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct TypespaceTraitSet(BTreeSet<TypespaceTrait>);
 
@@ -461,46 +426,39 @@ impl TypespaceTraitSet {
 /// What a [`build::Native`] or a configured container
 /// ([`settings::ContainerType`]) declares about one trait.
 ///
-/// A container is hand-authored in [`settings::Settings`], so its
-/// author is expected to know the container completely and answers
-/// with [`Never`](Self::Never), [`Always`](Self::Always), or
-/// [`IfParameters`](Self::IfParameters); declaring
-/// [`Unknown`](Self::Unknown) there is a configuration error, rejected
-/// during finalization (see `check_containers`). A native, in
-/// contrast, sometimes comes from a machine source--typify's
-/// `x-rust-type` schema extension, say--that names a Rust type and the
-/// little it knows about it, with no way to state more, so `Unknown`
-/// is how such a declaration says "cannot answer" rather than falsely
-/// claiming [`Never`](Self::Never).
+/// A container is hand-authored in [`settings::Settings`], so its author is
+/// expected to know the container completely and use [`Never`](Self::Never),
+/// [`Always`](Self::Always), or [`IfParameters`](Self::IfParameters)
+/// exclusively; declaring [`Unknown`](Self::Unknown) there is a configuration
+/// error, rejected during finalization. A native type, however, may come from
+/// an external source, so `Unknown` is permitted.
 ///
-/// The two resolution phases read [`Unknown`](Self::Unknown) in
-/// opposite directions: a requirement for it passes, because refusing
-/// to generate for a valid schema is worse than a compile error naming
-/// the real missing impl, and a desired trait is never granted from
-/// it, because granting one on a guess emits a derive nobody asked
-/// for.
+/// The two trait resolution phases read [`Unknown`](Self::Unknown) in opposite
+/// directions: a requirement for it passes, because refusing to generate for a
+/// valid schema is worse than a compile error naming the real missing impl,
+/// and a desired trait is never granted from it, because granting one on a
+/// guess emits a derive nobody asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TraitProvision {
-    /// No impl exists, whatever the type parameters implement.
+    /// No impl exists, irrespective of what the type parameters implement.
     Never,
-    /// The type implements the trait whatever its type parameters do.
+    /// The type implements the trait independent of its type parameters.
     Always,
     /// The type implements the trait when every type parameter does.
     IfParameters,
-    /// The declaration cannot answer either way.
+    /// The disposition of the trait is unknown.
     Unknown,
 }
 
-/// Accumulates the type graph prior to finalization.
+/// Accumulator for the type graph prior to finalization.
 ///
-/// Create one from [`settings::Settings`] with
-/// [`TypespaceBuilder::new`] (or [`TypespaceBuilder::default`] for
-/// default settings), insert every type--each named type along with
-/// every built-in and container type it references--under a
-/// caller-chosen ID with [`TypespaceBuilder::insert`], then call
-/// [`TypespaceBuilder::finalize`] to validate the graph and produce a
-/// [`Typespace`].
+/// Create one with [`settings::Settings`] by calling [`TypespaceBuilder::new`]
+/// (or [`TypespaceBuilder::default`] for default settings), insert every
+/// type--each named type along with every built-in and container type it
+/// references--under a caller-chosen ID with [`TypespaceBuilder::insert`],
+/// then call [`TypespaceBuilder::finalize`] to validate the graph and produce
+/// a [`Typespace`].
 pub struct TypespaceBuilder<Id> {
     types: BTreeMap<Id, Type<Id>>,
     settings: Settings,

@@ -2,12 +2,12 @@
 
 //! Trait resolution: determine the trait set for every type.
 //!
-//! A typespace holds a graph of types that refer to one another by ID.
-//! Whether a type can implement a trait depends on what its children
-//! implement, so no type can be finalized independently. This module
-//! propagates trait information to each type with the results landing in each
-//! named type's `TypeCommonBuilt`. Rendering emits code according to that set
-//! of traits (either via `derive` or a custom `impl`).
+//! A typespace holds a graph of types that refer to one another by ID. Whether
+//! a type can implement a trait depends on what its children implement, so no
+//! type can be finalized independently. This module propagates trait
+//! information to each type with the results landing in each named type's
+//! `TypeCommonBuilt`. Rendering emits code according to that set of traits
+//! (either via `derive` or a custom `impl`).
 //! [`Type::has_impl`](crate::view::Type::has_impl) answers consumer queries
 //! from it (generated code and the answers about it cannot disagree). Unnamed
 //! types (built-ins, Box, Map, etc.) don't store a trait set directly; a query
@@ -934,13 +934,6 @@ where
     // Default. Note that this is default without a value **only**. Properties
     // that are Optional or DefaultValue don't require `Default` (nor,
     // obviously, does Required).
-    //
-    // TODO 9/12/2026
-    // Only a Deserialize impl expands #[serde(default)], so this is
-    // conditional on the owner receiving Deserialize, and seeding it
-    // for every type charges one that never deserializes. The
-    // conflict it raises even says the property "deserializes with
-    // #[serde(default)]" of a type with no deserialize path.
     for (type_id, ty) in types.iter() {
         for prop in serde_default_properties(ty) {
             work.push_back(WorkItem::init_default(
@@ -954,11 +947,6 @@ where
     // A native-typed position in a default value is constructed in
     // generated code by deserializing it (default.rs's Type::Native
     // arm), so the value requires Deserialize of the native type.
-    //
-    // TODO 9/12/2026
-    // A property-level value reaches generated code only through the
-    // owner's `defaults::` call, so this too is conditional on the
-    // owner receiving Deserialize rather than a requirement to seed.
     for (native_id, owner_id) in &default_checks.deserialized {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
     }
@@ -1666,19 +1654,19 @@ where
 
 /// Give each named type the desired traits that it's capable of supporting.
 ///
-/// Each type starts out assumed to have every desired trait. The traits a type
-/// cannot implement seed a work queue that poisons that trait in the
-/// referencing types. This poisons their own referrers in turn, until the
-/// queue drains. Some types don't require a referenced type to implement a
-/// trait in order to provide it. For example a `Vec<T>` can implement
-/// `Default` irrespective of whether `T` does.
+/// Each type starts out out with all traits from the required pass, all
+/// intrinsic traits (e.g. for native types), **and** all the desired traits,
+/// which we initially assume to be valid. The traits a type cannot implement
+/// seed a work queue that poisons that trait in the referencing types. This
+/// spawns new work to poison any transitive references, and so on until the
+/// queue is empty.
 ///
 /// This is effectively the reverse of what we do when forward-propagating
-/// required traits. Types retain the desired trait because no transitive
-/// child poisons it.
+/// required traits. Types retain a desired trait because no transitive
+/// child has poisoned it.
 ///
 /// Unlike with required traits, a failure to implement a desired trait is
-/// logged but doesn't produce an error.
+/// logged (for debugging) but doesn't produce an error.
 fn desired_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
@@ -1703,6 +1691,8 @@ fn desired_resolution<Id>(
         },
     );
 
+    // Start with desired traits and all traits a type has either from the
+    // required pass or intrinsically.
     let has = types
         .keys()
         .map(|type_id| {

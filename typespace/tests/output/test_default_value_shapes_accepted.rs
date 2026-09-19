@@ -19,7 +19,10 @@ impl ::std::convert::From<::std::net::IpAddr> for Addressed {
 }
 impl ::std::default::Default for Addressed {
     fn default() -> Self {
-        Addressed(::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"").unwrap())
+        Addressed(
+            ::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"")
+                .expect("invalid default provided"),
+        )
     }
 }
 #[derive(::serde::Deserialize, ::serde::Serialize, Debug, PartialEq)]
@@ -43,7 +46,10 @@ impl ::std::convert::From<::serde_json::Value> for Blob {
 }
 impl ::std::default::Default for Blob {
     fn default() -> Self {
-        Blob(::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}").unwrap())
+        Blob(
+            ::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}")
+                .expect("invalid default provided"),
+        )
     }
 }
 pub type Count = u32;

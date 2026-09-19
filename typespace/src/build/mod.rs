@@ -40,7 +40,7 @@ pub use enums::*;
 pub use native::*;
 pub use structs::*;
 
-// 9.15.2025
+// TODO 9.15.2025
 // Little bit of a random thought: "Native" is actually kind of a catch-all for
 // which things like boolean, integer, unit, etc. could apply. I think we'll
 // eventually want more of a builder interface to construct types and then
@@ -445,18 +445,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
             Type::Array(id, _) => vec![id],
             Type::Tuple(items) => items.iter_mut().collect(),
 
-            // TODO maybe native types could have children? Right now these are
-            // just for self-contained types...
-            //
-            // Type::children() now reports a native's type parameters
-            // (see its doc), but this method and contained_children
-            // stay as they are: they exist to find containment cycles
-            // that need a Box to stay finite-sized, and typespace has
-            // no way to know whether a native holds its parameter by
-            // value or behind its own indirection (a `Vec<T>`-like
-            // native versus a `struct W<T>(T)`-like one), the same
-            // reason Box, Vec, Map, and Set are absent below.
+            // Type::children() reports a native's type parameters (see its
+            // doc). This method and contained_children exist to find
+            // containment cycles that need a Box to stay finite-sized, and
+            // typespace has no way to know whether a native holds its
+            // parameter by value or behind its own indirection (a
+            // `Vec<T>`-like native versus a `struct W<T>(T)`-like one), the
+            // same reason Box, Vec, Map, and Set are absent below.
             Type::Native(_) => Default::default(),
+
             Type::Box(_)
             | Type::Vec(_)
             | Type::Map(_, _)

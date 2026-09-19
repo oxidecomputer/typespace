@@ -1,5 +1,7 @@
 // Copyright 2026 Oxide Computer Company
 
+//! Validate and generate code for default values.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
@@ -127,14 +129,6 @@ pub(crate) fn shared_default_fn<Id: Ord>(
                 DefaultHelper::U64,
                 format!("defaults::default_u64::<{}, {}>", itype, value),
             ),
-            // ATTN REVIEWER: typify 1 checks for a NonZero type only
-            // in the unsigned branch, so it routes a negative default
-            // on a signed NonZero type to default_i64, which does not
-            // compile: NonZeroI32 converts from NonZeroU64 and from
-            // i32, but not from i64. No typify 1 golden covers it. The
-            // per-property function builds the value with
-            // `NonZeroI32::new(-5).unwrap()`, which compiles, so send
-            // it there.
             (_, Some(_)) if itype.starts_with(STD_NUM_NONZERO_PREFIX) => return None,
             (_, Some(value)) => (
                 DefaultHelper::I64,
@@ -428,8 +422,6 @@ where
                 // A native type's value is whatever its own Deserialize
                 // accepts, which we have no way to check here; a value that
                 // doesn't fit fails the unwrap() in the generated code.
-                // TODO 9/4/2026
-                // expect rather than unwrap?
 
                 if self.mode == Mode::Check {
                     state.obligations.push(Obligation {
@@ -442,7 +434,8 @@ where
                 Ok(self.generate(|| {
                     let type_path = self.render_ident(id);
                     quote! {
-                        ::serde_json::from_str::<#type_path>(#text).unwrap()
+                        ::serde_json::from_str::<#type_path>(#text)
+                            .expect("invalid default provided")
                     }
                 }))
             }
@@ -498,7 +491,9 @@ where
                         .map(|elem| elem.expect("a value should be generated with Mode::Generate"));
 
                     // TODO 9/8/2026
-                    // TYPIFY COMPAT: could rationalize this and Set below
+                    // TYPIFY COMPAT: could rationalize this and Set below;
+                    // typify expects vec![] explicitly, but we could change
+                    // that.
                     quote! { vec![ #( #elems ),* ] }
                 }))
             }
@@ -688,7 +683,8 @@ where
                 let text = value.to_string();
                 Ok(self.generate(|| {
                     quote! {
-                        ::serde_json::from_str::<::serde_json::Value>(#text).unwrap()
+                        ::serde_json::from_str::<::serde_json::Value>(#text)
+                            .expect("invalid default provided")
                     }
                 }))
             }
@@ -778,13 +774,7 @@ where
                 .cloned()
                 .unwrap_or_else(|| Relation::Field(prop_info.rust_name.clone()));
 
-            // TODO 9/12/2026
-            // prop_info.wire_name() ?
-            let named = match &prop_info.json_name {
-                StructPropertySerde::None => Some(&prop_info.rust_name),
-                StructPropertySerde::Rename(rename) => Some(rename),
-                StructPropertySerde::Flatten => None,
-            };
+            let named = prop_info.wire_name();
 
             if let Some(prop_name) = named {
                 fields.insert(prop_name);
@@ -1020,6 +1010,7 @@ where
         if deny_unknown_fields {
             let extra_keys = map
                 .keys()
+                .map(String::as_str)
                 .collect::<BTreeSet<_>>()
                 .difference(&fields)
                 .map(ToString::to_string)
@@ -1087,8 +1078,8 @@ where
     }
 
     /// An externally tagged enum uses a bare string to represent unit
-    /// variants, and a one-item object with the variant name as the key
-    /// for all other variant types.
+    /// variants, and a one-item object with the variant name as the key for
+    /// all other variant types.
     fn default_impl_enum_external(
         &self,
         state: &mut WalkState<Id>,
@@ -1102,8 +1093,9 @@ where
                 .iter()
                 .find(|variant| {
                     // TODO 9/4/2026
-                    // This is kind of wrong; we're going to need to represent the json
-                    // serialization name and use that.
+                    // This is kind of wrong; in that the JSON serialization
+                    // need not be a string e.g. for unit variants. i.e. in
+                    // the future.
                     let name = variant.rename.as_ref().unwrap_or(&variant.rust_name);
                     variant_name == name
                 })
@@ -1473,6 +1465,7 @@ where
 
     // TODO 9/10/2026
     // Why is this not used for tuple variants?
+    // For one, tuple variants don't have a "rest"
     fn default_impl_tuple_struct(
         &self,
         state: &mut WalkState<Id>,
@@ -1683,7 +1676,8 @@ mod tests {
         assert_eq!(
             walk(&types, &settings, "date", &value),
             quote! {
-                ::serde_json::from_str::<::chrono::NaiveDate>("\"1970-01-01\"").unwrap()
+                ::serde_json::from_str::<::chrono::NaiveDate>("\"1970-01-01\"")
+                    .expect("invalid default provided")
             }
             .to_string()
         );
@@ -1703,7 +1697,8 @@ mod tests {
         assert_eq!(
             walk(&types, &settings, "date", &value),
             quote! {
-                ::serde_json::from_str::<::chrono::NaiveDate>("{\"not\":\"a date\"}").unwrap()
+                ::serde_json::from_str::<::chrono::NaiveDate>("{\"not\":\"a date\"}")
+                    .expect("invalid default provided")
             }
             .to_string()
         );
@@ -1720,7 +1715,8 @@ mod tests {
         assert_eq!(
             walk(&types, &settings, "any", &value),
             quote! {
-                ::serde_json::from_str::<::serde_json::Value>("[8,6,7]").unwrap()
+                ::serde_json::from_str::<::serde_json::Value>("[8,6,7]")
+                    .expect("invalid default provided")
             }
             .to_string()
         );
@@ -1940,7 +1936,8 @@ mod tests {
             )),
             reparse(
                 &quote! {
-                    ::serde_json::from_str::<::foo::Wrapper<super::UInt>>("1").unwrap()
+                    ::serde_json::from_str::<::foo::Wrapper<super::UInt>>("1")
+                        .expect("invalid default provided")
                 }
                 .to_string()
             )

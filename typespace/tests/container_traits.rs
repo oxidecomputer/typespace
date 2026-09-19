@@ -55,14 +55,11 @@ fn defaults_declare_the_std_containers() {
         Settings::maximal(),
         serde_json::from_str::<Settings>("{}").unwrap(),
     ] {
-        assert_eq!(settings.map_type(), &ContainerType::btree_map());
-        assert_eq!(
-            settings.map_type().obligations(),
-            [ordered_lookup(), set([])]
-        );
-        assert_eq!(settings.set_type(), &default_set);
-        assert_eq!(settings.vec_type(), &ContainerType::vec());
-        assert_eq!(settings.vec_type().obligations(), [set([])]);
+        assert_eq!(&settings.map_type, &ContainerType::btree_map());
+        assert_eq!(settings.map_type.obligations(), [ordered_lookup(), set([])]);
+        assert_eq!(&settings.set_type, &default_set);
+        assert_eq!(&settings.vec_type, &ContainerType::vec());
+        assert_eq!(settings.vec_type.obligations(), [set([])]);
     }
 }
 
@@ -137,7 +134,7 @@ fn an_exotic_map_declaration_reads_back_as_written() {
             .with_provision(TypespaceTrait::Clone, TraitProvision::Always),
     );
 
-    let declared = settings.map_type();
+    let declared = settings.map_type;
     assert_eq!(
         declared.obligations(),
         [
@@ -180,19 +177,19 @@ fn set_and_vec_containers_are_declared_separately() {
                 .with_obligations([set([TypespaceTrait::Clone])]),
         );
 
-    assert_eq!(settings.set_type(), &ContainerType::hash_set());
-    assert_eq!(settings.set_type().obligation(0), &hash_lookup());
+    assert_eq!(&settings.set_type, &ContainerType::hash_set());
+    assert_eq!(settings.set_type.obligation(0), &hash_lookup());
     assert_eq!(
-        settings.set_type().provision(TypespaceTrait::Ord),
+        settings.set_type.provision(TypespaceTrait::Ord),
         TraitProvision::Never
     );
 
     assert_eq!(
-        settings.vec_type().obligation(0),
+        settings.vec_type.obligation(0),
         &set([TypespaceTrait::Clone])
     );
     assert_eq!(
-        settings.vec_type().provision(TypespaceTrait::Ord),
+        settings.vec_type.provision(TypespaceTrait::Ord),
         TraitProvision::IfParameters
     );
 }
@@ -210,14 +207,14 @@ fn a_vec_states_an_element_obligation() {
     );
 
     assert_eq!(
-        settings.vec_type().obligation(0),
+        settings.vec_type.obligation(0),
         &set([TypespaceTrait::Clone, TypespaceTrait::Default])
     );
-    assert_eq!(settings.vec_type().obligations().len(), 1);
+    assert_eq!(settings.vec_type.obligations().len(), 1);
     // The obligation is the only departure from `Vec`: what the
     // container implements is the forwarding table still.
     assert_eq!(
-        provisions(settings.vec_type()),
+        provisions(&settings.vec_type),
         provisions(&ContainerType::vec())
     );
 }
@@ -229,9 +226,9 @@ fn a_preset_at_another_path_keeps_its_behavior() {
     let settings =
         Settings::minimal().with_map_type(ContainerType::hash_map().with_path("CustomMap"));
 
-    assert_eq!(settings.map_type().obligation(0), &hash_lookup());
+    assert_eq!(settings.map_type.obligation(0), &hash_lookup());
     assert_eq!(
-        provisions(settings.map_type()),
+        provisions(&settings.map_type),
         provisions(&ContainerType::hash_map())
     );
 }
@@ -276,27 +273,27 @@ fn declarations_deserialize_from_settings_data() {
     .unwrap();
 
     assert_eq!(
-        settings.map_type(),
+        &settings.map_type,
         &ContainerType::hash_map()
             .with_path("::im::HashMap")
             .with_obligations([hash_lookup(), set([TypespaceTrait::Clone])])
             .with_provision(TypespaceTrait::Hash, TraitProvision::Always)
     );
     assert_eq!(
-        settings.map_type().provision(TypespaceTrait::Ord),
+        settings.map_type.provision(TypespaceTrait::Ord),
         TraitProvision::Never
     );
 
-    assert_eq!(settings.set_type(), &ContainerType::btree_set());
+    assert_eq!(&settings.set_type, &ContainerType::btree_set());
 
     // No preset named: the container states its own path and
     // obligations, and claims only the rendering baseline.
     assert_eq!(
-        settings.vec_type(),
+        &settings.vec_type,
         &ContainerType::new("::im::Vector", [set([TypespaceTrait::Clone])])
     );
     assert_eq!(
-        settings.vec_type().provision(TypespaceTrait::JsonSchema),
+        settings.vec_type.provision(TypespaceTrait::JsonSchema),
         TraitProvision::Never
     );
 }
@@ -399,7 +396,7 @@ fn a_custom_optional_wrapper_deserializes_like_a_container() {
     )
     .unwrap();
 
-    let OptionalNullable::CustomType(declaration) = settings.optional_nullable() else {
+    let OptionalNullable::CustomType(declaration) = &settings.optional_nullable else {
         panic!("the settings data names a custom wrapper");
     };
     assert_eq!(declaration, &ContainerType::option().with_path("::my::Opt"));

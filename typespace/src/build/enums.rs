@@ -477,7 +477,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            // TODO I want to have the original Id available
             #description
             #( #attrs )*
             #derive_attr

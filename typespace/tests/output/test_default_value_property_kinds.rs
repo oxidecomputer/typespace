@@ -58,10 +58,12 @@ pub mod defaults {
         T::try_from(::std::num::NonZeroU64::try_from(V).unwrap()).unwrap()
     }
     pub(super) fn property_defaults_address() -> ::std::net::IpAddr {
-        ::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"").unwrap()
+        ::serde_json::from_str::<::std::net::IpAddr>("\"127.0.0.1\"")
+            .expect("invalid default provided")
     }
     pub(super) fn property_defaults_blob() -> ::serde_json::Value {
-        ::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}").unwrap()
+        ::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}")
+            .expect("invalid default provided")
     }
     pub(super) fn property_defaults_weight() -> f64 {
         1.5_f64

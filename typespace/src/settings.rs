@@ -9,9 +9,6 @@ use strum::IntoEnumIterator;
 
 use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
-// TODO 7/18/2025
-// I wanted to get this started to think through various settings that we might
-// eventually want...
 /// Modify how types are processed and generated.
 ///
 /// Settings are supplied to
@@ -20,8 +17,8 @@ use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// presets--[`Settings::minimal`], [`Settings::typical`], or
 /// [`Settings::maximal`]--and adjust with the `with_` methods. There is
 /// deliberately no `Default`: the traits a typespace requires and which it
-/// merely desires greatly impact the generated code, so consumers should make
-/// a deliberate choice.
+/// merely desires greatly impact the generated code; *consumers should make
+/// deliberate choices*.
 ///
 /// The type also implements `Deserialize`, so settings can come from
 /// configuration data. Every field has a default there, which means
@@ -31,53 +28,54 @@ use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// `#[serde(default = "Settings::minimal")]`, or whichever preset suits
 /// it, rather than a bare `#[serde(default)]`.
 #[derive(Debug, Deserialize)]
+#[non_exhaustive]
 pub struct Settings {
     /// How types in the `std` prelude are rendered; see [`Std`].
     #[serde(default)]
-    pub(crate) std: Std,
+    pub std: Std,
 
     /// How values that may be `null` or absent are represented; see
     /// [`OptionalNullable`]. The default is `ConflateAsAbsent`.
     #[serde(default)]
-    pub(crate) optional_nullable: OptionalNullable,
+    pub optional_nullable: OptionalNullable,
 
     /// The container [`Type::Map`](crate::build::Type) renders as: its
     /// path, what it demands of its key and value types, and what it
     /// implements.
     #[serde(default = "Settings::default_map_type")]
-    pub(crate) map_type: ContainerType,
+    pub map_type: ContainerType,
 
     /// The container [`Type::Set`](crate::build::Type) renders as: its
     /// path, what it demands of its element type, and what it
     /// implements.
     #[serde(default = "Settings::default_set_type")]
-    pub(crate) set_type: ContainerType,
+    pub set_type: ContainerType,
 
     /// The container [`Type::Vec`](crate::build::Type) renders as: its
     /// path, what it demands of its element type, and what it
     /// implements.
     #[serde(default = "Settings::default_vec_type")]
-    pub(crate) vec_type: ContainerType,
+    pub vec_type: ContainerType,
 
     /// Traits every named type is required to implement.
     #[serde(default)]
-    pub(crate) required_traits: TypespaceTraitSet,
+    pub required_traits: TypespaceTraitSet,
 
     /// Traits every type implements when possible.
     #[serde(default)]
-    pub(crate) desired_traits: TypespaceTraitSet,
+    pub desired_traits: TypespaceTraitSet,
 
     /// Opaque derive paths included in every derive attribute.
     #[serde(default)]
-    pub(crate) extra_derives: Vec<String>,
+    pub extra_derives: Vec<String>,
 
     /// Opaque attributes included in every type.
     #[serde(default)]
-    pub(crate) extra_attrs: Vec<String>,
+    pub extra_attrs: Vec<String>,
 
     /// Generate builder for struct types.
     #[serde(default)]
-    pub(crate) struct_builder: bool,
+    pub struct_builder: bool,
 
     // TYPIFY COMPAT ANCHOR. This setting exists so typespace can
     // imitate typify's renderer while typify moves onto it, and it goes
@@ -86,7 +84,7 @@ pub struct Settings {
     // them, and removing the setting means removing every one.
     #[doc(hidden)]
     #[serde(default)]
-    pub(crate) typify_compat: bool,
+    pub typify_compat: bool,
 }
 
 /// The traits an ordered-lookup container (`BTreeMap`, or the ordered
@@ -251,11 +249,6 @@ impl Settings {
         self
     }
 
-    /// The modeling of values that may be absent, null, or a value.
-    pub fn optional_nullable(&self) -> &OptionalNullable {
-        &self.optional_nullable
-    }
-
     /// Set the container type used to render
     /// [`Type::Map`](crate::build::Type).
     ///
@@ -277,12 +270,6 @@ impl Settings {
     pub fn with_map_type(mut self, map_type: ContainerType) -> Self {
         self.map_type = map_type;
         self
-    }
-
-    /// The container a map renders as, and what it demands and
-    /// implements.
-    pub fn map_type(&self) -> &ContainerType {
-        &self.map_type
     }
 
     /// Set the container type used to render
@@ -307,12 +294,6 @@ impl Settings {
         self
     }
 
-    /// The container a set renders as, and what it demands and
-    /// implements.
-    pub fn set_type(&self) -> &ContainerType {
-        &self.set_type
-    }
-
     /// Set the container type used to render
     /// [`Type::Vec`](crate::build::Type).
     ///
@@ -325,12 +306,6 @@ impl Settings {
     pub fn with_vec_type(mut self, vec_type: ContainerType) -> Self {
         self.vec_type = vec_type;
         self
-    }
-
-    /// The container a vec renders as, and what it demands and
-    /// implements.
-    pub fn vec_type(&self) -> &ContainerType {
-        &self.vec_type
     }
 
     /// Require every generated type to implement the given trait.

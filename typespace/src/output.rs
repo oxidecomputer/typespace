@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::default::DefaultHelper;
 
-/// The sink a render pass writes into.
+/// The destination a render pass writes into.
 ///
 /// A single `&mut Outputspace` travels the render call chain: items go
 /// into the codespace it holds, and anything a rendered type needs the
