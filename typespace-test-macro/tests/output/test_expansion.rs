@@ -11,16 +11,11 @@ fn wrapper() {
                 .expect("failed to parse rendered output as Rust file");
             ::prettyplease::unparse(&__file)
         };
-        let __needs_update = match ::std::fs::read_to_string(&__snapshot_path) {
-            Ok(ref existing) => existing != &__content,
-            Err(_) => true,
-        };
-        if __needs_update {
-            if let Some(parent) = __snapshot_path.parent() {
-                ::std::fs::create_dir_all(parent).ok();
-            }
-            ::std::fs::write(&__snapshot_path, __content)
-                .expect("failed to write snapshot");
+        let __existing = ::std::fs::read_to_string(&__snapshot_path).unwrap_or_default();
+        if ::newline_converter::dos2unix(&__existing)
+            != ::newline_converter::dos2unix(&__content)
+        {
+            ::expectorate::assert_contents(&__snapshot_path, &__content);
             panic!("snapshot updated, run tests again: {}", __snapshot_path.display());
         }
         mod import {

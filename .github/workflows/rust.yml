@@ -91,7 +91,7 @@ jobs:
       # The trybuild fixtures run in the job below, on the pinned
       # toolchain: they compare against compiler diagnostics, which
       # drift between releases.
-      run: cargo test --locked --workspace --verbose -- --exact --skip ui
+      run: cargo test --locked --workspace --no-fail-fast --verbose -- --exact --skip ui
 
   trybuild:
     # The UI fixtures pin rustc's exact message and span for each error
