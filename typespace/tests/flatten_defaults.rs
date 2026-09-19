@@ -27,6 +27,10 @@
 //! - A flattened property's type must serialize as an object, which
 //!   `finalize` checks through any stack of options, boxes, aliases,
 //!   and newtype structs. A scalar, a sequence, or a tuple is refused.
+//! - Both rules reach a struct-style enum variant's properties, which
+//!   splice into the object the variant serializes as: a variant
+//!   cannot flatten a non-object, and an enum that denies unknown
+//!   fields cannot flatten through any variant.
 //!
 //! typify 1 implements the routing in `value_for_struct_props`
 //! (typify-impl/src/value.rs), requiring the flattened type to be a
@@ -596,6 +600,94 @@ fn a_flattened_map_is_allowed() {
             a: u32,
             #[flatten]
             rest: Map<String, u32>,
+        }
+    });
+
+    builder.finalize(no_cycles).unwrap();
+}
+
+/// The object rule reaches a struct-style variant's properties, and
+/// the error names the enum, the variant, and the property.
+#[test]
+fn a_variant_flattening_a_scalar_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        enum Message {
+            Payload {
+                a: u32,
+                #[flatten]
+                count: u32,
+            },
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a variant flattening a scalar");
+    };
+    assert!(
+        matches!(err, Error::VariantFlattenNonObject { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "`Message`'s variant `Payload` flattens the property `count`, \
+         whose type does not serialize as an object; serde can flatten \
+         only a struct, an enum, or a map"
+    );
+}
+
+/// deny_unknown_fields sits on the enum and governs each variant's
+/// deserializer, so the pair is refused through a variant exactly as
+/// on a struct, even when the flattened type itself is fine.
+#[test]
+fn deny_unknown_fields_with_a_variant_flattened_property_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        #[deny_unknown_fields]
+        enum Message {
+            Payload {
+                a: u32,
+                #[flatten]
+                inner: Inner,
+            },
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!(
+            "expected finalize to reject deny_unknown_fields with a \
+             variant flattening a property"
+        );
+    };
+    assert!(
+        matches!(err, Error::VariantFlattenWithDenyUnknownFields { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "`Message` denies unknown fields and its variant `Payload` \
+         flattens the property `inner`; serde does not support that \
+         combination"
+    );
+}
+
+/// A variant flattening an object-serializable type passes, so the
+/// variant rule refuses no more than the struct rule does.
+#[test]
+fn a_variant_flattening_a_struct_is_accepted() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        enum Message {
+            Payload {
+                a: u32,
+                #[flatten]
+                inner: Inner,
+            },
         }
     });
 

@@ -194,6 +194,51 @@ where
         property: String,
     },
 
+    /// An enum denies unknown fields while a struct-style variant
+    /// flattens a property.
+    ///
+    /// The same combination [`Error::FlattenWithDenyUnknownFields`]
+    /// refuses on a struct, reached through a variant:
+    /// `deny_unknown_fields` sits on the enum and governs the variant's
+    /// deserializer, which cannot know what the flattened type claims.
+    #[error(
+        "`{type_name}` denies unknown fields and its variant \
+         `{variant}` flattens the property `{property}`; serde does \
+         not support that combination"
+    )]
+    VariantFlattenWithDenyUnknownFields {
+        /// The name of the enum.
+        type_name: String,
+        /// The variant carrying the flattened property.
+        variant: String,
+        /// The Rust name of one flattened property. A variant may
+        /// flatten several; the first in declaration order is named.
+        property: String,
+    },
+
+    /// A struct-style enum variant flattens a property whose type
+    /// serde cannot flatten.
+    ///
+    /// The same rule as [`Error::FlattenNonObject`], reached through a
+    /// variant: the variant's properties splice into the object the
+    /// variant serializes as, so a flattened property's value has to
+    /// serialize as an object itself.
+    #[error(
+        "`{type_name}`'s variant `{variant}` flattens the property \
+         `{property}`, whose type does not serialize as an object; \
+         serde can flatten only a struct, an enum, or a map"
+    )]
+    VariantFlattenNonObject {
+        /// The name of the enum.
+        type_name: String,
+        /// The variant carrying the flattened property.
+        variant: String,
+        /// The Rust name of the flattened property. A variant may
+        /// flatten several; the first offender in declaration order is
+        /// named.
+        property: String,
+    },
+
     /// Two types in the typespace share a name.
     ///
     /// Names come from the consumer, which is responsible for
