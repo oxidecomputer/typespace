@@ -8,27 +8,101 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check-style:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
     - name: Report cargo version
       run: cargo --version
     - name: Report rustfmt version
       run: cargo fmt -- --version
     - name: Check style
-      run: cargo fmt -- --check
+      run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Report clippy version
+      run: cargo clippy --version
+    - name: Run clippy
+      run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Build documentation
+      run: cargo doc --locked --no-deps --all-features --workspace
+      env:
+        RUSTDOCFLAGS: -D warnings
 
   build-and-test:
+    # Name the leg for its role, not its version: a required status
+    # check is matched by job name, so a leg called "1.97" has to be
+    # reconfigured in branch protection every time the MSRV moves.
+    name: build-and-test (${{ matrix.os }}, ${{ matrix.rust-version }})
     runs-on: ${{ matrix.os }}
+    env:
+      # rust-toolchain.toml would otherwise override whatever
+      # dtolnay/rust-toolchain selects; this variable overrides
+      # rust-toolchain.toml, so the matrix legs really do use different
+      # compilers. Without it both legs silently build with the pinned
+      # toolchain and the MSRV leg proves nothing.
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     strategy:
       matrix:
         os: [ ubuntu-latest, windows-latest, macos-latest ]
+        rust-version: [ stable, msrv ]
+        include:
+          - rust-version: stable
+            toolchain: stable
+          - rust-version: msrv
+            # Keep in sync with rust-version in typespace/Cargo.toml.
+            toolchain: "1.97"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      with:
+        toolchain: ${{ matrix.toolchain }}
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        # Matrix dimensions other than the OS need naming explicitly.
+        key: ${{ matrix.rust-version }}
+    - name: Report cargo version
+      run: cargo --version
+    - name: Report rustc version
+      run: rustc --version
     - name: Build
-      run: cargo build --locked --tests --verbose
+      run: cargo build --locked --workspace --tests --verbose
     - name: Run tests
-      run: cargo test --locked --verbose
+      # The trybuild fixtures run in the job below, on the pinned
+      # toolchain: they compare against compiler diagnostics, which
+      # drift between releases.
+      run: cargo test --locked --workspace --verbose -- --exact --skip ui
+
+  trybuild:
+    # The UI fixtures pin rustc's exact message and span for each error
+    # case, so they are only meaningful against one compiler. Run them
+    # under rust-toolchain.toml's pinned version, with no RUSTUP_TOOLCHAIN
+    # override.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Report rustc version
+      run: rustc --version
+    - name: Run trybuild tests
+      run: cargo test --locked --verbose -p typespace-test-macro --test ui
