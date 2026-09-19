@@ -392,15 +392,10 @@ where
         conflicts: Vec<TraitConflict<Id>>,
     },
 
-    /// A newtype struct states constraints with nothing in them.
+    /// A newtype struct states irrelevant constraints.
     ///
-    /// Four constructions say nothing that
-    /// [`NewtypeConstraints::None`](crate::build::NewtypeConstraints::None)
-    /// does not already say: a `String` constraint with no minimum, no
-    /// maximum, and no patterns, an empty allow list, an empty deny
-    /// list, and a JSON schema every value satisfies (the schema `true`
-    /// or the empty object). Each is a mistake at the source rather
-    /// than a type worth generating, so each is rejected.
+    /// The constraints provided for the newtype don't actually constrain;
+    /// vacuous constraints are not allowed.
     #[error(
         "the newtype struct `{name}` states {kind} constraints with \
          nothing in them"
@@ -408,8 +403,7 @@ where
     VacuousConstraints {
         /// The name of the newtype struct.
         name: String,
-        /// Which kind of constraint is empty: `"string"`, `"allow
-        /// list"`, `"deny list"`, or `"JSON schema"`.
+        /// Which kind of constraint is empty.
         kind: &'static str,
     },
 
@@ -618,9 +612,9 @@ pub enum RequirementOrigin<Id> {
     /// deserializing. This imposes the Deserialize requirement on a native
     /// type. The default value of the given ID has created this requirement.
     DefaultValue(Id),
-    /// Generated code checks a value against a JSON schema by
-    /// serializing it. This imposes the Serialize requirement on the
-    /// inner type of the newtype struct with the given ID.
+    /// Generated code checks a value against a JSON schema by serializing it.
+    /// This imposes the Serialize requirement on the inner type of the newtype
+    /// struct with the given ID.
     SchemaCheck(Id),
     /// The requirement applies to every named type, via
     /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).

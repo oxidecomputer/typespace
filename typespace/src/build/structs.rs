@@ -1558,12 +1558,11 @@ pub enum NewtypeConstraints {
 
     /// Fallback constraint
     ///
-    /// Verify data against the given JSON schema (using the crate
-    /// `jsonschema` for runtime validation). The value is a JSON
-    /// schema, so a JSON object or a boolean; validation serializes the
-    /// inner value and checks the result against it, which means the
-    /// inner type must implement `serde::Serialize`. Trait resolution
-    /// requires that of it.
+    /// Verify data against the given JSON schema (using the crate `jsonschema`
+    /// for runtime validation). The value is a JSON schema. Validation
+    /// serializes the inner value and checks the result against it, which
+    /// means the inner type must implement `serde::Serialize`. Trait
+    /// resolution requires that of it.
     JsonSchema(JsonValue),
 }
 
@@ -1998,23 +1997,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             }
             NewtypeConstraints::Array { .. } => todo!(),
 
-            // The fallback constraint. The source schema said more than
-            // the other constraints can state, so the consumer rendered
-            // as much of it as it could and the rest is checked at run
-            // time: serialize the inner value to a `serde_json::Value`
-            // and validate that against the stored schema. The inner
-            // type is therefore anything at all, and the one thing this
-            // arm demands of it is `Serialize`, which trait resolution
-            // seeds for it (`json_schema_validated_inner` in
-            // `trait_resolution.rs`).
+            // The fallback constraint. This is used for schemas that can't
+            // be neatly described by structural types. Those constraints
+            // are checked at runtime by serializing to a serde_json::Value
+            // and validating against the provided schema. The inner type
+            // may be anything, but it must implement Serialize; trait
+            // resolution ensures this even if Serialize is neither required
+            // nor desired.
             NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
                 typespace.add_error_mod(out);
 
                 let schema_string = serde_json::to_string(schema).unwrap();
 
-                // A newtype's Display is the inner value's Display, as
-                // it is for an unconstrained newtype: a value that
-                // exists has already been validated.
+                // A newtype's Display is the inner value's Display, as it is
+                // for an unconstrained newtype: a value that exists has
+                // already been validated.
                 let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
                     quote! {
                         impl ::std::fmt::Display for #name_ident {
@@ -2025,11 +2022,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // Parsing produces an inner value, which the
-                // constraint then checks, so both failures land in
-                // `ConversionError`. The inner type's own parse error
-                // carries no `Display` bound, so its message cannot be
-                // forwarded.
+                // Parsing produces an inner value, which the constraint then
+                // checks, so both failures land in `ConversionError`. The
+                // inner type's own parse error carries no `Display` bound, so
+                // its message cannot be forwarded.
                 let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
                     quote! {
                         impl ::std::str::FromStr for #name_ident {
@@ -2046,14 +2042,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // Deserializing produces an inner value, which the
-                // `TryFrom` impl below then checks, so the schema is
-                // consulted in exactly one place and a value built in
-                // Rust is checked the same way as one off the wire.
-                // Deserializing a `serde_json::Value` instead would
-                // save the trip back out through `to_value`, but it
-                // would restrict the impl to self-describing formats
-                // and write the check twice.
+                // Deserializing produces an inner value, which the `TryFrom`
+                // impl below then checks, so the schema is consulted in
+                // exactly one place and a value built in Rust is checked the
+                // same way as one off the wire. Deserializing a
+                // `serde_json::Value` instead would save the trip back out
+                // through `to_value`, but it would restrict the impl to
+                // self-describing formats and write the check twice.
                 let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
                     quote! {
                         impl<'de> ::serde::Deserialize<'de> for #name_ident {
