@@ -109,6 +109,12 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 - Trait conflicts are reported exhaustively but without root-cause
   deduplication: one offending type reachable along many requirement
   paths produces one conflict per path.
+- A stored `NewtypeConstraints::JsonSchema` schema is embedded verbatim
+  in reported schemas, which target schemars 0.8 and therefore
+  draft-07. A schema written against another draft can carry keywords a
+  draft-07 consumer silently ignores. Finalize should assert the schema
+  is draft-07 or uses only draft-agnostic keywords, keyed on the
+  reported version once that is configurable.
 
 ## Status
 

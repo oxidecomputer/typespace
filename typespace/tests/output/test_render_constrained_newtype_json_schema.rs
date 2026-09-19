@@ -59,7 +59,8 @@ impl ::schemars::JsonSchema for EvenCoords {
     fn json_schema(
         g: &mut ::schemars::r#gen::SchemaGenerator,
     ) -> ::schemars::schema::Schema {
-        let stored = ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
+        let inner = g.subschema_for::<Coords>();
+        let constraint = ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             extensions: ::serde_json::from_str::<
                 ::serde_json::Map<::std::string::String, ::serde_json::Value>,
             >(
@@ -70,11 +71,10 @@ impl ::schemars::JsonSchema for EvenCoords {
                 .collect(),
             ..::std::default::Default::default()
         });
-        let inner = g.subschema_for::<Coords>();
         ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             subschemas: ::std::option::Option::Some(
                 ::std::boxed::Box::new(::schemars::schema::SubschemaValidation {
-                    all_of: ::std::option::Option::Some(::std::vec![stored, inner]),
+                    all_of: ::std::option::Option::Some(::std::vec![inner, constraint,]),
                     ..::std::default::Default::default()
                 }),
             ),

@@ -5181,7 +5181,8 @@ fn test_render_constrained_newtype_json_schema() {
 
         // A value of the newtype is an inner value that also passes
         // the check, so the JsonSchema impl reports the allOf of the
-        // stored schema (keyword for keyword) and the inner type's.
+        // inner type's schema and the stored one (keyword for
+        // keyword).
         let mut generator = schemars::r#gen::SchemaGenerator::default();
         assert_eq!(
             serde_json::to_value(<EvenCoords as schemars::JsonSchema>::json_schema(
@@ -5189,7 +5190,7 @@ fn test_render_constrained_newtype_json_schema() {
             ))
             .unwrap(),
             serde_json::json!({
-                "allOf": [schema, { "$ref": "#/definitions/Coords" }],
+                "allOf": [{ "$ref": "#/definitions/Coords" }, schema],
             })
         );
     }

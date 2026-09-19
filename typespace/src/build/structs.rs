@@ -1564,11 +1564,9 @@ pub enum NewtypeConstraints {
     /// means the inner type must implement `serde::Serialize`. Trait
     /// resolution requires that of it.
     ///
-    /// The schema's own `$schema` field selects the draft it is
-    /// validated under; without one, the `jsonschema` crate applies
-    /// its default (draft 2020-12). A producer whose schemas follow
-    /// another draft states it there--draft-07 keywords such as the
-    /// array form of `items` are rejected under 2020-12 rules.
+    /// The schema's own `$schema` field selects the draft it is validated
+    /// under; without one, the `jsonschema` crate applies its default (draft
+    /// 2020-12).
     JsonSchema(JsonValue),
 }
 
@@ -2086,7 +2084,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 // keyword fields would have to be translated back out
                 // again.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
-                    let stored_arm = match schema {
+                    let constraint_schema = match schema {
                         serde_json::Value::Bool(value) => quote! {
                             ::schemars::schema::Schema::Bool(#value)
                         },
@@ -2116,15 +2114,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             fn json_schema(
                                 g: &mut ::schemars::r#gen::SchemaGenerator
                             ) -> ::schemars::schema::Schema {
-                                let stored = #stored_arm;
                                 let inner = g.subschema_for::<#inner_ident>();
+                                let constraint = #constraint_schema;
                                 ::schemars::schema::Schema::Object(
                                     ::schemars::schema::SchemaObject {
                                         subschemas: ::std::option::Option::Some(
                                             ::std::boxed::Box::new(
                                                 ::schemars::schema::SubschemaValidation {
                                                     all_of: ::std::option::Option::Some(
-                                                        ::std::vec![stored, inner],
+                                                        ::std::vec![
+                                                            inner,
+                                                            constraint,
+                                                        ],
                                                     ),
                                                     ..::std::default::Default::default()
                                                 },
