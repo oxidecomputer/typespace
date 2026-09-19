@@ -1,41 +1,34 @@
 #[derive(
-    ::serde::Deserialize,
     ::serde::Serialize,
     Clone,
-    Copy,
     Debug,
+    Default,
     Eq,
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
-pub struct Coords {
-    pub x: i64,
-    pub y: i64,
-}
-#[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
-pub struct EvenCoords(Coords);
-impl ::std::ops::Deref for EvenCoords {
-    type Target = Coords;
-    fn deref(&self) -> &Coords {
+pub struct Pair(::std::vec::Vec<i64>);
+impl ::std::ops::Deref for Pair {
+    type Target = ::std::vec::Vec<i64>;
+    fn deref(&self) -> &::std::vec::Vec<i64> {
         &self.0
     }
 }
-impl ::std::convert::From<EvenCoords> for Coords {
-    fn from(value: EvenCoords) -> Self {
+impl ::std::convert::From<Pair> for ::std::vec::Vec<i64> {
+    fn from(value: Pair) -> Self {
         value.0
     }
 }
-impl ::std::convert::TryFrom<Coords> for EvenCoords {
+impl ::std::convert::TryFrom<::std::vec::Vec<i64>> for Pair {
     type Error = self::error::ConversionError;
     fn try_from(
-        value: Coords,
+        value: ::std::vec::Vec<i64>,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         #[::jsonschema::validator(
-            schema = "{\"properties\":{\"x\":{\"multipleOf\":2,\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"],\"type\":\"object\"}"
+            schema = "{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"additionalItems\":false,\"items\":[{\"type\":\"integer\"},{\"type\":\"integer\"}],\"type\":\"array\"}"
         )]
         struct Schema;
         let json = ::serde_json::to_value(&value).map_err(|e| e.to_string())?;
@@ -43,18 +36,18 @@ impl ::std::convert::TryFrom<Coords> for EvenCoords {
         Ok(Self(value))
     }
 }
-impl<'de> ::serde::Deserialize<'de> for EvenCoords {
+impl<'de> ::serde::Deserialize<'de> for Pair {
     fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
     where
         D: ::serde::Deserializer<'de>,
     {
-        Self::try_from(<Coords>::deserialize(deserializer)?)
+        Self::try_from(<::std::vec::Vec<i64>>::deserialize(deserializer)?)
             .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
     }
 }
-impl ::schemars::JsonSchema for EvenCoords {
+impl ::schemars::JsonSchema for Pair {
     fn schema_name() -> ::std::string::String {
-        "EvenCoords".to_string()
+        "Pair".to_string()
     }
     fn json_schema(
         g: &mut ::schemars::r#gen::SchemaGenerator,
@@ -63,14 +56,14 @@ impl ::schemars::JsonSchema for EvenCoords {
             extensions: ::serde_json::from_str::<
                 ::serde_json::Map<::std::string::String, ::serde_json::Value>,
             >(
-                    "{\"properties\":{\"x\":{\"multipleOf\":2,\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"],\"type\":\"object\"}",
+                    "{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"additionalItems\":false,\"items\":[{\"type\":\"integer\"},{\"type\":\"integer\"}],\"type\":\"array\"}",
                 )
                 .unwrap()
                 .into_iter()
                 .collect(),
             ..::std::default::Default::default()
         });
-        let inner = g.subschema_for::<Coords>();
+        let inner = g.subschema_for::<::std::vec::Vec<i64>>();
         ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             subschemas: ::std::option::Option::Some(
                 ::std::boxed::Box::new(::schemars::schema::SubschemaValidation {

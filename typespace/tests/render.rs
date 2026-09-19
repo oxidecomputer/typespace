@@ -5179,16 +5179,18 @@ fn test_render_constrained_newtype_json_schema() {
         );
         serde_json::from_str::<EvenCoords>(r#"{"x":3,"y":5}"#).expect_err("x is odd");
 
-        // The JsonSchema impl reports the schema the value is checked
-        // against, keyword for keyword, rather than the schema of the
-        // type it wraps.
+        // A value of the newtype is an inner value that also passes
+        // the check, so the JsonSchema impl reports the allOf of the
+        // stored schema (keyword for keyword) and the inner type's.
         let mut generator = schemars::r#gen::SchemaGenerator::default();
         assert_eq!(
             serde_json::to_value(<EvenCoords as schemars::JsonSchema>::json_schema(
                 &mut generator
             ))
             .unwrap(),
-            schema
+            serde_json::json!({
+                "allOf": [schema, { "$ref": "#/definitions/Coords" }],
+            })
         );
     }
 }
@@ -5245,6 +5247,56 @@ fn test_render_constrained_newtype_json_schema_string() {
 
         assert_eq!(serde_json::from_str::<Terse>("\"wx\"").unwrap(), terse);
         serde_json::from_str::<Terse>("\"wxyz\"").expect_err("neither an a-word nor terse");
+    }
+}
+
+// A stored schema names its own draft through `$schema`. This one is
+// draft-07 and uses the array form of `items`, which draft 2020-12
+// refuses to compile, so the generated code building at all proves the
+// declared draft governs validation; the assertions prove the keywords
+// are enforced.
+#[test]
+fn test_render_constrained_newtype_json_schema_draft() {
+    let schema = serde_json::json! {{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [{ "type": "integer" }, { "type": "integer" }],
+        "additionalItems": false,
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder
+            .insert("i64".to_string(), Type::Integer("i64".to_string()))
+            .unwrap();
+        builder
+            .insert("vec".to_string(), Type::Vec("i64".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Pair".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("vec".to_string())
+                        .name("Pair")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include(
+        "tests/output/test_render_constrained_newtype_json_schema_draft.rs",
+        out
+    )]
+    fn inner() {
+        use import::*;
+
+        Pair::try_from(vec![2, 4]).unwrap();
+        Pair::try_from(vec![2, 4, 6]).expect_err("additionalItems refuses a third element");
     }
 }
 

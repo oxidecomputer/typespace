@@ -65,9 +65,9 @@ impl ::schemars::JsonSchema for Terse {
         "Terse".to_string()
     }
     fn json_schema(
-        _: &mut ::schemars::r#gen::SchemaGenerator,
+        g: &mut ::schemars::r#gen::SchemaGenerator,
     ) -> ::schemars::schema::Schema {
-        ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
+        let stored = ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             extensions: ::serde_json::from_str::<
                 ::serde_json::Map<::std::string::String, ::serde_json::Value>,
             >(
@@ -76,6 +76,16 @@ impl ::schemars::JsonSchema for Terse {
                 .unwrap()
                 .into_iter()
                 .collect(),
+            ..::std::default::Default::default()
+        });
+        let inner = g.subschema_for::<::std::string::String>();
+        ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
+            subschemas: ::std::option::Option::Some(
+                ::std::boxed::Box::new(::schemars::schema::SubschemaValidation {
+                    all_of: ::std::option::Option::Some(::std::vec![stored, inner]),
+                    ..::std::default::Default::default()
+                }),
+            ),
             ..::std::default::Default::default()
         })
     }
