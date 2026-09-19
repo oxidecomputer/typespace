@@ -646,3 +646,26 @@ fn a_required_option_property_keeps_the_std_model() {
 
     builder.finalize(no_cycles).unwrap();
 }
+
+// Crate-path overrides deserialize as a map of crate to path, and a
+// path that is not plain ::-separated segments is refused with a
+// message naming it.
+#[test]
+fn crate_paths_deserialize() {
+    use typespace::settings::GeneratedCrate;
+
+    let settings = serde_json::from_str::<Settings>(
+        r#"{ "crate_paths": { "json-serde": "::my_sdk::json_serde" } }"#,
+    )
+    .unwrap();
+    assert!(
+        settings
+            .crate_paths
+            .get(GeneratedCrate::JsonSerde)
+            .is_some()
+    );
+    assert!(settings.crate_paths.get(GeneratedCrate::Regress).is_none());
+
+    serde_json::from_str::<Settings>(r#"{ "crate_paths": { "regress": "Vec<u8>" } }"#).unwrap_err();
+    serde_json::from_str::<Settings>(r#"{ "crate_paths": { "not-a-crate": "::x" } }"#).unwrap_err();
+}

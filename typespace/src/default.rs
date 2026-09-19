@@ -15,7 +15,7 @@ use crate::{
     Obligation, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
     build::{self, StructProperty, StructPropertySerde, StructPropertyState, Type, VariantDetails},
     error::{Error, PathStep, Relation},
-    settings::{OptionalNullable, Settings, Std},
+    settings::{GeneratedCrate, OptionalNullable, Settings, Std},
 };
 
 /// Prefix shared by the `::std::num::NonZero*` type paths.
@@ -1633,16 +1633,17 @@ where
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
+        let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
         if value.is_null() {
             Ok(self.generate(|| {
                 quote! {
-                    ::json_serde::OptionalNullable::null()
+                    #json_serde::OptionalNullable::null()
                 }
             }))
         } else {
             Ok(self.default_impl(state, id, value)?.map(|value_stream| {
                 quote! {
-                    ::json_serde::OptionalNullable::value(#value_stream)
+                    #json_serde::OptionalNullable::value(#value_stream)
                 }
             }))
         }

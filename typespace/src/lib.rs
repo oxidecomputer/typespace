@@ -253,7 +253,7 @@ use crate::default::{SharedDefaultFn, shared_default_fn};
 use crate::error::Error;
 use crate::output::Outputspace;
 use crate::serde_attrs::{SerdeAttrs, SerdeDerives};
-use crate::settings::{OptionalNullable, Settings, Std};
+use crate::settings::{GeneratedCrate, OptionalNullable, Settings, Std};
 
 /// A trait that typespace tracks for generated and native types.
 ///
@@ -1612,7 +1612,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 Std::Unqualified => quote! { String },
             },
             Type::JsonValue => quote! { ::serde_json::Value },
-            Type::Never => quote! { ::json_serde::Never },
+            Type::Never => {
+                let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
+                quote! { #json_serde::Never }
+            }
             Type::Unit => quote! { () },
         }
     }
@@ -1699,6 +1702,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         let ty_ident = self.render_ident(type_id);
         let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"));
 
+        let json_serde_text = self.settings.crate_paths.text(GeneratedCrate::JsonSerde);
+
         let std_opt_type = match &self.settings.std {
             Std::FullyQualified => quote! { ::std::option::Option },
             Std::Unqualified => quote! { Option },
@@ -1725,8 +1730,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // use the json::serde::deserialize_some function to enforce this.
             (StructPropertyState::Optional, TypeOfInterest::Other) => {
                 serde_options.push(quote! { default });
+                let deserialize_some = format!("{json_serde_text}::deserialize_some");
                 serde_options.push(quote! {
-                    deserialize_with = "::json_serde::deserialize_some"
+                    deserialize_with = #deserialize_some
                 });
                 serde_options.push(quote! { skip_serializing_if = #std_opt_is_none });
                 // TODO schemars schema_with
@@ -1755,8 +1761,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     }
                     OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
+                        let deserialize_some = format!("{json_serde_text}::deserialize_some");
                         serde_options.push(quote! {
-                            deserialize_with = "::json_serde::deserialize_some"
+                            deserialize_with = #deserialize_some
                         });
                         serde_options.push(quote! {
                             skip_serializing_if = #std_opt_is_none
@@ -1772,7 +1779,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     OptionalNullable::CustomType(container) => {
                         let custom_type_path = container.rendered_path(&self.settings.std);
                         serde_options.push(quote! { default });
-                        let is_absent = "::json_serde::OptionalNullable::is_absent";
+                        let is_absent = format!("{json_serde_text}::OptionalNullable::is_absent");
                         serde_options.push(quote! {
                             skip_serializing_if = #is_absent
                         });
@@ -1816,13 +1823,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // cannot be serialized (and to work around schemars bugs in
                 // all versions).
                 serde_options.push(quote! { default });
+                let always = format!("{json_serde_text}::always");
                 serde_options.push(quote! {
-                    skip_serializing_if = "::json_serde::always"
+                    skip_serializing_if = #always
                 });
 
+                let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
                 (
-                    quote! { ::json_serde::Absent },
-                    quote! { ::json_serde::Absent },
+                    quote! { #json_serde::Absent },
+                    quote! { #json_serde::Absent },
                 )
             }
             (

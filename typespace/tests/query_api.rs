@@ -3,6 +3,8 @@
 //! What a finalized typespace answers about the types it holds.
 
 use quote::quote;
+use typespace::build::StructPropertyState;
+use typespace::settings;
 use typespace::{
     TypespaceBuilder, TypespaceTrait,
     build::{
@@ -973,4 +975,44 @@ fn builder_ident_tracks_what_rendering_emits() {
         );
         assert!(!is_rendered(&ts, name));
     }
+}
+
+/// A crate-path override reaches query answers, not just rendering:
+/// `details()` names a `Never` by the configured json-serde path.
+#[test]
+fn details_follows_the_configured_json_serde_path() {
+    fn build(settings: Settings) -> typespace::Typespace<String> {
+        let mut builder = typespace::TypespaceBuilder::new(settings);
+        builder.insert("never".to_string(), Type::Never).unwrap();
+        builder
+            .insert(
+                "holder".to_string(),
+                Struct::new()
+                    .name("Holder")
+                    .properties(vec![
+                        StructProperty::new("gone", "never".to_string())
+                            .with_state(StructPropertyState::Optional),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder.finalize(no_cycles).unwrap()
+    }
+
+    let canonical = build(Settings::minimal());
+    let view::TypeDetails::Builtin(name) = canonical.get_type(&"never".to_string()).details()
+    else {
+        panic!("expected a builtin");
+    };
+    assert_eq!(name, "::json_serde::Absent");
+
+    let remapped = build(
+        Settings::minimal()
+            .with_crate_path(settings::GeneratedCrate::JsonSerde, "::my_sdk::json_serde"),
+    );
+    let view::TypeDetails::Builtin(name) = remapped.get_type(&"never".to_string()).details() else {
+        panic!("expected a builtin");
+    };
+    assert_eq!(name, "::my_sdk::json_serde::Absent");
 }

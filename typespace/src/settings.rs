@@ -77,6 +77,12 @@ pub struct Settings {
     #[serde(default)]
     pub struct_builder: bool,
 
+    /// Overriding paths for the crates generated code references; see
+    /// [`GeneratedCrate`]. A crate with no entry renders under its
+    /// canonical path, e.g. `::serde_json`.
+    #[serde(default)]
+    pub crate_paths: CratePaths,
+
     // TYPIFY COMPAT ANCHOR. This setting exists so typespace can
     // imitate typify's renderer while typify moves onto it, and it goes
     // away when that finishes. Every site whose behavior changes under
@@ -171,6 +177,7 @@ impl Settings {
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
             struct_builder: false,
+            crate_paths: Default::default(),
             typify_compat: false,
         }
     }
@@ -356,6 +363,27 @@ impl Settings {
     /// Specify whether struct types should include an associated builder.
     pub fn with_struct_builder(mut self, struct_builder: bool) -> Self {
         self.struct_builder = struct_builder;
+        self
+    }
+
+    /// Set the path generated code references one crate by.
+    ///
+    /// The default for each crate is its canonical path, e.g.
+    /// `::json_serde`; an override serves a consumer that reaches the
+    /// crate another way, such as through a re-export.
+    ///
+    /// ```
+    /// # use typespace::settings::{GeneratedCrate, Settings};
+    /// let settings = Settings::minimal()
+    ///     .with_crate_path(GeneratedCrate::JsonSerde, "::my_sdk::json_serde");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` cannot be parsed as a plain path: `::`-separated
+    /// segments with no generic arguments.
+    pub fn with_crate_path(mut self, krate: GeneratedCrate, path: &str) -> Self {
+        self.crate_paths.set(krate, path);
         self
     }
 
@@ -1020,4 +1048,123 @@ pub enum OptionalNullable {
     /// implements it never, always, or (typically) when `T` does.
     /// [`ContainerType::option`] is the intended base for a declaration.
     CustomType(ContainerType),
+}
+
+/// A crate generated code references by path.
+///
+/// Each variant names one crate whose path appears in generated code
+/// on typespace's own initiative--as opposed to the paths a consumer
+/// already chooses, such as a native's or a configured container's.
+/// [`Settings::with_crate_path`] overrides the path a crate renders
+/// under; the canonical paths are `::serde`, `::serde_json`,
+/// `::schemars`, `::json_serde`, and `::regress`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeneratedCrate {
+    /// Trait paths in derive lists and hand-written serde impls.
+    Serde,
+    /// `Value` and `Map`, and runtime construction of default values.
+    SerdeJson,
+    /// The `JsonSchema` trait and hand-written schema impls.
+    Schemars,
+    /// Wire-fidelity helpers: `Absent`, `Never`, the flatten adapters,
+    /// and the optional-property deserializers.
+    JsonSerde,
+    /// Pattern validation in constrained string newtypes.
+    Regress,
+}
+
+impl GeneratedCrate {
+    /// The path the crate renders under with no override configured.
+    fn canonical_text(&self) -> &'static str {
+        match self {
+            GeneratedCrate::Serde => "::serde",
+            GeneratedCrate::SerdeJson => "::serde_json",
+            GeneratedCrate::Schemars => "::schemars",
+            GeneratedCrate::JsonSerde => "::json_serde",
+            GeneratedCrate::Regress => "::regress",
+        }
+    }
+}
+
+/// Overriding paths for the crates generated code references, keyed by
+/// [`GeneratedCrate`].
+///
+/// Deserializes from a map of crate to path, e.g.
+/// `{ "json-serde": "::my_sdk::json_serde" }`. A crate with no entry
+/// renders under its canonical path.
+#[derive(Default, Deserialize)]
+#[serde(try_from = "BTreeMap<GeneratedCrate, String>")]
+pub struct CratePaths(BTreeMap<GeneratedCrate, syn::Type>);
+
+// `syn::Type` implements `Debug` only under syn's `extra-traits`
+// feature; render the paths instead, as `ContainerType` does.
+impl std::fmt::Debug for CratePaths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(krate, path)| (krate, path_text(path))))
+            .finish()
+    }
+}
+
+impl CratePaths {
+    /// The configured path for `krate`, or `None` for the canonical
+    /// path.
+    pub fn get(&self, krate: GeneratedCrate) -> Option<&syn::Type> {
+        self.0.get(&krate)
+    }
+
+    fn set(&mut self, krate: GeneratedCrate, path: &str) {
+        self.0.insert(
+            krate,
+            parse_plain_path(path).unwrap_or_else(|reason| panic!("{reason}")),
+        );
+    }
+
+    /// The tokens `krate` renders as.
+    pub(crate) fn tokens(&self, krate: GeneratedCrate) -> proc_macro2::TokenStream {
+        use quote::ToTokens;
+        match self.0.get(&krate) {
+            Some(path) => path.to_token_stream(),
+            None => syn::parse_str::<syn::Type>(krate.canonical_text())
+                .expect("canonical paths parse")
+                .to_token_stream(),
+        }
+    }
+
+    /// The unspaced string `krate` renders as inside a serde attribute
+    /// value.
+    pub(crate) fn text(&self, krate: GeneratedCrate) -> String {
+        match self.0.get(&krate) {
+            Some(path) => path_text(path),
+            None => krate.canonical_text().to_string(),
+        }
+    }
+}
+
+impl TryFrom<BTreeMap<GeneratedCrate, String>> for CratePaths {
+    type Error = String;
+
+    fn try_from(paths: BTreeMap<GeneratedCrate, String>) -> Result<Self, Self::Error> {
+        Ok(Self(
+            paths
+                .into_iter()
+                .map(|(krate, path)| Ok((krate, parse_plain_path(&path)?)))
+                .collect::<Result<_, String>>()?,
+        ))
+    }
+}
+
+/// Parse a crate path override: `::`-separated segments with no
+/// generic arguments, so attribute strings built from it stay in the
+/// exact form the canonical paths use.
+fn parse_plain_path(path: &str) -> Result<syn::Type, String> {
+    let parsed = syn::parse_str::<syn::Type>(path)
+        .map_err(|err| format!("invalid crate path {path:?}: {err}"))?;
+    match compact_path_text(&parsed) {
+        Some(_) => Ok(parsed),
+        None => Err(format!(
+            "invalid crate path {path:?}: expected plain ::-separated segments"
+        )),
+    }
 }
