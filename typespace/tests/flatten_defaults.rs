@@ -183,7 +183,7 @@ fn two_flattened_properties_each_claim_their_own_keys() {
 /// reading, and it matches how the walk already treats a required
 /// property the value fails to name.
 #[test]
-fn unclaimed_key_without_a_flattened_property_is_rejected() {
+fn unclaimed_key_under_deny_unknown_fields_is_rejected() {
     let builder = typespace_builder!(settings(), {
         #[default = { "a": 1, "typo": 2 }]
         #[deny_unknown_fields]

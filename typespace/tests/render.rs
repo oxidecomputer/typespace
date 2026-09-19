@@ -2946,11 +2946,11 @@ fn test_serde_trait_combinations() {
     }
 }
 
-// Per-type `#[derive = [..]]` renders alongside the computed traits and
-// the crate-wide `with_derive` list: computed traits first, then the
-// crate-wide derives, then the per-type ones last.
+// Per-type `#[derive = [..]]` takes effect alongside the computed
+// traits and the crate-wide `with_derive` list; all three sources
+// merge into the one sorted derive list.
 #[test]
-fn test_extra_derives_ordering() {
+fn test_extra_derives_combine() {
     let settings = Settings::minimal()
         .with_std(Std::Unqualified)
         .with_required_trait(TypespaceTrait::Debug)
@@ -2968,7 +2968,7 @@ fn test_extra_derives_ordering() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_extra_derives_ordering.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_extra_derives_combine.rs", ts.to_codespace().into_stream())]
     fn inner() {
         // Hash comes from the crate-wide with_derive; PartialOrd is the
         // per-type extra, additional to it.
@@ -2981,10 +2981,10 @@ fn test_extra_derives_ordering() {
     }
 }
 
-// Per-type `#[derive = [..]]` on each named-type shape: a struct, an
+// Per-type `#[derive = [..]]` on each kind of named type: a struct, an
 // enum, a newtype, a multi-field tuple struct, and a unit struct, each
-// with its own render path. The crate-wide `with_derive` list still
-// precedes the per-type one on every shape.
+// with its own render path folding the per-type list into the same
+// sorted derive list.
 #[test]
 fn test_extra_derives_multi_shape() {
     let settings = Settings::minimal()
@@ -3200,11 +3200,13 @@ fn test_string_default_skip_withheld_under_typify_compat() {
 }
 
 // Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
-// a desired Copy drops at a type holding either. Clone is required
+// a desired Copy drops at a type holding either; under typify_compat a
+// desired Display and FromStr are withheld from a JsonValue newtype
+// the same way, which the impls_of assertions pin. Clone is required
 // directly, as in the String case above, so a surviving derive
 // distinguishes "Copy dropped" from "nothing was granted at all".
 #[test]
-fn test_copy_desired_box_and_json_value_drop_copy() {
+fn test_box_and_json_value_drop_desired_traits() {
     let builder = typespace_builder!(
         Settings::minimal()
             .with_typify_compat(true)
@@ -3317,8 +3319,6 @@ fn test_tuple_marker_extras() {
 
 // The settings these tests share: `Default` desired so it lands on every
 // type that can implement it, plus the traits the assertions need.
-// `Display` and `FromStr` stay out because a newtype that has either in
-// its trait set panics in render.
 // A generated default function is named for its containing type path
 // and the property, snake-cased: the enum name, then the variant name,
 // then the property for a struct variant, and the struct name then the
@@ -4008,10 +4008,9 @@ fn test_default_enum_with_default_value() {
 /// A whole-type default value alongside a required property.
 ///
 /// The default value supplies the required property, so the type can
-/// implement `Default` and `feasibility` grants it. The impl it should
-/// get is the one typify writes whenever a type carries its own default
-/// value: the body is that value walked as a literal, with no reference
-/// to any property's own default.
+/// implement `Default` and `feasibility` grants it. The impl body is
+/// the value walked as a literal by `default.rs`, with no reference to
+/// any property's own default:
 ///
 /// ```ignore
 /// impl ::std::default::Default for WholeDefault {
@@ -4023,12 +4022,6 @@ fn test_default_enum_with_default_value() {
 ///     }
 /// }
 /// ```
-///
-/// `Struct::render` writes typify's other impl instead, the one built
-/// from each property's `DefaultConstructor`. A required property's
-/// constructor is `DefaultConstructor::None`, which that code maps to
-/// `unreachable!()`, so rendering this graph panics. The value walk the
-/// correct body needs belongs in `default.rs`.
 #[test]
 fn test_default_whole_type_value_with_required_property() {
     let builder = typespace_builder!(default_settings(), {
@@ -4053,9 +4046,9 @@ fn test_default_whole_type_value_with_required_property() {
     );
 }
 
-// The tests below cover the value walk in `default.rs`. Only its check
-// half is reachable from here: `finalize` validates a type's own
-// default value, and nothing renders one yet.
+// The tests below cover the value walk in `default.rs`, both halves:
+// `finalize` validates a type's own default value, and rendering
+// builds the `Default` impl body from it.
 
 /// A default value that fits its type survives `finalize`.
 ///
@@ -4275,10 +4268,10 @@ fn test_default_value_newtype_rejects_inner_mismatch() {
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
 }
 
-// The tests below cover the container and enum arms the value walk in
-// `default.rs` gained alongside this comment: `Vec`, `Map`, `Set`,
-// `Array`, `Tuple`, `TupleStruct`, and the internal/adjacent/untagged
-// (and external-with-a-payload) enum tag types.
+// The tests below cover the container and enum arms of the value walk
+// in `default.rs`: `Vec`, `Map`, `Set`, `Array`, `Tuple`,
+// `TupleStruct`, and the internal/adjacent/untagged (and
+// external-with-a-payload) enum tag types.
 
 /// A property default value across every container kind: `Vec`, `Map`
 /// (string-keyed), `Set`, a fixed-size array, and a tuple.
@@ -4406,8 +4399,6 @@ fn test_default_value_map_key_type() {
     }
 }
 
-/// A property default value for a tuple struct, both a plain one and
-/// one whose trailing field collects the rest of the sequence.
 // A tuple struct with a whole-type default value renders a `Default`
 // impl built from that value, so its fields owe no `Default` of their
 // own. `feasibility` answers `IfSomeChildren(vec![])` for that case;
@@ -4431,6 +4422,8 @@ fn tuple_struct_with_a_default_value_obligates_no_field() {
         .expect("a default value supplies the field, so IpAddr owes no Default");
 }
 
+/// A property default value for a tuple struct, both a plain one and
+/// one whose trailing field collects the rest of the sequence.
 #[test]
 fn test_default_value_tuple_struct_kinds() {
     let builder = typespace_builder!(default_settings(), {
@@ -5301,8 +5294,6 @@ fn test_render_constrained_newtype_json_schema_draft() {
     }
 }
 
-// `feasibility` in `trait_resolution.rs` answers `ManuallyRealizable`
-
 // `feasibility` in `trait_resolution.rs` answers `IfSomeChildren`
 // for Display and FromStr on two kinds of type, and the renderer writes
 // the impls that answer stands for:
@@ -6168,14 +6159,12 @@ fn test_struct_defaults() {
     }
 }
 
-// `feasibility` documents the contract for a struct with an attached
-// default value: "The hand-written impl takes each property the
-// default value names from that value and fills the rest with
-// Default::default()". `Struct::render` in `build/structs.rs` consults
-// `common.default` only to decide whether the derive shortcut applies;
-// the impl body it writes comes entirely from each property's
-// `DefaultConstructor`, so the attached value's contents are
-// discarded.
+// The contract for a struct with an attached default value: the
+// hand-written impl takes each property the default value names from
+// that value and fills the rest with `Default::default()`.
+// `Struct::render` in `build/structs.rs` builds the impl body from the
+// value walk in `default.rs`, so the attached value's contents are
+// what the impl constructs.
 #[test]
 fn whole_type_default_value_populates_default_impl() {
     let builder = typespace_builder!(
@@ -6459,16 +6448,11 @@ fn flattened_default_value_supplies_the_flattened_property() {
 // never constructs its value, and the natives inside that value are
 // never deserialized.
 //
-// `check_type_defaults` walks every attached default value regardless
-// and seeds `Deserialize` for each native it finds, so the requirement
-// lands whether or not the code that would deserialize it is emitted.
-// Under `Settings::minimal()`, where nothing requires `Default`, that
-// refuses a graph whose output would have been fine. The conflict even
-// says "generated code does so by deserializing it", which is a claim
-// about a decision that has not been made when the seed is created.
-//
-// The same conditionality applies to a property-level `DefaultValue`,
-// whose `defaults::` function is reached only on a `Deserialize` path.
+// The value walk hands what constructing the value would oblige (here,
+// `Deserialize` of the native) to `feasibility` as a conditional
+// obligation, weighed only when `Default` itself is decided. Under
+// `Settings::minimal()`, where nothing asks for `Default`, the
+// obligation never fires and the graph finalizes.
 #[test]
 fn a_default_value_that_is_never_rendered_requires_nothing() {
     let builder = typespace_builder!(Settings::minimal(), {

@@ -676,12 +676,11 @@ fn scoped_and_prefinalize_idents() {
 }
 
 // `#[deny_unknown_fields]` claimed through the macro compiles against
-// the real crate and finalizes; the view layer has no accessor for
-// the flag yet (that is the rendering work this attribute unblocks),
-// so `get_deny_unknown_fields()`--called directly on the built type,
+// the real crate and finalizes. Rendering consumes the flag as a
+// serde attribute, and the view has no accessor for it, so
+// `get_deny_unknown_fields()`--called directly on the built type,
 // the same way `build_side_queries` above exercises other build-side
-// accessors--is the only way to prove it landed rather than being
-// silently dropped by the macro's lowering.
+// accessors--is where the tests below read it back.
 #[test]
 fn deny_unknown_fields_landed_via_the_macro() {
     let builder = typespace_builder!(Settings::typical(), {
@@ -741,10 +740,11 @@ fn deny_unknown_fields_get_accessor_reflects_the_claim() {
 }
 
 // The per-type `#[derive = [..]]` and `#[attr = [..]]` claimed through
-// the macro compile against the real crate and finalize. Nothing
-// renders either list yet, so the assertion this test can make is that
-// the macro's lowering builds; that the lists survive the builder chain
-// is `extra_derives_and_attrs_get_accessors_reflect_the_claim` below.
+// the macro compile against the real crate and finalize, on every
+// shape that carries the slots. Rendered output is pinned by the
+// `test_extra_derives_*` tests in render.rs; that the lists survive
+// the builder chain is
+// `extra_derives_and_attrs_get_accessors_reflect_the_claim` below.
 #[test]
 fn extra_derives_and_attrs_landed_via_the_macro() {
     let builder = typespace_builder!(Settings::typical(), {
@@ -778,9 +778,9 @@ fn extra_derives_and_attrs_landed_via_the_macro() {
 
 // Every named shape stores what its `extra_derives`/`extra_attrs`
 // builder methods were given, and hands it back through both the
-// shape's `get_*` accessors and `Type`'s. Rendering reads neither list
-// yet, so these accessors are the only proof the data landed rather
-// than being dropped on the way through `build()`.
+// shape's `get_*` accessors and `Type`'s, so a list dropped on the way
+// through `build()` shows up here rather than as a missing derive in
+// some rendered file.
 #[test]
 fn extra_derives_and_attrs_get_accessors_reflect_the_claim() {
     let derives = ["::std::hash::Hash", "PartialOrd"];
