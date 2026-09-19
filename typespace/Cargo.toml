@@ -9,6 +9,7 @@ description = "Model Rust types for code generation"
 keywords = ["codegen", "json-schema", "serde", "types"]
 categories = ["encoding"]
 readme = "../README.md"
+exclude = ["tests/**"]
 
 [dependencies]
 codespace = { workspace = true }

@@ -112,5 +112,4 @@ via boxing, no trait-requirement propagation, and no JSON/serde fidelity
 
 ## Status
 
-- Pre-publication; API unstable.
 - Part of the typify/progenitor code-generation stack.

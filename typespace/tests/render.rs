@@ -3690,11 +3690,6 @@ fn test_default_impossible_required_property() {
 /// All three answer `IfAllChildren` and pick the trait up as a derive,
 /// since none of them carries an attached default value. A newtype that
 /// does carry one is the separate case below.
-///
-// ATTN REVIEWER: typify1 never derives `Default` for any of these three
-// shapes; its only `derive_set.insert("Default")` is in the struct path.
-// A settings flag to match typify1 is planned, so the tuple struct and
-// unit struct halves of this snapshot are expected to change.
 #[test]
 fn test_default_other_struct_shapes() {
     let builder = typespace_builder!(default_settings(), {
@@ -3952,11 +3947,6 @@ fn test_comparison_derives_typify_compat_off() {
 ///
 /// `feasibility` answers `IfSomeChildren` for such an enum, so
 /// `Default` is in its trait set, but nothing writes the impl.
-///
-// ATTN REVIEWER: this is the gap the `TODO 9/4/2026` in `enums.rs`
-// marks. The trait set says `Color` implements `Default` and the
-// rendered code does not, so a type whose own `Default` leans on
-// `Color`'s would render an impl that fails to compile.
 #[test]
 fn test_default_enum_with_default_value() {
     let builder = typespace_builder!(default_settings(), {

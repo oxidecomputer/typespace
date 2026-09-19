@@ -2438,12 +2438,9 @@ mod tests {
         );
     }
 
-    // REVIEW: "recomputing it into a strip" doesn't really make any sense
-    /// A trait that is both required and desired is granted once and
-    /// never stripped: phase 1 absorbs it, and phase 2 counts a phase-1
-    /// grant as true rather than recomputing it into a strip. This one
-    /// passes with the desired phase absent, because phase 1 alone
-    /// produces the expected set; phase 2 must leave that set alone.
+    /// A trait that is both required and desired is granted once and never
+    /// stripped: phase 1 absorbs it, and phase 2 counts a phase-1 grant as
+    /// true rather than recomputing.
     #[test]
     fn desired_trait_already_required_survives() {
         let builder = typespace_builder!(
@@ -2696,7 +2693,7 @@ mod tests {
     /// the reverse expansion removes them.
     #[test]
     fn stripping_removes_supertrait_dependents() {
-        let mut builder = typespace_builder!(
+        let builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
                 TypespaceTrait::Debug,
@@ -2707,31 +2704,12 @@ mod tests {
                 TypespaceTrait::Hash,
             ]),
             {
+                native weird::Weird: Clone + Debug + Eq + Ord + Hash;
                 struct S {
-                    odd: Weird,
+                    odd: weird::Weird,
                 }
             }
         );
-
-        // The macro has no syntax for native types, so this one is
-        // inserted by hand under the id the field references.
-        // REVIEW: remember to fix this once we do have native syntax
-        builder
-            .insert(
-                "Weird".to_string(),
-                Type::Native(Native::new(
-                    "weird::Weird",
-                    trait_set([
-                        TypespaceTrait::Clone,
-                        TypespaceTrait::Debug,
-                        TypespaceTrait::Eq,
-                        TypespaceTrait::Ord,
-                        TypespaceTrait::Hash,
-                    ]),
-                    Vec::new(),
-                )),
-            )
-            .unwrap();
 
         let typespace = builder.finalize(no_cycles).unwrap();
 
@@ -3020,32 +2998,19 @@ mod tests {
     /// `OffenderReason::NativeMissingImpl`.
     #[test]
     fn desired_imposes_no_requirement_on_native() {
-        let mut builder = typespace_builder!(
+        let builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
                 TypespaceTrait::Debug,
                 TypespaceTrait::Ord,
             ]),
             {
+                native plain::Plain: Clone + Debug;
                 struct S {
-                    plain: Plain,
+                    plain: plain::Plain,
                 }
             }
         );
-
-        // The macro has no syntax for native types, so this one is
-        // inserted by hand under the id the field references.
-        // REVIEW: remmeber to replace
-        builder
-            .insert(
-                "Plain".to_string(),
-                Type::Native(Native::new(
-                    "plain::Plain",
-                    trait_set([TypespaceTrait::Clone, TypespaceTrait::Debug]),
-                    Vec::new(),
-                )),
-            )
-            .unwrap();
 
         let typespace = builder
             .finalize(no_cycles)
