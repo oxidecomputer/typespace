@@ -34,16 +34,12 @@ impl ::std::convert::TryFrom<Coords> for EvenCoords {
     fn try_from(
         value: Coords,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static VALIDATOR: ::std::sync::LazyLock<::jsonschema::Validator> = ::std::sync::LazyLock::new(||
-        {
-            let schema = ::serde_json::from_str(
-                    "{\"properties\":{\"x\":{\"multipleOf\":2,\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"],\"type\":\"object\"}",
-                )
-                .unwrap();
-            ::jsonschema::Validator::new(&schema).unwrap()
-        });
+        #[::jsonschema::validator(
+            schema = "{\"properties\":{\"x\":{\"multipleOf\":2,\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"],\"type\":\"object\"}"
+        )]
+        struct Schema;
         let json = ::serde_json::to_value(&value).map_err(|e| e.to_string())?;
-        VALIDATOR.validate(&json).map_err(|e| e.to_string())?;
+        Schema::validate(&json).map_err(|e| e.to_string())?;
         Ok(Self(value))
     }
 }

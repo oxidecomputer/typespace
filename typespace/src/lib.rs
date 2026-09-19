@@ -189,8 +189,9 @@
 //!   [`build::NewtypeConstraints::String`] carries a pattern. Each
 //!   pattern renders a `::regress::Regex` in a `LazyLock`, checked on
 //!   conversion.
-//! - [jsonschema](https://crates.io/crates/jsonschema): required if
-//!   the output contains a [`build::NewtypeStruct`] whose
+//! - [jsonschema](https://crates.io/crates/jsonschema), with the
+//!   `macros` feature: required if the output contains a
+//!   [`build::NewtypeStruct`] whose
 //!   [`build::NewtypeConstraints::JsonSchema`] carries a schema. The
 //!   conversion serializes the inner value and validates the result
 //!   against that schema.

@@ -2127,15 +2127,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             value: #inner_ident
                         ) -> ::std::result::Result<Self, self::error::ConversionError>
                         {
-                            static VALIDATOR: ::std::sync::LazyLock<::jsonschema::Validator> =
-                                ::std::sync::LazyLock::new(|| {
-                                    let schema = ::serde_json::from_str(#schema_string)
-                                        .unwrap();
-                                    ::jsonschema::Validator::new(&schema).unwrap()
-                                });
+                            #[::jsonschema::validator(schema = #schema_string)]
+                            struct Schema;
                             let json = ::serde_json::to_value(&value)
                                 .map_err(|e| e.to_string())?;
-                            VALIDATOR.validate(&json).map_err(|e| e.to_string())?;
+                            Schema::validate(&json).map_err(|e| e.to_string())?;
                             Ok(Self(value))
                         }
                     }

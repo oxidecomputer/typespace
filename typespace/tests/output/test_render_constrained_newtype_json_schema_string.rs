@@ -42,16 +42,12 @@ impl ::std::convert::TryFrom<::std::string::String> for Terse {
     fn try_from(
         value: ::std::string::String,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        static VALIDATOR: ::std::sync::LazyLock<::jsonschema::Validator> = ::std::sync::LazyLock::new(||
-        {
-            let schema = ::serde_json::from_str(
-                    "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}",
-                )
-                .unwrap();
-            ::jsonschema::Validator::new(&schema).unwrap()
-        });
+        #[::jsonschema::validator(
+            schema = "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}"
+        )]
+        struct Schema;
         let json = ::serde_json::to_value(&value).map_err(|e| e.to_string())?;
-        VALIDATOR.validate(&json).map_err(|e| e.to_string())?;
+        Schema::validate(&json).map_err(|e| e.to_string())?;
         Ok(Self(value))
     }
 }
