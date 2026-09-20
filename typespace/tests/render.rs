@@ -4137,6 +4137,91 @@ fn test_default_value_float_rejects_non_number() {
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
 }
 
+/// An integer rejects a value that is not a whole number.
+///
+/// `as_number` accepts a float, so a value like 1.5 reaches rendering
+/// and becomes the literal `1.5_u32`, which the consumer's build
+/// refuses.
+#[test]
+fn test_default_value_integer_rejects_fraction() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 1.5]
+        struct Count(u32);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A `NonZero` integer rejects zero.
+///
+/// Nothing checks the value against the range its type accepts, so
+/// zero reaches rendering and becomes
+/// `NonZeroU64::new(0).unwrap()`, which panics when the consumer asks
+/// for the default.
+#[test]
+fn test_default_value_nonzero_rejects_zero() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 0]
+        struct Count(NonZeroU64);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An unsigned integer rejects a negative value.
+///
+/// A negative value renders as `defaults::default_i64::<u32, -5>`,
+/// whose `try_from` panics when the consumer asks for the default.
+#[test]
+fn test_default_value_unsigned_rejects_negative() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = -5]
+        struct Count(u32);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// An integer rejects a value its width cannot hold.
+///
+/// A value past the end of the type's range renders as the literal
+/// `300_u8`, which the consumer's build refuses.
+#[test]
+fn test_default_value_integer_rejects_out_of_range() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 300]
+        struct Small(u8);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
+/// A float rejects a value its width cannot hold.
+///
+/// The float arm checks that the value is a number and then writes it
+/// with the type as a suffix, so a value past the end of the type's
+/// range renders as the literal `1e300_f32`, which the consumer's
+/// build refuses.
+#[test]
+fn test_default_value_float_rejects_out_of_range() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 1e300]
+        struct Small(f32);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
 /// A newtype struct's default value is checked against its inner type.
 ///
 /// The inner type here is an alias, so the alias has to forward for the

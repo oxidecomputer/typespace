@@ -24,6 +24,75 @@ use crate::{
 /// than written as a literal, since there is no literal form for them.
 const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
+/// The values an integer type accepts: the closed range it holds, and
+/// whether zero is among them.
+///
+/// A JSON number reaches here as a `u64` or an `i64`, so the widths
+/// past those saturate at what a value can express rather than at what
+/// the Rust type holds. `usize` and `isize` take the 64 bit answer,
+/// which is the permissive reading for a consumer building elsewhere.
+/// An integer type this does not name goes unchecked.
+fn integer_domain(itype: &str) -> Option<(i128, i128, bool)> {
+    let (width, nonzero) = match itype.strip_prefix(STD_NUM_NONZERO_PREFIX) {
+        Some(width) => (width.to_ascii_lowercase(), true),
+        None => (itype.to_string(), false),
+    };
+
+    let (min, max) = match width.as_str() {
+        "u8" => (0, u8::MAX as i128),
+        "u16" => (0, u16::MAX as i128),
+        "u32" => (0, u32::MAX as i128),
+        "u64" | "u128" | "usize" => (0, u64::MAX as i128),
+        "i8" => (i8::MIN as i128, i8::MAX as i128),
+        "i16" => (i16::MIN as i128, i16::MAX as i128),
+        "i32" => (i32::MIN as i128, i32::MAX as i128),
+        "i64" | "i128" | "isize" => (i64::MIN as i128, i64::MAX as i128),
+        _ => return None,
+    };
+
+    Some((min, max, !nonzero))
+}
+
+/// Check a default value against the integer type it lands in.
+///
+/// Rendering writes the value as a literal or hands it to a shared
+/// function, neither of which reports anything: a value outside the
+/// type's range becomes a literal the consumer's build refuses, and
+/// zero for a `NonZero` becomes a `new(..).unwrap()` that panics when
+/// the consumer asks for the default.
+fn check_integer_value<Id: Clone + std::fmt::Debug + std::fmt::Display>(
+    value: &serde_json::Value,
+    itype: &str,
+    id: &Id,
+) -> Result<(), Error<Id>> {
+    let invalid = |reason: String| Error::InvalidDefault {
+        value: value.clone(),
+        id: id.clone(),
+        reason,
+    };
+
+    // A fraction answers neither, which is how an integer type refuses
+    // one.
+    let number = match (value.as_u64(), value.as_i64()) {
+        (Some(unsigned), _) => unsigned as i128,
+        (_, Some(signed)) => signed as i128,
+        (None, None) => return Err(invalid("expected an integer".to_string())),
+    };
+
+    let Some((min, max, zero_ok)) = integer_domain(itype) else {
+        return Ok(());
+    };
+
+    if number < min || number > max {
+        return Err(invalid(format!("{number} is out of range for {itype}")));
+    }
+    if number == 0 && !zero_ok {
+        return Err(invalid(format!("{itype} has no zero")));
+    }
+
+    Ok(())
+}
+
 /// A function in the generated `defaults` module that properties share.
 ///
 /// A boolean or integer default value needs no code of its own: one
@@ -135,9 +204,9 @@ pub(crate) fn shared_default_fn<Id: Ord>(
                 format!("defaults::default_i64::<{}, {}>", itype, value),
             ),
             // A value that is a number but neither a u64 nor an i64 is
-            // a float, which no helper produces. Validation admits one
-            // for an integer type, so this is reachable; the
-            // per-property path reports it.
+            // a float, which no helper produces. Validation refuses one
+            // for an integer type, so a value reaching here has already
+            // been checked; the per-property path takes it either way.
             (None, None) => return None,
         },
 
@@ -628,13 +697,7 @@ where
                 Ok(self.generate(|| quote! { #v }))
             }
             Type::Integer(itype) => {
-                let Some(_) = value.as_number() else {
-                    return Err(Error::InvalidDefault {
-                        value: value.clone(),
-                        id: id.clone(),
-                        reason: "expected an integer".to_string(),
-                    });
-                };
+                check_integer_value(value, itype, id)?;
 
                 if itype.starts_with(STD_NUM_NONZERO_PREFIX) {
                     let type_path = syn::parse_str::<syn::TypePath>(itype).unwrap();
@@ -655,13 +718,24 @@ where
                 }
             }
             Type::Float(ftype) => {
-                let Some(_) = value.as_number() else {
+                let Some(number) = value.as_f64() else {
                     return Err(Error::InvalidDefault {
                         value: value.clone(),
                         id: id.clone(),
                         reason: "expected a number".to_string(),
                     });
                 };
+
+                // The value renders as a literal with the type as its
+                // suffix, so one past the end of an `f32` becomes a
+                // literal the consumer's build refuses.
+                if ftype == "f32" && number.is_finite() && (number as f32).is_infinite() {
+                    return Err(Error::InvalidDefault {
+                        value: value.clone(),
+                        id: id.clone(),
+                        reason: format!("{number} is out of range for {ftype}"),
+                    });
+                }
 
                 let val = match proc_macro2::Literal::from_str(&format!("{}_{}", value, ftype)) {
                     Ok(v) => v,
