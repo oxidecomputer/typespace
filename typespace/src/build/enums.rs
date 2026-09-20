@@ -337,7 +337,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         };
         let name = name.as_deref().expect("validated type has a name");
         let tag_type = tag_type.as_ref().expect("validated enum has a tag type");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
         let name_ident = format_ident!("{name}");
 
@@ -421,7 +421,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             let variant_ident = format_ident!("{}", rust_name);
             let mut variant_serde = serde_derives.attrs();
             variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
-            let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+            let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
             let default_attr = (unit_default_value.as_ref() == Some(rust_name)).then(|| {
                 quote! { #[default] }
@@ -452,7 +452,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             };
 
             quote! {
-                #description
+                #rustdoc
                 #variant_serde
                 #default_attr
                 #variant_ident #data
@@ -477,7 +477,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            #description
+            #rustdoc
             #( #attrs )*
             #derive_attr
             #serde
