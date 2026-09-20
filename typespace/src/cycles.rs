@@ -97,7 +97,8 @@ where
 /// Walks the containment graph--[`Type::contained_children_mut`], the children
 /// that contribute to a type's size--from every type. A child that closes a
 /// cycle is replaced by a fresh [`Type::Box`] around it, which gives the cycle
-/// a finite size; the remaining children are descended into.
+/// a finite size; the remaining children are descended into. For a given id,
+/// we generate a Boxed version at most once.
 pub(crate) fn break_cycles<Id, F>(types: &mut BTreeMap<Id, Type<Id>>, mut make_box_id: F)
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -105,6 +106,9 @@ where
 {
     // A snapshot: the boxes minted below are never themselves roots.
     let roots = types.keys().cloned().collect();
+
+    // The boxes created so far, by the type each one wraps.
+    let mut boxes = BTreeMap::<Id, Id>::new();
 
     walk_type_graph(roots, |type_id, active| -> Result<Vec<Id>, Infallible> {
         // Determine which child types form cycles--and therefore need to be
@@ -126,15 +130,21 @@ where
             child_ids.partition::<Vec<_>, _>(|child_id| active.contains(child_id))
         };
 
-        // `snip` may contain duplicate ids, but `make_box_id` is
-        // idempotent, so a duplicate maps to the same box id rather than
-        // colliding with a different one under the same key.
+        // A type already boxed, at this node or an earlier one, reuses
+        // its box.
         let replace = snip
             .into_iter()
             .map(|type_id| {
-                let box_id = make_box_id(&type_id);
-                let box_typ = Type::Box(type_id.clone());
-                types.insert(box_id.clone(), box_typ);
+                let box_id = boxes
+                    .entry(type_id.clone())
+                    .or_insert_with(|| {
+                        // Create the ID.
+                        let box_id = make_box_id(&type_id);
+                        // Add the new boxed type.
+                        types.insert(box_id.clone(), Type::Box(type_id.clone()));
+                        box_id
+                    })
+                    .clone();
 
                 (type_id, box_id)
             })
