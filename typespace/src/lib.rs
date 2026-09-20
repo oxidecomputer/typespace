@@ -979,8 +979,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// Breaks containment cycles by inserting a `Box<T>` type, making use of
     /// the provided `make_box_id` parameter to generate a new `Id` (with the
-    /// `Id` of the type to be boxed as its input). Pass [`no_cycles`] to
-    /// assert that the graph contains no containment cycles.
+    /// `Id` of the type to be boxed as its input). `make_box_id` is called at
+    /// most once for any given `Id`. Pass [`no_cycles`] to assert that the
+    /// graph contains no containment cycles.
     pub fn finalize<F>(self, make_box_id: F) -> Result<Typespace<Id>, Error<Id>>
     where
         F: FnMut(&Id) -> Id,

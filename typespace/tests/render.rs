@@ -1544,6 +1544,41 @@ fn test_named_cycle_finalizes() {
     builder.finalize(no_cycles).expect("finalize succeeds");
 }
 
+/// `make_box_id` is called at most once for a type, however many edges
+/// into it the walk cuts: `A` closes a cycle through two other types,
+/// and `D` through two of its own fields.
+#[test]
+fn make_box_id_is_called_once_per_boxed_type() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        struct A {
+            b: B,
+            c: C,
+        }
+        struct B {
+            a: A,
+        }
+        struct C {
+            a: A,
+        }
+        struct D {
+            x: D,
+            y: D,
+        }
+    });
+
+    let mut calls = std::collections::BTreeMap::<String, usize>::new();
+    builder
+        .finalize(|id: &String| {
+            *calls.entry(id.clone()).or_default() += 1;
+            format!("Box<{id}>")
+        })
+        .expect("finalize succeeds");
+
+    assert_eq!(calls.get("A"), Some(&1), "{calls:?}");
+    assert_eq!(calls.get("D"), Some(&1), "{calls:?}");
+    assert!(calls.values().all(|&calls| calls == 1), "{calls:?}");
+}
+
 /// We check for containment cycles before checking for representation cycles,
 /// but insertion of a Box only makes an existing cycle longer.
 #[test]
