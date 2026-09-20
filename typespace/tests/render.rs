@@ -6039,3 +6039,34 @@ fn a_default_value_that_is_never_rendered_requires_nothing() {
         "nothing required Default of Holder, so no impl should be rendered"
     );
 }
+
+// A tuple struct's description reaches the schema as the `description`
+// keyword, alongside the doc attribute that says the same thing to
+// Rust.
+#[test]
+fn test_tuple_struct_schema_description() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::JsonSchema),
+        {
+            /// a widget
+            struct Widget(String, u32);
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_tuple_struct_schema_description.rs",
+        ts.to_codespace().into_stream()
+    )]
+    fn inner() {
+        let schema = serde_json::to_value(schemars::schema_for!(import::Widget)).unwrap();
+        assert_eq!(
+            schema["description"],
+            serde_json::json!("a widget"),
+            "{schema:#}"
+        );
+    }
+}

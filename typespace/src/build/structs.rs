@@ -244,7 +244,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
         let name_ident = format_ident!("{name}");
 
         let mut traits = traits.clone();
@@ -473,7 +473,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            #description
+            #rustdoc
             #( #attrs )*
             #derive_attr
             #serde
@@ -798,7 +798,7 @@ impl UnitStruct {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
+        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
         let repr_tokens = crate::value_tokens::value_tokens(repr);
@@ -847,7 +847,7 @@ impl UnitStruct {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            #description
+            #rustdoc
             #( #attrs )*
             #derive_attr
             pub struct #name_ident;
@@ -1046,7 +1046,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
         let name_ident = format_ident!("{name}");
 
@@ -1192,10 +1192,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     quote! { max_items: Some(#len), },
                 )
             };
-
-            let description = description.as_ref().map(|d| {
+            let schema_description = description.as_ref().map(|desc| {
                 quote! {
-                    description: Some(#d.to_string()),
+                    description: Some(#desc.to_string()),
                 }
             });
 
@@ -1224,7 +1223,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                             metadata: Some(::std::boxed::Box::new(
                                 ::schemars::schema::Metadata {
                                     title: Some(#name.to_string()),
-                                    #description
+                                    #schema_description
                                     #default
                                     ..::std::default::Default::default()
                                 }
@@ -1279,7 +1278,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            #description
+            #rustdoc
             #( #attrs )*
             #derive_attr
             pub struct #name_ident(
@@ -1548,7 +1547,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let mut traits = traits.clone();
 
         let name = name.as_deref().expect("validated type has a name");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
+        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
         let inner_ident = typespace.render_ident(inner);
@@ -1588,7 +1587,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         // Canonical item order: see tests/item_order.rs.
         quote! {
-            #description
+            #rustdoc
             #( #attrs )*
             #derive_attr
             #serde_attr
