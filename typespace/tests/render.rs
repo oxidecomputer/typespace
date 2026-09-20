@@ -4204,6 +4204,24 @@ fn test_default_value_integer_rejects_out_of_range() {
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
 }
 
+/// A float rejects a value its width cannot hold.
+///
+/// The float arm checks that the value is a number and then writes it
+/// with the type as a suffix, so a value past the end of the type's
+/// range renders as the literal `1e300_f32`, which the consumer's
+/// build refuses.
+#[test]
+fn test_default_value_float_rejects_out_of_range() {
+    let builder = typespace_builder!(default_settings(), {
+        #[default = 1e300]
+        struct Small(f32);
+    });
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject the default value");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
 /// A newtype struct's default value is checked against its inner type.
 ///
 /// The inner type here is an alias, so the alias has to forward for the
