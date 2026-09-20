@@ -5594,6 +5594,121 @@ fn empty_deny_list_constraints_are_rejected() {
     );
 }
 
+// The list tests below use the builder directly: the test macro has no
+// syntax for allow and deny list constraints.
+
+/// A value on an allow list must be a value of the inner type.
+///
+/// The list renders through the same walk as a default value, and that
+/// walk assumes the value was checked; an unchecked value would panic at
+/// render rather than report, and the checked one reports at finalize.
+#[test]
+fn allow_list_value_must_fit_the_inner_type() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert("u32".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "count".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("u32".to_string())
+                    .name("Count")
+                    .constraints(NewtypeConstraints::AllowList(vec![
+                        JsonValue(serde_json::json!(1)),
+                        JsonValue(serde_json::json!("two")),
+                    ])),
+            ),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("an allow list value that is not a u32 is rejected");
+    };
+    assert!(
+        matches!(&err, Error::InvalidDefault { value, id, .. }
+            if *value == serde_json::json!("two") && id == "u32"),
+        "{err:?}"
+    );
+}
+
+/// A value on a deny list must be a value of the inner type, for the
+/// same reason as an allow list value.
+#[test]
+fn deny_list_value_must_fit_the_inner_type() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert("u32".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "count".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("u32".to_string())
+                    .name("Count")
+                    .constraints(NewtypeConstraints::DenyList(vec![JsonValue(
+                        serde_json::json!(-1),
+                    )])),
+            ),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("a deny list value that is not a u32 is rejected");
+    };
+    assert!(
+        matches!(&err, Error::InvalidDefault { value, id, .. }
+            if *value == serde_json::json!(-1) && id == "u32"),
+        "{err:?}"
+    );
+}
+
+/// A list value on a native is constructed in generated code by
+/// deserializing it, inside a `TryFrom` impl the newtype always carries,
+/// so the native must implement `Deserialize`. One declared without it
+/// conflicts at finalize rather than rendering an impl that cannot work.
+#[test]
+fn allow_list_value_on_a_native_requires_deserialize() {
+    let declared = [
+        TypespaceTrait::Clone,
+        TypespaceTrait::Debug,
+        TypespaceTrait::Serialize,
+    ]
+    .into_iter()
+    .collect::<TypespaceTraitSet>();
+
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert(
+            "date".to_string(),
+            Type::Native(Native::new("chrono::NaiveDate", declared, Vec::new())),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "holiday".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("date".to_string())
+                    .name("Holiday")
+                    .constraints(NewtypeConstraints::AllowList(vec![JsonValue(
+                        serde_json::json!("2024-01-01"),
+                    )])),
+            ),
+        )
+        .unwrap();
+
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("a list value on a native demands Deserialize of the native");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::Deserialize);
+    assert!(matches!(
+        &conflict.reason,
+        OffenderReason::NativeMissingImpl { type_name } if type_name == "chrono::NaiveDate"
+    ));
+}
+
 #[test]
 fn test_enum_derive_default() {
     let builder = typespace_builder!(

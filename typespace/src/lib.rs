@@ -511,8 +511,8 @@ pub(crate) struct DefaultChecks<Id> {
     /// value obliges, with each obligation's path running from the
     /// type named by the key to its target.
     pub(crate) whole_type: BTreeMap<Id, Vec<Obligation<Id>>>,
-    /// Each native a property-level default value reaches, against the
-    /// type whose value first reached it.
+    /// Each native type that can be reached transitively; code generation
+    /// assumes they can be deserialized so we propagate that obligation.
     // TODO 9/12/2026
     // required_resolution seeds these unconditionally, so a type that
     // never deserializes still pays for the natives in its property
@@ -726,10 +726,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
-    /// Check every attached default value, and collect the natives the
-    /// values reach.
+    /// Check every attached default value and every value on a newtype's
+    /// allow or deny list, and collect the natives the values reach.
     ///
-    /// Generated code constructs a native-typed position of a default value by
+    /// Generated code constructs a native-typed position of such a value by
     /// deserializing it, so each collected native must implement
     /// `Deserialize`. The map records each native against the type whose value
     /// first reached it; trait resolution seeds the requirement from the map,
@@ -752,13 +752,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
 
             // A property's own default value renders as a `defaults::`
             // function that only a deserialize path calls. Its natives
-            // are seeded as requirements even so.
+            // are seeded as requirements even so. A newtype's allow or
+            // deny list renders inside its `TryFrom` impl, which is
+            // always carried, so its natives are requirements outright.
             let mut natives = BTreeSet::new();
             match typ {
                 Type::Struct(struct_info) => {
                     natives.extend(struct_info.check_field_defaults(self)?)
                 }
                 Type::Enum(enum_info) => natives.extend(enum_info.check_field_defaults(self)?),
+                Type::NewtypeStruct(newtype) => {
+                    natives.extend(newtype.check_constraint_values(self)?)
+                }
                 _ => (),
             }
             for native in natives {

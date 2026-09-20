@@ -507,6 +507,37 @@ pub struct StructProperty<Id> {
     pub(crate) type_id: Id,
 }
 
+/// The natives a value's walk reaches, from the obligations it raised.
+///
+/// Generated code constructs each native-typed position of the value by
+/// deserializing it, so every native returned here must implement
+/// `Deserialize`.
+///
+/// The walk raises a second kind of obligation, which this filter must
+/// remove. Wherever it reaches a struct with a Default-state property
+/// that the value leaves out, the generated code writes `prop:
+/// Default::default()`, so that property's type needs Default. The set
+/// returned here names only ids, and everything in it is seeded as a
+/// Deserialize requirement, so letting one through would charge the
+/// wrong trait rather than merely charge one twice.
+///
+/// Omitting them instead of widening this channel to carry a trait is
+/// safe only because required_resolution separately charges Default to
+/// the type of every Default-state property of every type, which
+/// already covers every pair the walk can find. If that seed ever
+/// narrows to the types that actually deserialize, these have to come
+/// back.
+fn deserialized_natives<Id: Ord>(obligations: Vec<crate::Obligation<Id>>) -> BTreeSet<Id> {
+    obligations
+        .into_iter()
+        .filter_map(
+            |crate::Obligation {
+                 required, target, ..
+             }| { (required == crate::TypespaceTrait::Deserialize).then_some(target) },
+        )
+        .collect()
+}
+
 impl<Id> StructProperty<Id> {
     /// Create a property named `rust_name` whose type is `type_id`.
     ///
@@ -594,32 +625,9 @@ impl<Id> StructProperty<Id> {
         // A property's own default value renders as a generated function in
         // the defaults `mod` that only a deserialize path calls. Any native
         // types initialized by that default value must implement `Deserialize`.
-        //
-        // The walk raises a second kind of obligation, which this filter must
-        // remove. Wherever it reaches a struct with a Default-state property
-        // that the value leaves out, the generated function writes `prop:
-        // Default::default()`, so that property's type needs Default. The set
-        // returned here names only ids, and everything in it is seeded as a
-        // Deserialize requirement, so letting one through would charge the
-        // wrong trait rather than merely charge one twice.
-        //
-        // Omitting them instead of widening this channel to carry a trait is
-        // safe only because required_resolution separately charges Default to
-        // the type of every Default-state property of every type, which
-        // already covers every pair the walk can find. If that seed ever
-        // narrows to the types that actually deserialize, these have to come
-        // back.
-        Ok(typespace
-            .check_default(value, &self.type_id)?
-            .into_iter()
-            .filter_map(
-                |crate::Obligation {
-                     required, target, ..
-                 }| {
-                    (required == crate::TypespaceTrait::Deserialize).then_some(target)
-                },
-            )
-            .collect())
+        Ok(deserialized_natives(
+            typespace.check_default(value, &self.type_id)?,
+        ))
     }
 }
 
@@ -1427,6 +1435,35 @@ impl<Id> NewtypeStruct<Id> {
             }),
             None => Ok(()),
         }
+    }
+
+    /// Check every value on an allow or deny list against the inner
+    /// type, and collect the natives the values reach.
+    ///
+    /// The list renders inside the newtype's `TryFrom` impl, which
+    /// generated code always carries, so the values are constructed
+    /// unconditionally and their natives must implement `Deserialize`.
+    pub(crate) fn check_constraint_values(
+        &self,
+        typespace: &TypespaceBuilder<Id>,
+    ) -> Result<BTreeSet<Id>, Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        let (NewtypeConstraints::AllowList(values) | NewtypeConstraints::DenyList(values)) =
+            &self.constraints
+        else {
+            return Ok(BTreeSet::new());
+        };
+
+        values
+            .iter()
+            .try_fold(BTreeSet::new(), |mut natives, JsonValue(value)| {
+                natives.extend(deserialized_natives(
+                    typespace.check_default(value, &self.inner)?,
+                ));
+                Ok(natives)
+            })
     }
 
     /// The newtype's name, if one has been set.
