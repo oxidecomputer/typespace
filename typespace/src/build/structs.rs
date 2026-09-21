@@ -1081,8 +1081,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             .collect::<Vec<_>>();
         let expected = format!("a tuple of size {} or more", fields.len());
 
+        let json_serde = typespace
+            .settings
+            .crate_paths
+            .tokens(crate::settings::GeneratedCrate::JsonSerde);
+
         let mut traits = traits.clone();
         let serialize_impl = traits.remove(TypespaceTrait::Serialize).then(|| {
+            let json_serde = &json_serde;
             quote! {
                 impl ::serde::Serialize for #name_ident {
                     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -1096,7 +1102,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                         )*
                         #(
                             self.#rest_index.serialize(
-                                ::json_serde::FlattenedSequenceSerializer::new(&mut seq)
+                                #json_serde::FlattenedSequenceSerializer::new(&mut seq)
                             )?;
                         )*
                         seq.end()
@@ -1105,6 +1111,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
         let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+            let json_serde = &json_serde;
             quote! {
                 impl<'de> ::serde::Deserialize<'de> for #name_ident {
                     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1141,7 +1148,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                                 )*
                                 #(
                                     let #rest_var = ::serde::Deserialize::deserialize(
-                                        ::json_serde::FlattenedSequenceDeserializer::new(&mut seq)
+                                        #json_serde::FlattenedSequenceDeserializer::new(&mut seq)
                                     )?;
                                 )*
                                 Ok(#name_ident(
@@ -1865,11 +1872,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
+                let regress = typespace
+                    .settings
+                    .crate_paths
+                    .tokens(crate::settings::GeneratedCrate::Regress);
                 let pat = patterns.iter().map(|p| {
                 let err = format!("doesn't match pattern \"{}\"", p);
+                let regress = &regress;
                 quote! {
-                    static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(|| {
-                        ::regress::Regex::new(#p).unwrap()
+                    static PATTERN: ::std::sync::LazyLock<#regress::Regex> = ::std::sync::LazyLock::new(|| {
+                        #regress::Regex::new(#p).unwrap()
                     });
                     if PATTERN.find(value).is_none() {
                         return Err(#err.into());

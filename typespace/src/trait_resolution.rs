@@ -1329,7 +1329,14 @@ fn unnamed_offender<Id>(ty: &Type<Id>, settings: &Settings) -> OffenderReason {
         Type::Boolean => "bool",
         Type::Integer(name) | Type::Float(name) => name,
         Type::JsonValue => "serde_json::Value",
-        Type::Never => "json_serde::Never",
+        Type::Never => {
+            let json_serde = settings
+                .crate_paths
+                .text(crate::settings::GeneratedCrate::JsonSerde);
+            return OffenderReason::Primitive {
+                type_name: format!("{}::Never", json_serde.trim_start_matches("::")),
+            };
+        }
         all_named_types!(_) => unreachable!("caller passes only unnamed types"),
     };
     OffenderReason::Primitive {

@@ -9,7 +9,7 @@ use typespace::build::{
     StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
-use typespace::settings::{ContainerType, OptionalNullable, Settings, Std};
+use typespace::settings::{ContainerType, GeneratedCrate, OptionalNullable, Settings, Std};
 use typespace::{TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
 
@@ -6303,5 +6303,74 @@ fn test_tuple_struct_schema_description() {
             serde_json::json!("a widget"),
             "{schema:#}"
         );
+    }
+}
+
+// Facade modules for the crate-path override test: generated code
+// reaches json-serde and regress through these rather than the
+// canonical paths.
+pub mod json_helpers {
+    pub use json_serde::*;
+}
+pub mod regex_engine {
+    pub use regress::*;
+}
+
+// The constrained newtype is inserted raw because the macro has no
+// NewtypeConstraints syntax.
+#[test]
+fn test_crate_path_overrides() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_crate_path(GeneratedCrate::JsonSerde, "super::json_helpers")
+        .with_crate_path(GeneratedCrate::Regress, "super::regex_engine");
+
+    let mut builder = typespace_builder!(settings, {
+        // `opt` deserializes through json-serde's deserialize_some and
+        // `gone` renders as its Absent type; both paths come from the
+        // override.
+        struct Thing {
+            opt: Optional<String>,
+            gone: Optional<!>,
+        }
+    });
+
+    builder
+        .insert("code string".to_string(), Type::String)
+        .unwrap();
+    builder
+        .insert(
+            "code".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("code string".to_string())
+                    .name("Code")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec!["^x".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_crate_path_overrides.rs", out)]
+    fn inner() {
+        use import::*;
+
+        // A missing optional property deserializes; an explicit null is
+        // rejected by the deserializer reached through the facade path.
+        let thing: Thing = serde_json::from_str("{}").unwrap();
+        assert_eq!(thing.opt, None);
+        assert!(matches!(thing.gone, json_helpers::Absent));
+        serde_json::from_str::<Thing>(r#"{"opt": null}"#).unwrap_err();
+
+        // Pattern validation runs through the facade regress path.
+        let _ = Code::try_from("xyz").unwrap();
+        let _ = Code::try_from("yz").unwrap_err();
     }
 }
