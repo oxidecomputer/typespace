@@ -1119,7 +1119,7 @@ impl GeneratedCrate {
 /// Deserializes from a map of crate to path, e.g.
 /// `{ "json-serde": "::my_sdk::json_serde" }`. A crate with no entry
 /// renders under its canonical path.
-#[derive(Default, Deserialize)]
+#[derive(Default, Clone, Deserialize)]
 #[serde(try_from = "BTreeMap<GeneratedCrate, String>")]
 pub struct CratePaths(BTreeMap<GeneratedCrate, syn::Path>);
 
