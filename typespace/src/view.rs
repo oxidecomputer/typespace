@@ -131,19 +131,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             build::Type::Integer(s) => TypeDetails::Builtin(Cow::Borrowed(s.as_str())),
             build::Type::Float(s) => TypeDetails::Builtin(Cow::Borrowed(s.as_str())),
             build::Type::JsonValue => TypeDetails::Builtin(Cow::Borrowed("::serde_json::Value")),
-            build::Type::Never => TypeDetails::Builtin(
-                match self
-                    .typespace
+            build::Type::Never => TypeDetails::Builtin(Cow::Owned(format!(
+                "{}::Absent",
+                self.typespace
                     .settings
                     .crate_paths
-                    .get(crate::settings::GeneratedCrate::JsonSerde)
-                {
-                    Some(path) => {
-                        Cow::Owned(format!("{}::Absent", crate::settings::path_text(path)))
-                    }
-                    None => Cow::Borrowed("::json_serde::Absent"),
-                },
-            ),
+                    .text(crate::settings::GeneratedCrate::JsonSerde)
+            ))),
             // A native's path is parsed into a `syn::Type`, which has
             // no borrowed string form, so this is the one variant that
             // owns its rendered string rather than borrowing it.
