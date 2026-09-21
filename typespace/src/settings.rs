@@ -77,9 +77,9 @@ pub struct Settings {
     #[serde(default)]
     pub struct_builder: bool,
 
-    /// Overriding paths for the crates generated code references; see
-    /// [`GeneratedCrate`]. A crate with no entry renders under its
-    /// canonical path, e.g. `::serde_json`.
+    /// Overriding paths for the crates that generated code references; see
+    /// [`GeneratedCrate`]. A crate with no entry uses under its canonical
+    /// path, e.g. `::serde_json`.
     #[serde(default)]
     pub crate_paths: CratePaths,
 
@@ -366,17 +366,20 @@ impl Settings {
         self
     }
 
-    /// Set the path generated code references one crate by.
+    /// Set the path for a given crate that generated code references.
     ///
-    /// The default for each crate is its canonical path, e.g.
-    /// `::json_serde`; an override serves a consumer that reaches the
-    /// crate another way, such as through a re-export.
+    /// The default for each crate is its canonical path, e.g. `::json_serde`;
+    /// an override is for a consumer that reaches the crate another way, such
+    /// as through a re-export.
     ///
     /// ```
     /// # use typespace::settings::{GeneratedCrate, Settings};
     /// let settings = Settings::minimal()
     ///     .with_crate_path(GeneratedCrate::JsonSerde, "::my_sdk::json_serde");
     /// ```
+    ///
+    /// It is strongly recommended (but not required) that the path start with
+    /// `::`.
     ///
     /// # Panics
     ///
@@ -1050,7 +1053,7 @@ pub enum OptionalNullable {
     CustomType(ContainerType),
 }
 
-/// A crate generated code references by path.
+/// A crate that generated code references by path.
 ///
 /// Each variant names one crate whose path appears in generated code
 /// on typespace's own initiative--as opposed to the paths a consumer
@@ -1059,18 +1062,23 @@ pub enum OptionalNullable {
 /// under; the canonical paths are `::serde`, `::serde_json`,
 /// `::schemars`, `::json_serde`, and `::regress`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum GeneratedCrate {
     /// Trait paths in derive lists and hand-written serde impls.
+    #[serde(rename = "serde")]
     Serde,
     /// `Value` and `Map`, and runtime construction of default values.
+    #[serde(rename = "serde_json")]
     SerdeJson,
     /// The `JsonSchema` trait and hand-written schema impls.
+    #[serde(rename = "schemars")]
     Schemars,
     /// Wire-fidelity helpers: `Absent`, `Never`, the flatten adapters,
     /// and the optional-property deserializers.
+    #[serde(rename = "json-serde")]
     JsonSerde,
     /// Pattern validation in constrained string newtypes.
+    #[serde(rename = "regress")]
     Regress,
 }
 
