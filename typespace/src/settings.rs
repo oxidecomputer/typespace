@@ -27,7 +27,7 @@ use crate::{TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// its own deserializable configuration wants
 /// `#[serde(default = "Settings::minimal")]`, or whichever preset suits
 /// it, rather than a bare `#[serde(default)]`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Settings {
     /// How types in the `std` prelude are rendered; see [`Std`].
@@ -1025,7 +1025,7 @@ pub enum Std {
 // One of these lives in each Settings; boxing CustomType's declaration
 // to shrink the enum would tax every construction site instead.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OptionalNullable {
     /// Model `null` and `optional` as equivalent by using the
