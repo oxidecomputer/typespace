@@ -2946,11 +2946,11 @@ fn test_serde_trait_combinations() {
     }
 }
 
-// Per-type `#[derive = [..]]` renders alongside the computed traits and
-// the crate-wide `with_derive` list: computed traits first, then the
-// crate-wide derives, then the per-type ones last.
+// Per-type `#[derive = [..]]` takes effect alongside the computed
+// traits and the crate-wide `with_derive` list; all three sources
+// merge into the one sorted derive list.
 #[test]
-fn test_extra_derives_ordering() {
+fn test_extra_derives_combine() {
     let settings = Settings::minimal()
         .with_std(Std::Unqualified)
         .with_required_trait(TypespaceTrait::Debug)
@@ -2968,7 +2968,7 @@ fn test_extra_derives_ordering() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_extra_derives_ordering.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_extra_derives_combine.rs", ts.to_codespace().into_stream())]
     fn inner() {
         // Hash comes from the crate-wide with_derive; PartialOrd is the
         // per-type extra, additional to it.
@@ -2981,10 +2981,10 @@ fn test_extra_derives_ordering() {
     }
 }
 
-// Per-type `#[derive = [..]]` on each named-type shape: a struct, an
+// Per-type `#[derive = [..]]` on each kind of named type: a struct, an
 // enum, a newtype, a multi-field tuple struct, and a unit struct, each
-// with its own render path. The crate-wide `with_derive` list still
-// precedes the per-type one on every shape.
+// with its own render path folding the per-type list into the same
+// sorted derive list.
 #[test]
 fn test_extra_derives_multi_shape() {
     let settings = Settings::minimal()
@@ -3200,11 +3200,13 @@ fn test_string_default_skip_withheld_under_typify_compat() {
 }
 
 // Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
-// a desired Copy drops at a type holding either. Clone is required
+// a desired Copy drops at a type holding either; under typify_compat a
+// desired Display and FromStr are withheld from a JsonValue newtype
+// the same way, which the impls_of assertions pin. Clone is required
 // directly, as in the String case above, so a surviving derive
 // distinguishes "Copy dropped" from "nothing was granted at all".
 #[test]
-fn test_copy_desired_box_and_json_value_drop_copy() {
+fn test_box_and_json_value_drop_desired_traits() {
     let builder = typespace_builder!(
         Settings::minimal()
             .with_typify_compat(true)
@@ -3317,8 +3319,6 @@ fn test_tuple_marker_extras() {
 
 // The settings these tests share: `Default` desired so it lands on every
 // type that can implement it, plus the traits the assertions need.
-// `Display` and `FromStr` stay out because a newtype that has either in
-// its trait set panics in render.
 // A generated default function is named for its containing type path
 // and the property, snake-cased: the enum name, then the variant name,
 // then the property for a struct variant, and the struct name then the
@@ -4008,10 +4008,9 @@ fn test_default_enum_with_default_value() {
 /// A whole-type default value alongside a required property.
 ///
 /// The default value supplies the required property, so the type can
-/// implement `Default` and `feasibility` grants it. The impl it should
-/// get is the one typify writes whenever a type carries its own default
-/// value: the body is that value walked as a literal, with no reference
-/// to any property's own default.
+/// implement `Default` and `feasibility` grants it. The impl body is
+/// the value walked as a literal by `default.rs`, with no reference to
+/// any property's own default:
 ///
 /// ```ignore
 /// impl ::std::default::Default for WholeDefault {
@@ -4023,12 +4022,6 @@ fn test_default_enum_with_default_value() {
 ///     }
 /// }
 /// ```
-///
-/// `Struct::render` writes typify's other impl instead, the one built
-/// from each property's `DefaultConstructor`. A required property's
-/// constructor is `DefaultConstructor::None`, which that code maps to
-/// `unreachable!()`, so rendering this graph panics. The value walk the
-/// correct body needs belongs in `default.rs`.
 #[test]
 fn test_default_whole_type_value_with_required_property() {
     let builder = typespace_builder!(default_settings(), {
@@ -4053,9 +4046,9 @@ fn test_default_whole_type_value_with_required_property() {
     );
 }
 
-// The tests below cover the value walk in `default.rs`. Only its check
-// half is reachable from here: `finalize` validates a type's own
-// default value, and nothing renders one yet.
+// The tests below cover the value walk in `default.rs`, both halves:
+// `finalize` validates a type's own default value, and rendering
+// builds the `Default` impl body from it.
 
 /// A default value that fits its type survives `finalize`.
 ///
@@ -4275,10 +4268,10 @@ fn test_default_value_newtype_rejects_inner_mismatch() {
     assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
 }
 
-// The tests below cover the container and enum arms the value walk in
-// `default.rs` gained alongside this comment: `Vec`, `Map`, `Set`,
-// `Array`, `Tuple`, `TupleStruct`, and the internal/adjacent/untagged
-// (and external-with-a-payload) enum tag types.
+// The tests below cover the container and enum arms of the value walk
+// in `default.rs`: `Vec`, `Map`, `Set`, `Array`, `Tuple`,
+// `TupleStruct`, and the internal/adjacent/untagged (and
+// external-with-a-payload) enum tag types.
 
 /// A property default value across every container kind: `Vec`, `Map`
 /// (string-keyed), `Set`, a fixed-size array, and a tuple.
@@ -4406,8 +4399,6 @@ fn test_default_value_map_key_type() {
     }
 }
 
-/// A property default value for a tuple struct, both a plain one and
-/// one whose trailing field collects the rest of the sequence.
 // A tuple struct with a whole-type default value renders a `Default`
 // impl built from that value, so its fields owe no `Default` of their
 // own. `feasibility` answers `IfSomeChildren(vec![])` for that case;
@@ -4431,6 +4422,8 @@ fn tuple_struct_with_a_default_value_obligates_no_field() {
         .expect("a default value supplies the field, so IpAddr owes no Default");
 }
 
+/// A property default value for a tuple struct, both a plain one and
+/// one whose trailing field collects the rest of the sequence.
 #[test]
 fn test_default_value_tuple_struct_kinds() {
     let builder = typespace_builder!(default_settings(), {
@@ -5116,6 +5109,353 @@ fn test_render_constrained_newtype_allow_list() {
     }
 }
 
+// The fallback constraint. `Coords` renders the part of the source
+// schema typespace can state, and the schema itself carries the rest
+// (`multipleOf`), checked at run time against the serialized value. Both
+// entry points run the check: the `TryFrom` constructor and the
+// hand-written `Deserialize`.
+//
+// Struct builders are off so that `Coords` owns no inherent impl: the
+// newtype's `impl From<EvenCoords> for Coords` is attributed to `Coords`
+// by the classifier in tests/item_order.rs, which reads ownership from
+// the locally declared side and has no way to tell a newtype's
+// out-of-Self conversion from an into-Self one when both sides are
+// declared in the same file.
+#[test]
+fn test_render_constrained_newtype_json_schema() {
+    let schema = serde_json::json! {{
+        "type": "object",
+        "properties": {
+            "x": { "type": "integer", "multipleOf": 2 },
+            "y": { "type": "integer" },
+        },
+        "required": ["x", "y"],
+    }};
+
+    let ts = {
+        let mut builder = typespace_builder!(Settings::maximal().with_struct_builder(false), {
+            struct Coords {
+                x: i64,
+                y: i64,
+            }
+        });
+
+        builder
+            .insert(
+                "EvenCoords".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Coords".to_string())
+                        .name("EvenCoords")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            schema.clone(),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_json_schema.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let even = EvenCoords::try_from(Coords { x: 2, y: 5 }).unwrap();
+        assert_eq!(even.x, 2);
+        EvenCoords::try_from(Coords { x: 3, y: 5 }).expect_err("x is odd");
+
+        // The hand-written Deserialize runs the same check.
+        assert_eq!(
+            serde_json::from_str::<EvenCoords>(r#"{"x":2,"y":5}"#).unwrap(),
+            even
+        );
+        serde_json::from_str::<EvenCoords>(r#"{"x":3,"y":5}"#).expect_err("x is odd");
+
+        // A value of the newtype is an inner value that also passes the check,
+        // so the JsonSchema impl reports the allOf of the inner type's schema
+        // and the stored one, keyword for keyword as schemars holds it (so
+        // `multipleOf` comes back as a float).
+        let stored = serde_json::to_value(
+            serde_json::from_value::<schemars::schema::Schema>(schema).unwrap(),
+        )
+        .unwrap();
+        let mut generator = schemars::r#gen::SchemaGenerator::default();
+        assert_eq!(
+            serde_json::to_value(<EvenCoords as schemars::JsonSchema>::json_schema(
+                &mut generator
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "allOf": [{ "$ref": "#/definitions/Coords" }, stored],
+            })
+        );
+    }
+}
+
+// The same constraint over a `String`, which can carry Display and
+// FromStr where the struct above cannot. The schema is an `anyOf` of two
+// string constraints, which `NewtypeConstraints::String` has no way to
+// state: either the value starts with "a" or it is at most three
+// characters long.
+#[test]
+fn test_render_constrained_newtype_json_schema_string() {
+    let schema = serde_json::json! {{
+        "anyOf": [
+            { "type": "string", "pattern": "^a" },
+            { "type": "string", "maxLength": 3 },
+        ],
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "Terse".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("Terse")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include(
+        "tests/output/test_render_constrained_newtype_json_schema_string.rs",
+        out
+    )]
+    fn inner() {
+        use import::*;
+
+        // FromStr parses the inner type and then checks the result.
+        let terse = "wx".parse::<Terse>().unwrap();
+        assert_eq!(terse.to_string(), "wx");
+        "alphabet"
+            .parse::<Terse>()
+            .expect("an a-word of any length");
+        "wxyz"
+            .parse::<Terse>()
+            .expect_err("neither an a-word nor terse");
+
+        assert_eq!(serde_json::from_str::<Terse>("\"wx\"").unwrap(), terse);
+        serde_json::from_str::<Terse>("\"wxyz\"").expect_err("neither an a-word nor terse");
+    }
+}
+
+// A stored schema names its own draft through `$schema`. This one is
+// draft-07 and uses the array form of `items`, which draft 2020-12
+// refuses to compile, so the generated code building at all proves the
+// declared draft governs validation; the assertions prove the keywords
+// are enforced.
+#[test]
+fn test_render_constrained_newtype_json_schema_draft() {
+    let schema = serde_json::json! {{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "array",
+        "items": [{ "type": "integer" }, { "type": "integer" }],
+        "additionalItems": false,
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder
+            .insert("i64".to_string(), Type::Integer("i64".to_string()))
+            .unwrap();
+        builder
+            .insert("vec".to_string(), Type::Vec("i64".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Pair".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("vec".to_string())
+                        .name("Pair")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include(
+        "tests/output/test_render_constrained_newtype_json_schema_draft.rs",
+        out
+    )]
+    fn inner() {
+        use import::*;
+
+        Pair::try_from(vec![2, 4]).unwrap();
+        Pair::try_from(vec![2, 4, 6]).expect_err("additionalItems refuses a third element");
+    }
+}
+
+// A stored schema that names no draft is validated as draft-07, the
+// dialect schemars 0.8 reports, rather than the `jsonschema` crate's
+// default of 2020-12. The array form of `items` proves it: 2020-12
+// refuses to compile that form, so the generated code building at all
+// is the evidence, and the assertion shows `additionalItems` enforced.
+#[test]
+fn json_schema_constraint_without_a_draft_validates_as_draft_07() {
+    let schema = serde_json::json! {{
+        "type": "array",
+        "items": [{ "type": "integer" }, { "type": "integer" }],
+        "additionalItems": false,
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder
+            .insert("i64".to_string(), Type::Integer("i64".to_string()))
+            .unwrap();
+        builder
+            .insert("vec".to_string(), Type::Vec("i64".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Pair".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("vec".to_string())
+                        .name("Pair")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_json_schema_constraint_without_a_draft.rs", out)]
+    fn inner() {
+        use import::*;
+
+        Pair::try_from(vec![2, 4]).unwrap();
+        Pair::try_from(vec![2, 4, 6]).expect_err("additionalItems refuses a third element");
+    }
+}
+
+// The `JsonSchema` impl reports a stored schema as part of the type's
+// schema, keyword by keyword, so the trait exists only when schemars
+// 0.8 can hold every keyword.
+
+/// Build a `Pair` newtype over `Vec<i64>` constrained by `schema`.
+fn schema_constrained_pair(
+    settings: Settings,
+    schema: serde_json::Value,
+) -> TypespaceBuilder<String> {
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("i64".to_string(), Type::Integer("i64".to_string()))
+        .unwrap();
+    builder
+        .insert("vec".to_string(), Type::Vec("i64".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Pair".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("vec".to_string())
+                    .name("Pair")
+                    .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+            ),
+        )
+        .unwrap();
+    builder
+}
+
+/// The conflict `finalize` reports when `JsonSchema` is required of a
+/// newtype whose stored schema schemars cannot hold, checked down to
+/// the keyword it names.
+fn refused_keyword(schema: serde_json::Value) -> String {
+    let builder = schema_constrained_pair(
+        Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema),
+        schema,
+    );
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("a schema schemars cannot hold refuses JsonSchema");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::JsonSchema);
+    assert_eq!(conflict.offender, "Pair");
+    match &conflict.reason {
+        OffenderReason::SchemaKeyword { keyword } => keyword.clone(),
+        other => panic!("expected SchemaKeyword, got {other:?}"),
+    }
+}
+
+/// A 2020-12 keyword has no field in schemars 0.8, so the trait is
+/// refused and the conflict names the keyword.
+#[test]
+fn json_schema_constraint_with_a_2020_12_keyword_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "type": "array",
+        "prefixItems": [{ "type": "integer" }],
+    }});
+    assert_eq!(keyword, "prefixItems");
+}
+
+/// A keyword nested below the root is found the same way.
+#[test]
+fn json_schema_constraint_with_a_nested_unknown_keyword_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "type": "array",
+        "items": { "type": "integer", "exclusiveMaximumValue": 3 },
+    }});
+    assert_eq!(keyword, "exclusiveMaximumValue");
+}
+
+/// A `$ref` points into the document the constraint came from, which
+/// the reported schema does not carry.
+#[test]
+fn json_schema_constraint_with_a_ref_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "$ref": "#/definitions/Pair",
+    }});
+    assert_eq!(keyword, "$ref");
+}
+
+/// A `$schema` naming any draft but draft-07 is refused, since the
+/// reported document is draft-07 whatever the constraint says.
+#[test]
+fn json_schema_constraint_naming_another_draft_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "array",
+    }});
+    assert_eq!(keyword, "$schema");
+}
+
+/// The same schema with `JsonSchema` merely desired finalizes; the
+/// trait is withheld from the newtype and nothing else.
+#[test]
+fn json_schema_constraint_schemars_cannot_hold_withholds_desired_json_schema() {
+    let builder = schema_constrained_pair(
+        Settings::minimal().with_desired_trait(TypespaceTrait::JsonSchema),
+        serde_json::json! {{
+            "type": "array",
+            "prefixItems": [{ "type": "integer" }],
+        }},
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("a desired trait is withheld, not refused");
+    assert!(
+        !ts.get_type(&"Pair".to_string())
+            .has_impl(TypespaceTrait::JsonSchema)
+    );
+}
+
 // `feasibility` in `trait_resolution.rs` answers `IfSomeChildren`
 // for Display and FromStr on two kinds of type, and the renderer writes
 // the impls that answer stands for:
@@ -5744,6 +6084,33 @@ fn allow_list_value_on_a_native_requires_deserialize() {
     ));
 }
 
+// A JSON schema every value satisfies constrains nothing. Only the two
+// schemas that say so outright are caught: whether a longer schema
+// admits everything is not a question a check at this level can answer.
+#[test]
+fn vacuous_json_schema_constraints_are_rejected() {
+    for schema in [serde_json::json!(true), serde_json::json!({})] {
+        let result = NewtypeStruct::new("string".to_string())
+            .name("Vacuous")
+            .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                schema.clone(),
+            )))
+            .build();
+
+        let Err(err) = result else {
+            panic!("the schema `{schema}` admits every value and is rejected");
+        };
+        assert!(
+            matches!(
+                &err,
+                Error::VacuousConstraints { name, kind }
+                    if name == "Vacuous" && *kind == "JSON schema"
+            ),
+            "expected VacuousConstraints, got: {err}"
+        );
+    }
+}
+
 #[test]
 fn test_enum_derive_default() {
     let builder = typespace_builder!(
@@ -5954,14 +6321,12 @@ fn test_struct_defaults() {
     }
 }
 
-// `feasibility` documents the contract for a struct with an attached
-// default value: "The hand-written impl takes each property the
-// default value names from that value and fills the rest with
-// Default::default()". `Struct::render` in `build/structs.rs` consults
-// `common.default` only to decide whether the derive shortcut applies;
-// the impl body it writes comes entirely from each property's
-// `DefaultConstructor`, so the attached value's contents are
-// discarded.
+// The contract for a struct with an attached default value: the
+// hand-written impl takes each property the default value names from
+// that value and fills the rest with `Default::default()`.
+// `Struct::render` in `build/structs.rs` builds the impl body from the
+// value walk in `default.rs`, so the attached value's contents are
+// what the impl constructs.
 #[test]
 fn whole_type_default_value_populates_default_impl() {
     let builder = typespace_builder!(
@@ -6245,16 +6610,11 @@ fn flattened_default_value_supplies_the_flattened_property() {
 // never constructs its value, and the natives inside that value are
 // never deserialized.
 //
-// `check_type_defaults` walks every attached default value regardless
-// and seeds `Deserialize` for each native it finds, so the requirement
-// lands whether or not the code that would deserialize it is emitted.
-// Under `Settings::minimal()`, where nothing requires `Default`, that
-// refuses a graph whose output would have been fine. The conflict even
-// says "generated code does so by deserializing it", which is a claim
-// about a decision that has not been made when the seed is created.
-//
-// The same conditionality applies to a property-level `DefaultValue`,
-// whose `defaults::` function is reached only on a `Deserialize` path.
+// The value walk hands what constructing the value would oblige (here,
+// `Deserialize` of the native) to `feasibility` as a conditional
+// obligation, weighed only when `Default` itself is decided. Under
+// `Settings::minimal()`, where nothing asks for `Default`, the
+// obligation never fires and the graph finalizes.
 #[test]
 fn a_default_value_that_is_never_rendered_requires_nothing() {
     let builder = typespace_builder!(Settings::minimal(), {

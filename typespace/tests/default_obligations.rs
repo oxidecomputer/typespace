@@ -54,19 +54,11 @@ fn default_value_property_is_not_obligated_for_default() {
 /// takes each property the default value names from that value and
 /// fills every other property with `Default::default()`
 /// (`default_impl_struct` in `typespace/src/default.rs`). A property
-/// absent from the default value and not in the `Optional` state
-/// should therefore be filled with `Default::default()`, not rejected:
-/// `feasibility` agrees, and reports exactly that property as an
-/// obligation.
-///
-/// But `default_impl_struct` itself errors on any such property
-/// instead of filling it: it only special-cases `Optional`, and
-/// returns `Error::InvalidDefault` (reason "missing required property
-/// {key}") for every other state, `count`'s `Default` state included.
-/// `feasibility`'s promise and the walk's actual behavior disagree, so
-/// finalize fails on a struct it should accept--and the error message
-/// calls `count` "required" even though its state is `Default`, not
-/// `Required`.
+/// absent from the default value and in the `Default` state is
+/// therefore filled, not rejected: the walk emits
+/// `Default::default()` for it, and in check mode collects the
+/// matching obligation on the property's type, so `feasibility` and
+/// the walk agree.
 #[test]
 fn whole_type_default_fills_absent_default_state_property() {
     let builder = typespace_builder!(Settings::minimal(), {

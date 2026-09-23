@@ -41,6 +41,9 @@
 //!   call to `Default::default()` so their types must implement `Default`.
 //! - native types inside an explicit default value; generated code constructs
 //!   these native types by deserializing, so the value demands `Deserialize`.
+//! - the inner type of a newtype whose constraint is a JSON schema; the
+//!   check serializes the inner value and validates the result, so that type
+//!   demands `Serialize`.
 //!
 //! We descend the type graph with a work queue rather than recursion. Each
 //! item in the work queue represents a required work set, a target type; it
@@ -192,6 +195,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use log::debug;
 use strum::IntoEnumIterator;
 
+use crate::JsonValue;
 use crate::build::{
     ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
     TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
@@ -670,7 +674,25 @@ where
             _ => Feasibility::IfAllChildren,
         },
 
-        Type::NewtypeStruct(NewtypeStruct { common, .. }) => match trait_name {
+        Type::NewtypeStruct(NewtypeStruct {
+            common,
+            constraints,
+            ..
+        }) => match trait_name {
+            // A JSON schema constraint is reported as part of the type's
+            // schema, so the trait exists only if schemars can represent the
+            // constraint; see `schemars_unrepresentable`.
+            TypespaceTrait::JsonSchema => match constraints {
+                NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                    match crate::build::schemars_unrepresentable(schema) {
+                        Some(keyword) => {
+                            Feasibility::Impossible(OffenderReason::SchemaKeyword { keyword })
+                        }
+                        None => Feasibility::IfAllChildren,
+                    }
+                }
+                _ => Feasibility::IfAllChildren,
+            },
             // TYPIFY COMPAT: typify doesn't implement a default for newtypes.
             TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
             TypespaceTrait::Default if common.default.is_some() => Feasibility::IfSomeChildren(
@@ -842,6 +864,17 @@ where
             }
         }
 
+        fn init_schema_check(parent_id: &Id, child_id: &Id) -> Self {
+            let serialize_required =
+                expand_supertraits([TypespaceTrait::Serialize].into_iter().collect());
+            Self {
+                target: child_id.clone(),
+                traits: serialize_required,
+                origin: RequirementOrigin::SchemaCheck(parent_id.clone()),
+                path: Default::default(),
+            }
+        }
+
         fn init_global(type_id: &Id, traits: TypespaceTraitSet) -> Self {
             Self {
                 target: type_id.clone(),
@@ -949,6 +982,20 @@ where
     // arm), so the value requires Deserialize of the native type.
     for (native_id, owner_id) in &default_checks.deserialized {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
+    }
+
+    // A newtype constrained by a JSON schema checks a value by
+    // serializing it and validating the result against that schema, so
+    // the inner type must implement Serialize.
+    for (type_id, ty) in types.iter() {
+        if let Type::NewtypeStruct(NewtypeStruct {
+            inner,
+            constraints: NewtypeConstraints::JsonSchema(_),
+            ..
+        }) = ty
+        {
+            work.push_back(WorkItem::init_schema_check(type_id, inner));
+        }
     }
 
     // Traits required via Settings::with_required_trait seed the trait
@@ -3488,8 +3535,7 @@ mod tests {
     // a phase-1 grant meeting a phase-2 removal, the container and leaf
     // answers the desired phase reads, untagged enums, cycles entered
     // from any member, the causal chain the skip log carries, and the
-    // depth resolution has to survive. Each states what typespace
-    // should do, which is not always what it does.
+    // depth resolution has to survive.
 
     /// A supertrait is granted on its own account only when desired.
     #[test]
@@ -5038,6 +5084,82 @@ mod tests {
         assert!(!is_irrefutable(&ts, "Patterned"));
         assert!(!is_irrefutable(&ts, "Allowed"));
         assert!(!is_irrefutable(&ts, "Denied"));
+    }
+
+    /// The JSON schema constraint checks a value by serializing it, so
+    /// resolution requires `Serialize` of the inner type even where
+    /// the consumer asked for no traits at all. The requirement lands on
+    /// the inner type alone: the newtype itself keeps the empty set
+    /// minimal settings give it.
+    #[test]
+    fn json_schema_constraint_seeds_serialize_on_the_inner_type() {
+        let mut builder = typespace_builder!(Settings::minimal(), {
+            struct Inner {
+                a: String,
+            }
+        });
+        builder
+            .insert(
+                "Checked".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Inner".to_string())
+                        .name("Checked")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            serde_json::json!({ "type": "object" }),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        let ts = builder.finalize(no_cycles).unwrap();
+
+        assert_eq!(
+            built_traits(&ts, "Inner"),
+            [TypespaceTrait::Serialize].into_iter().collect(),
+        );
+        assert_eq!(built_traits(&ts, "Checked"), TypespaceTraitSet::empty());
+    }
+
+    /// The seeded requirement conflicts like any other: a native that
+    /// declares no `Serialize` cannot be wrapped by a newtype whose
+    /// constraint is a JSON schema, and the conflict names the newtype
+    /// as the origin.
+    #[test]
+    fn json_schema_constraint_conflicts_without_serialize() {
+        let mut builder = TypespaceBuilder::<String>::new(Settings::minimal());
+        builder
+            .insert(
+                "Opaque".to_string(),
+                Type::Native(Native::new(
+                    "opaque::Opaque",
+                    TypespaceTraitSet::empty(),
+                    Vec::new(),
+                )),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Checked".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Opaque".to_string())
+                        .name("Checked")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(
+                            serde_json::json!({ "type": "string" }),
+                        ))),
+                ),
+            )
+            .unwrap();
+
+        let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+            panic!("expected the seeded Serialize requirement to conflict");
+        };
+        assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
+        assert_eq!(conflicts[0].required, TypespaceTrait::Serialize);
+        assert_eq!(conflicts[0].offender, "Opaque");
+        assert!(matches!(
+            &conflicts[0].origin,
+            RequirementOrigin::SchemaCheck(id) if id == "Checked"
+        ));
     }
 
     /// Nothing outside `Type::String`, an unconstrained newtype, and a

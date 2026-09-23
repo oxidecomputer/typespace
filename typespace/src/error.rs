@@ -40,6 +40,9 @@
 //! untagged enum could implement `FromStr`, but a payload that parses
 //! every string would make every later variant unreachable, so the
 //! trait is refused instead of emitted as a trap.
+//! [`OffenderReason::SchemaKeyword`] is a JSON schema constraint that
+//! schemars cannot report faithfully, so `JsonSchema` is refused rather
+//! than emitted with the constraint silently dropped.
 //!
 //! One offending type reachable along several paths reports once per
 //! path. Conflicts are not deduplicated to a root cause, so a single
@@ -392,14 +395,10 @@ where
         conflicts: Vec<TraitConflict<Id>>,
     },
 
-    /// A newtype struct states constraints with nothing in them.
+    /// A newtype struct states irrelevant constraints.
     ///
-    /// Three constructions say nothing that
-    /// [`NewtypeConstraints::None`](crate::build::NewtypeConstraints::None)
-    /// does not already say: a `String` constraint with no minimum, no
-    /// maximum, and no patterns, an empty allow list, and an empty deny
-    /// list. Each is a mistake at the source rather than a type worth
-    /// generating, so each is rejected.
+    /// The constraints provided for the newtype don't actually constrain;
+    /// vacuous constraints are not allowed.
     #[error(
         "the newtype struct `{name}` states {kind} constraints with \
          nothing in them"
@@ -407,8 +406,7 @@ where
     VacuousConstraints {
         /// The name of the newtype struct.
         name: String,
-        /// Which kind of constraint is empty: `"string"`, `"allow
-        /// list"`, or `"deny list"`.
+        /// Which kind of constraint is empty.
         kind: &'static str,
     },
 
@@ -536,6 +534,12 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                  `FromStr` would try the variants in order, and the \
                  payload of its variant `{variant}` parses every string"
             )?,
+            OffenderReason::SchemaKeyword { keyword } => write!(
+                f,
+                "the newtype with id `{offender}` cannot implement the \
+                 required trait `{required}`: its JSON schema constraint \
+                 uses `{keyword}`, which a draft-07 schema cannot report"
+            )?,
         }
         // Render the chain innermost first, rustc style: each hop names
         // the type that passed the requirement along and the relation it
@@ -574,6 +578,14 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                     by deserializing it"
                 )
             }
+            RequirementOrigin::SchemaCheck(id) => {
+                write!(
+                    f,
+                    "\n    required because `{id}` checks its value \
+                     against a JSON schema; and generated code does so \
+                     by serializing it"
+                )
+            }
             RequirementOrigin::GlobalSettings => {
                 write!(
                     f,
@@ -609,6 +621,10 @@ pub enum RequirementOrigin<Id> {
     /// deserializing. This imposes the Deserialize requirement on a native
     /// type. The default value of the given ID has created this requirement.
     DefaultValue(Id),
+    /// Generated code checks a value against a JSON schema by serializing it.
+    /// This imposes the Serialize requirement on the inner type of the newtype
+    /// struct with the given ID.
+    SchemaCheck(Id),
     /// The requirement applies to every named type, via
     /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).
     GlobalSettings,
@@ -737,6 +753,19 @@ pub enum OffenderReason {
         /// instead; one reason per offending type is the granularity
         /// trait resolution reports at everywhere else.
         variant: String,
+    },
+    /// A newtype constrained by a JSON schema that schemars cannot
+    /// hold. The `JsonSchema` impl reports the constraint as part of
+    /// the type's schema, keyword by keyword, so every keyword must be
+    /// one schemars 0.8 (draft-07) has a field for; `$ref` is refused
+    /// too, since its target lives in the document the constraint came
+    /// from, and a `$schema` is allowed only when it names draft-07.
+    /// Rewrite the constraint in draft-07 terms, or do not ask this
+    /// type for `JsonSchema`.
+    SchemaKeyword {
+        /// The first keyword schemars cannot hold, `prefixItems` say,
+        /// or the parse error for a schema schemars cannot read at all.
+        keyword: String,
     },
 }
 

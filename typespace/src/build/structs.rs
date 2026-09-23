@@ -1432,6 +1432,14 @@ impl<Id> NewtypeStruct<Id> {
             } if patterns.is_empty() => Some("string"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
             NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
+            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Bool(true))) => {
+                Some("JSON schema")
+            }
+            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Object(schema)))
+                if schema.is_empty() =>
+            {
+                Some("JSON schema")
+            }
             _ => None,
         };
 
@@ -1513,6 +1521,87 @@ impl<Id> NewtypeStruct<Id> {
     }
 }
 
+/// The first keyword of a JSON schema constraint that schemars 0.8 has no
+/// typed field for, or `None` when the whole schema can be reported
+/// through typed fields.
+///
+/// A `JsonSchema` impl reports the constraint as part of the type's
+/// schema, so the constraint has to be one schemars can hold: draft-07
+/// keywords, no `$ref` (the target would be in another document), and a
+/// `$schema` only if it names draft-07, which the reported document
+/// already declares at its root. A keyword schemars does not model lands
+/// in `extensions` when parsed, which is how one is found.
+pub(crate) fn schemars_unrepresentable(schema: &serde_json::Value) -> Option<String> {
+    use schemars::schema::{Schema, SchemaObject, SingleOrVec};
+
+    fn in_schema(schema: &Schema) -> Option<String> {
+        match schema {
+            Schema::Bool(_) => None,
+            Schema::Object(object) => in_object(object),
+        }
+    }
+
+    fn in_object(object: &SchemaObject) -> Option<String> {
+        if let Some(keyword) = object.extensions.keys().next() {
+            return Some(keyword.clone());
+        }
+        if object.reference.is_some() {
+            return Some("$ref".to_string());
+        }
+        let mut children: Vec<&Schema> = Vec::new();
+        if let Some(subschemas) = &object.subschemas {
+            for list in [&subschemas.all_of, &subschemas.any_of, &subschemas.one_of] {
+                children.extend(list.iter().flatten());
+            }
+            for one in [
+                &subschemas.not,
+                &subschemas.if_schema,
+                &subschemas.then_schema,
+                &subschemas.else_schema,
+            ] {
+                children.extend(one.as_deref());
+            }
+        }
+        if let Some(array) = &object.array {
+            match &array.items {
+                Some(SingleOrVec::Single(item)) => children.push(item),
+                Some(SingleOrVec::Vec(items)) => children.extend(items),
+                None => (),
+            }
+            children.extend(array.additional_items.as_deref());
+            children.extend(array.contains.as_deref());
+        }
+        if let Some(obj) = &object.object {
+            children.extend(obj.properties.values());
+            children.extend(obj.pattern_properties.values());
+            children.extend(obj.additional_properties.as_deref());
+            children.extend(obj.property_names.as_deref());
+        }
+        children.into_iter().find_map(in_schema)
+    }
+
+    let serde_json::Value::Object(_) = schema else {
+        return None;
+    };
+    let mut root = match serde_json::from_value::<SchemaObject>(schema.clone()) {
+        Ok(root) => root,
+        Err(err) => return Some(err.to_string()),
+    };
+    if let Some(draft) = root.extensions.remove("$schema") {
+        let draft_07 = matches!(
+            draft.as_str(),
+            Some(
+                "http://json-schema.org/draft-07/schema#"
+                    | "http://json-schema.org/draft-07/schema"
+            )
+        );
+        if !draft_07 {
+            return Some("$schema".to_string());
+        }
+    }
+    in_object(&root)
+}
+
 // TODO 3/7/2026
 // I'm ambivalent as to whether the constrained form of a newtype should be
 // its own, fundamentally distinct entity. However for now I'm going to just
@@ -1547,8 +1636,22 @@ pub enum NewtypeConstraints {
 
     /// Fallback constraint
     ///
-    /// Verify data against the given JSON schema (using the crate
-    /// `jsonschema` for runtime validation).
+    /// Verify data against the given JSON schema (using the crate `jsonschema`
+    /// for runtime validation). The value is a JSON schema. Validation
+    /// serializes the inner value and checks the result against it, which
+    /// means the inner type must implement `serde::Serialize`. Trait
+    /// resolution requires that of it.
+    ///
+    /// The schema's own `$schema` field selects the draft it is validated
+    /// under; without one it is validated as draft-07, the dialect schemars
+    /// 0.8 reports.
+    ///
+    /// A `JsonSchema` impl reports the constraint as part of the type's
+    /// schema, keyword by keyword, so trait resolution grants `JsonSchema`
+    /// only when schemars can hold every keyword: draft-07 keywords, no
+    /// `$ref` (its target is in the document the constraint came from),
+    /// and a `$schema` only if it names draft-07. Anything else refuses the
+    /// trait with [`OffenderReason::SchemaKeyword`](crate::error::OffenderReason::SchemaKeyword).
     JsonSchema(JsonValue),
 }
 
@@ -1982,7 +2085,165 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
             NewtypeConstraints::Array { .. } => todo!(),
-            NewtypeConstraints::JsonSchema(_json_value) => todo!(),
+
+            // The fallback constraint. This is used for schemas that can't be
+            // cleanly described by structural types. Those constraints are
+            // checked at runtime by serializing to a serde_json::Value and
+            // validating against the provided schema. The inner type may be
+            // anything, but it must implement Serialize; trait resolution
+            // ensures this.
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                typespace.add_error_mod(out);
+
+                let schema_string = serde_json::to_string(schema).unwrap();
+
+                // A schema that names no draft is validated as draft-07,
+                // the dialect the reported schema is written in; one that
+                // names its draft is validated under that.
+                let draft = (schema.get("$schema").is_none()).then(|| quote! { , draft = Draft7 });
+
+                // A newtype's Display is the inner value's Display, as it is
+                // for an unconstrained newtype: a value that exists has
+                // already been validated.
+                let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
+                // Parsing produces an inner value, which the constraint then
+                // checks, so both failures land in `ConversionError`. The
+                // inner type's own parse error carries no `Display` bound, so
+                // its message cannot be forwarded.
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str)
+                                -> ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                let value = <#inner_ident as ::std::str::FromStr>::from_str(value)
+                                    .map_err(|_| "could not be parsed as the inner type")?;
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+                    }
+                });
+
+                // Deserializing produces an inner value, which the `TryFrom`
+                // impl below then checks, so the schema is consulted in
+                // exactly one place and a value built in Rust is checked the
+                // same way as one off the wire. Deserializing a
+                // `serde_json::Value` instead would save the trip back out
+                // through `to_value`, but it would restrict the impl to
+                // self-describing formats and write the check twice.
+                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    quote! {
+                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                            fn deserialize<D>(
+                                deserializer: D,
+                            ) -> ::std::result::Result<Self, D::Error>
+                            where
+                                D: ::serde::Deserializer<'de>,
+                            {
+                                Self::try_from(
+                                    <#inner_ident>::deserialize(deserializer)?,
+                                )
+                                .map_err(|e| {
+                                    <D::Error as ::serde::de::Error>::custom(
+                                        e.to_string(),
+                                    )
+                                })
+                            }
+                        }
+                    }
+                });
+
+                // An instance of this type is an inner value that also
+                // satisfies the stored schema. The reported schema is the
+                // allOf of the two. The stored schema is read into
+                // schemars's typed fields, which trait resolution has
+                // already established can hold every keyword (see
+                // `schemars_unrepresentable`); a `$schema` naming
+                // draft-07 is dropped, since the reported document
+                // declares its draft at the root.
+                let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let reported = match schema {
+                        serde_json::Value::Object(map) => {
+                            let mut map = map.clone();
+                            map.remove("$schema");
+                            serde_json::Value::Object(map)
+                        }
+                        other => other.clone(),
+                    };
+                    let reported_string = serde_json::to_string(&reported).unwrap();
+                    quote! {
+                        impl ::schemars::JsonSchema for #name_ident {
+                            fn schema_name() -> ::std::string::String {
+                                #name.to_string()
+                            }
+
+                            fn json_schema(
+                                g: &mut ::schemars::r#gen::SchemaGenerator
+                            ) -> ::schemars::schema::Schema {
+                                let inner = g.subschema_for::<#inner_ident>();
+                                let constraint = ::serde_json::from_str::<
+                                    ::schemars::schema::Schema>(
+                                        #reported_string
+                                    ).unwrap();
+                                ::schemars::schema::Schema::Object(
+                                    ::schemars::schema::SchemaObject {
+                                        subschemas: ::std::option::Option::Some(
+                                            ::std::boxed::Box::new(
+                                                ::schemars::schema::SubschemaValidation {
+                                                    all_of: ::std::option::Option::Some(
+                                                        ::std::vec![
+                                                            inner,
+                                                            constraint,
+                                                        ],
+                                                    ),
+                                                    ..::std::default::Default::default()
+                                                },
+                                            ),
+                                        ),
+                                        ..::std::default::Default::default()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                });
+
+                quote! {
+                    #display_impl
+                    #from_str_impl
+
+                    // This is effectively the constructor for this type.
+                    impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
+                        type Error = self::error::ConversionError;
+
+                        fn try_from(
+                            value: #inner_ident
+                        ) -> ::std::result::Result<Self, self::error::ConversionError>
+                        {
+                            #[::jsonschema::validator(schema = #schema_string #draft)]
+                            struct Schema;
+                            let json = ::serde_json::to_value(&value)
+                                .map_err(|e| e.to_string())?;
+                            Schema::validate(&json).map_err(|e| e.to_string())?;
+                            Ok(Self(value))
+                        }
+                    }
+
+                    #deserialize_impl
+                    #json_schema_impl
+                }
+            }
         }
     }
 }
