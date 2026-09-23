@@ -26,11 +26,8 @@
 //!   `finalize`, since serde cannot honor the pair.
 //! - A flattened property's type must serialize as an object, which
 //!   `finalize` checks through any stack of options, boxes, aliases,
-//!   and newtype structs. A scalar, a sequence, or a tuple is refused.
-//! - Both rules reach a struct-style enum variant's properties, which
-//!   splice into the object the variant serializes as: a variant
-//!   cannot flatten a non-object, and an enum that denies unknown
-//!   fields cannot flatten through any variant.
+//!   and newtype structs.
+//! - These also apply to struct-style enum variants' properties.
 //!
 //! typify 1 implements the routing in `value_for_struct_props`
 //! (typify-impl/src/value.rs), requiring the flattened type to be a
@@ -373,7 +370,7 @@ fn a_flattened_scalar_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened scalar");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// An option is judged by what it wraps.
@@ -395,7 +392,7 @@ fn a_flattened_option_of_a_scalar_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened option of a scalar");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// A sequence serializes as an array, so flattening one is refused.
@@ -412,7 +409,7 @@ fn a_flattened_sequence_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened sequence");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// The error names the struct and the offending property.
@@ -426,15 +423,40 @@ fn the_flatten_error_names_the_struct_and_the_property() {
         }
     });
 
-    let Err(Error::FlattenNonObject {
+    let Err(Error::InvalidFlatten {
         type_name,
+        variant,
         property,
     }) = builder.finalize(no_cycles)
     else {
         panic!("expected finalize to reject a flattened string");
     };
     assert_eq!(type_name, "Outer");
+    assert_eq!(variant, None);
     assert_eq!(property, "label");
+}
+
+/// A tuple struct serializes as an array, so it cannot be flattened
+/// any more than a tuple can.
+#[test]
+fn a_flattened_tuple_struct_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Pair(u32, u32);
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            pair: Pair,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened tuple struct");
+    };
+    assert!(
+        matches!(err, Error::InvalidFlatten { variant: None, .. }),
+        "{err:?}"
+    );
 }
 
 /// A box, an alias, and a newtype struct each pass the flatten through
@@ -477,7 +499,7 @@ fn a_flattened_newtype_of_a_scalar_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened newtype of a scalar");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// A tagged enum serializes as an object whatever its variants hold,
@@ -559,7 +581,7 @@ fn a_flattened_untagged_enum_with_a_scalar_variant_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened untagged enum with a scalar variant");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// An untagged unit variant is refused too. It serializes as nothing,
@@ -588,7 +610,7 @@ fn a_flattened_untagged_enum_with_a_unit_variant_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a flattened untagged enum with a unit variant");
     };
-    assert!(matches!(err, Error::FlattenNonObject { .. }), "{err:?}");
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
 }
 
 /// A flattened map is admitted, which the default-value tests above
@@ -623,10 +645,7 @@ fn a_variant_flattening_a_scalar_is_rejected() {
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to reject a variant flattening a scalar");
     };
-    assert!(
-        matches!(err, Error::VariantFlattenNonObject { .. }),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::InvalidFlatten { .. }), "{err:?}");
     assert_eq!(
         err.to_string(),
         "`Message`'s variant `Payload` flattens the property `count`, \
@@ -662,7 +681,7 @@ fn deny_unknown_fields_with_a_variant_flattened_property_is_rejected() {
         );
     };
     assert!(
-        matches!(err, Error::VariantFlattenWithDenyUnknownFields { .. }),
+        matches!(err, Error::FlattenWithDenyUnknownFields { .. }),
         "{err:?}"
     );
     assert_eq!(

@@ -151,91 +151,58 @@ where
         axis: NameAxis,
     },
 
-    /// A struct both denies unknown fields and flattens a property.
+    /// A type both denies unknown fields and flattens a property.
     ///
-    /// serde cannot honor the combination: `deny_unknown_fields` is
-    /// decided by the outer struct's deserializer, which sees a key
-    /// the flattened type may claim and has no way to ask. serde
-    /// documents the pair as unsupported. typespace refuses it rather
-    /// than emitting code whose runtime behavior nobody can predict
-    /// from reading it.
+    /// serde decides `deny_unknown_fields` in the outer deserializer,
+    /// which cannot know which keys the flattened type claims, so the
+    /// pair has no implementable meaning. For an enum,
+    /// `deny_unknown_fields` sits on the enum and governs each
+    /// struct-style variant's deserializer, so a variant flattening a
+    /// property is refused the same way. typespace refuses the graph
+    /// rather than emitting code whose runtime behavior nobody can
+    /// predict from reading it.
     #[error(
-        "`{type_name}` denies unknown fields and flattens the property \
-         `{property}`; serde does not support that combination"
+        "`{type_name}` denies unknown fields and {} the property \
+         `{property}`; serde does not support that combination",
+        flatten_actor(.variant)
     )]
     FlattenWithDenyUnknownFields {
-        /// The name of the struct carrying both.
+        /// The name of the struct or enum carrying both.
         type_name: String,
-        /// The Rust name of one flattened property. A struct may
-        /// flatten several; the first in declaration order is named.
+        /// The struct-style variant carrying the flattened property,
+        /// or `None` when the type is a struct.
+        variant: Option<String>,
+        /// The Rust name of one flattened property. A type may flatten
+        /// several; the first in declaration order is named.
         property: String,
     },
 
-    /// A struct flattens a property whose type serde cannot flatten.
+    /// A flattened property's type is one serde cannot flatten.
     ///
     /// `#[serde(flatten)]` splices the property's own keys into the
-    /// object the struct serializes as, so the property's value has to
-    /// serialize as an object itself. serde enforces this only when it
-    /// runs, failing with "can only flatten structs and maps"; the code
-    /// compiles either way. typespace refuses the graph instead, so the
-    /// mistake surfaces at generation rather than on the first value
-    /// that reaches the wire.
+    /// object the struct or struct-style variant serializes as, so the
+    /// property's value has to serialize as an object itself: a
+    /// struct, an enum, or a map, through any stack of options, boxes,
+    /// aliases, and newtype structs. A scalar, a sequence, a tuple, or
+    /// a tuple struct serializes as something else. serde enforces this
+    /// only when it runs, failing with "can only flatten structs and
+    /// maps"; the code compiles either way. typespace refuses the graph
+    /// instead, so the mistake surfaces at generation rather than on
+    /// the first value that reaches the wire.
     #[error(
-        "`{type_name}` flattens the property `{property}`, whose type \
-         does not serialize as an object; serde can flatten only a \
-         struct, an enum, or a map"
+        "{} flattens the property `{property}`, whose type does not \
+         serialize as an object; serde can flatten only a struct, an \
+         enum, or a map",
+        flatten_site(.type_name, .variant)
     )]
-    FlattenNonObject {
-        /// The name of the struct carrying the property.
+    InvalidFlatten {
+        /// The name of the struct or enum carrying the property.
         type_name: String,
-        /// The Rust name of the flattened property. A struct may
-        /// flatten several; the first offender in declaration order is
-        /// named.
-        property: String,
-    },
-
-    /// An enum denies unknown fields while a struct-style variant
-    /// flattens a property.
-    ///
-    /// The same combination [`Error::FlattenWithDenyUnknownFields`]
-    /// refuses on a struct, reached through a variant:
-    /// `deny_unknown_fields` sits on the enum and governs the variant's
-    /// deserializer, which cannot know what the flattened type claims.
-    #[error(
-        "`{type_name}` denies unknown fields and its variant \
-         `{variant}` flattens the property `{property}`; serde does \
-         not support that combination"
-    )]
-    VariantFlattenWithDenyUnknownFields {
-        /// The name of the enum.
-        type_name: String,
-        /// The variant carrying the flattened property.
-        variant: String,
-        /// The Rust name of one flattened property. A variant may
-        /// flatten several; the first in declaration order is named.
-        property: String,
-    },
-
-    /// A struct-style enum variant flattens a property whose type
-    /// serde cannot flatten.
-    ///
-    /// The same rule as [`Error::FlattenNonObject`], reached through a
-    /// variant: the variant's properties splice into the object the
-    /// variant serializes as, so a flattened property's value has to
-    /// serialize as an object itself.
-    #[error(
-        "`{type_name}`'s variant `{variant}` flattens the property \
-         `{property}`, whose type does not serialize as an object; \
-         serde can flatten only a struct, an enum, or a map"
-    )]
-    VariantFlattenNonObject {
-        /// The name of the enum.
-        type_name: String,
-        /// The variant carrying the flattened property.
-        variant: String,
-        /// The Rust name of the flattened property. A variant may
-        /// flatten several; the first offender in declaration order is
-        /// named.
+        /// The struct-style variant carrying the flattened property,
+        /// or `None` when the type is a struct.
+        variant: Option<String>,
+        /// The Rust name of the flattened property. A type may flatten
+        /// several; the first offender in declaration order is named.
         property: String,
     },
 
@@ -771,4 +738,23 @@ pub enum OffenderReason {
         /// trait resolution reports at everywhere else.
         variant: String,
     },
+}
+
+/// The subject of an [`Error::InvalidFlatten`] message: the type, or the
+/// type's variant, that flattens the property.
+fn flatten_site(type_name: &str, variant: &Option<String>) -> String {
+    match variant {
+        Some(variant) => format!("`{type_name}`'s variant `{variant}`"),
+        None => format!("`{type_name}`"),
+    }
+}
+
+/// The verb phrase of an [`Error::FlattenWithDenyUnknownFields`]
+/// message: who does the flattening under the type that denies
+/// unknown fields.
+fn flatten_actor(variant: &Option<String>) -> String {
+    match variant {
+        Some(variant) => format!("its variant `{variant}` flattens"),
+        None => "flattens".to_string(),
+    }
 }

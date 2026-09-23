@@ -791,86 +791,80 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Add rules here rather than as new `check_*` methods.
     fn check_type_structure(&self) -> Result<(), Error<Id>> {
         for typ in self.types.values() {
-            match typ {
-                Type::Struct(struct_info) => {
-                    // A flattened property contributes its own keys to the
-                    // object the struct serializes as, so its type has to
-                    // serialize as an object. Naming the first property in
-                    // declaration order whose type does not is enough to
-                    // locate the problem.
-                    if let Some(prop) = struct_info.properties.iter().find(|prop| {
-                        matches!(prop.json_name, StructPropertySerde::Flatten)
-                            && !self.flattens_as_object(&prop.type_id, &mut BTreeSet::new())
-                    }) {
-                        return Err(Error::FlattenNonObject {
-                            type_name: struct_info.common.built_name().to_string(),
-                            property: prop.rust_name.clone(),
-                        });
-                    }
+            // A struct-style variant's fields are properties like a
+            // struct's and its serialized form is an object under every
+            // tagging, so both rules reach through it; the enum's own
+            // deny_unknown_fields governs each variant's deserializer.
+            // Each entry is one property list with the name of the type
+            // and, for a variant, of the variant.
+            struct PropertyList<'a, Id> {
+                type_name: &'a str,
+                variant: Option<&'a str>,
+                properties: &'a [StructProperty<Id>],
+                deny_unknown_fields: bool,
+            }
+            let property_lists = match typ {
+                Type::Struct(struct_info) => vec![PropertyList {
+                    type_name: struct_info.common.built_name(),
+                    variant: None,
+                    properties: &struct_info.properties,
+                    deny_unknown_fields: struct_info.deny_unknown_fields,
+                }],
+                Type::Enum(enum_info) => enum_info
+                    .variants
+                    .iter()
+                    .filter_map(|variant| match &variant.details {
+                        VariantDetails::Struct(props) => Some(PropertyList {
+                            type_name: enum_info.common.built_name(),
+                            variant: Some(variant.rust_name.as_str()),
+                            properties: props.as_slice(),
+                            deny_unknown_fields: enum_info.deny_unknown_fields,
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
 
-                    if !struct_info.deny_unknown_fields {
-                        continue;
-                    }
-                    // serde decides deny_unknown_fields in the outer struct's
-                    // deserializer, which cannot know whether a flattened type
-                    // claims a given key, so the pair has no implementable
-                    // meaning. Naming the first flattened property in
-                    // declaration order is enough to locate the problem.
-                    if let Some(prop) = struct_info
-                        .properties
-                        .iter()
-                        .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
-                    {
-                        return Err(Error::FlattenWithDenyUnknownFields {
-                            type_name: struct_info.common.built_name().to_string(),
-                            property: prop.rust_name.clone(),
-                        });
-                    }
+            for PropertyList {
+                type_name,
+                variant,
+                properties,
+                deny_unknown_fields,
+            } in property_lists
+            {
+                let flattened = properties
+                    .iter()
+                    .filter(|prop| matches!(prop.json_name, StructPropertySerde::Flatten));
+
+                // A flattened property contributes its own keys to the
+                // object the type serializes as, so its type has to
+                // serialize as an object. Naming the first property in
+                // declaration order whose type does not is enough to
+                // locate the problem.
+                if let Some(prop) = flattened
+                    .clone()
+                    .find(|prop| !self.flattens_as_object(&prop.type_id, &mut BTreeSet::new()))
+                {
+                    return Err(Error::InvalidFlatten {
+                        type_name: type_name.to_string(),
+                        variant: variant.map(str::to_string),
+                        property: prop.rust_name.clone(),
+                    });
                 }
 
-                // A struct-style variant's fields are properties like a
-                // struct's and its serialized form is an object under
-                // every tagging, so both rules reach through it. The
-                // enum's own deny_unknown_fields governs the variant's
-                // deserializer.
-                Type::Enum(enum_info) => {
-                    for variant in &enum_info.variants {
-                        let VariantDetails::Struct(props) = &variant.details else {
-                            continue;
-                        };
-                        if let Some(prop) = props.iter().find(|prop| {
-                            matches!(prop.json_name, StructPropertySerde::Flatten)
-                                && !self.flattens_as_object(&prop.type_id, &mut BTreeSet::new())
-                        }) {
-                            return Err(Error::VariantFlattenNonObject {
-                                type_name: enum_info.common.built_name().to_string(),
-                                variant: variant.rust_name.clone(),
-                                property: prop.rust_name.clone(),
-                            });
-                        }
-                    }
-
-                    if !enum_info.deny_unknown_fields {
-                        continue;
-                    }
-                    for variant in &enum_info.variants {
-                        let VariantDetails::Struct(props) = &variant.details else {
-                            continue;
-                        };
-                        if let Some(prop) = props
-                            .iter()
-                            .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
-                        {
-                            return Err(Error::VariantFlattenWithDenyUnknownFields {
-                                type_name: enum_info.common.built_name().to_string(),
-                                variant: variant.rust_name.clone(),
-                                property: prop.rust_name.clone(),
-                            });
-                        }
-                    }
+                // serde decides deny_unknown_fields in the outer
+                // deserializer, which cannot know whether a flattened type
+                // claims a given key, so the pair has no implementable
+                // meaning. Naming the first flattened property in
+                // declaration order is enough to locate the problem.
+                if deny_unknown_fields && let Some(prop) = flattened.clone().next() {
+                    return Err(Error::FlattenWithDenyUnknownFields {
+                        type_name: type_name.to_string(),
+                        variant: variant.map(str::to_string),
+                        property: prop.rust_name.clone(),
+                    });
                 }
-
-                _ => {}
             }
         }
         Ok(())
