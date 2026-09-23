@@ -43,7 +43,8 @@ impl ::std::convert::TryFrom<::std::string::String> for Terse {
         value: ::std::string::String,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         #[::jsonschema::validator(
-            schema = "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}"
+            schema = "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}",
+            draft = Draft7
         )]
         struct Schema;
         let json = ::serde_json::to_value(&value).map_err(|e| e.to_string())?;
@@ -68,17 +69,12 @@ impl ::schemars::JsonSchema for Terse {
         g: &mut ::schemars::r#gen::SchemaGenerator,
     ) -> ::schemars::schema::Schema {
         let inner = g.subschema_for::<::std::string::String>();
-        let constraint = ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
-            extensions: ::serde_json::from_str::<
-                ::serde_json::Map<::std::string::String, ::serde_json::Value>,
-            >(
-                    "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}",
-                )
-                .unwrap()
-                .into_iter()
-                .collect(),
-            ..::std::default::Default::default()
-        });
+        let constraint = ::serde_json::from_str::<
+            ::schemars::schema::Schema,
+        >(
+                "{\"anyOf\":[{\"pattern\":\"^a\",\"type\":\"string\"},{\"maxLength\":3,\"type\":\"string\"}]}",
+            )
+            .unwrap();
         ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             subschemas: ::std::option::Option::Some(
                 ::std::boxed::Box::new(::schemars::schema::SubschemaValidation {

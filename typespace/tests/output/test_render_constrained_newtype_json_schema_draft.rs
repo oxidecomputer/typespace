@@ -53,17 +53,12 @@ impl ::schemars::JsonSchema for Pair {
         g: &mut ::schemars::r#gen::SchemaGenerator,
     ) -> ::schemars::schema::Schema {
         let inner = g.subschema_for::<::std::vec::Vec<i64>>();
-        let constraint = ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
-            extensions: ::serde_json::from_str::<
-                ::serde_json::Map<::std::string::String, ::serde_json::Value>,
-            >(
-                    "{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"additionalItems\":false,\"items\":[{\"type\":\"integer\"},{\"type\":\"integer\"}],\"type\":\"array\"}",
-                )
-                .unwrap()
-                .into_iter()
-                .collect(),
-            ..::std::default::Default::default()
-        });
+        let constraint = ::serde_json::from_str::<
+            ::schemars::schema::Schema,
+        >(
+                "{\"additionalItems\":false,\"items\":[{\"type\":\"integer\"},{\"type\":\"integer\"}],\"type\":\"array\"}",
+            )
+            .unwrap();
         ::schemars::schema::Schema::Object(::schemars::schema::SchemaObject {
             subschemas: ::std::option::Option::Some(
                 ::std::boxed::Box::new(::schemars::schema::SubschemaValidation {

@@ -195,6 +195,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use log::debug;
 use strum::IntoEnumIterator;
 
+use crate::JsonValue;
 use crate::build::{
     ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
     TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
@@ -673,7 +674,25 @@ where
             _ => Feasibility::IfAllChildren,
         },
 
-        Type::NewtypeStruct(NewtypeStruct { common, .. }) => match trait_name {
+        Type::NewtypeStruct(NewtypeStruct {
+            common,
+            constraints,
+            ..
+        }) => match trait_name {
+            // A JSON schema constraint is reported as part of the type's
+            // schema, so the trait exists only if schemars can represent the
+            // constraint; see `schemars_unrepresentable`.
+            TypespaceTrait::JsonSchema => match constraints {
+                NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                    match crate::build::schemars_unrepresentable(schema) {
+                        Some(keyword) => {
+                            Feasibility::Impossible(OffenderReason::SchemaKeyword { keyword })
+                        }
+                        None => Feasibility::IfAllChildren,
+                    }
+                }
+                _ => Feasibility::IfAllChildren,
+            },
             // TYPIFY COMPAT: typify doesn't implement a default for newtypes.
             TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
             TypespaceTrait::Default if common.default.is_some() => Feasibility::IfSomeChildren(
@@ -969,15 +988,13 @@ where
     // serializing it and validating the result against that schema, so
     // the inner type must implement Serialize.
     for (type_id, ty) in types.iter() {
-        match ty {
-            Type::NewtypeStruct(NewtypeStruct {
-                inner,
-                constraints: NewtypeConstraints::JsonSchema(_),
-                ..
-            }) => {
-                work.push_back(WorkItem::init_schema_check(type_id, inner));
-            }
-            _ => (),
+        if let Type::NewtypeStruct(NewtypeStruct {
+            inner,
+            constraints: NewtypeConstraints::JsonSchema(_),
+            ..
+        }) = ty
+        {
+            work.push_back(WorkItem::init_schema_check(type_id, inner));
         }
     }
 

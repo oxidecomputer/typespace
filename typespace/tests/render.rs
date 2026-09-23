@@ -5172,10 +5172,14 @@ fn test_render_constrained_newtype_json_schema() {
         );
         serde_json::from_str::<EvenCoords>(r#"{"x":3,"y":5}"#).expect_err("x is odd");
 
-        // A value of the newtype is an inner value that also passes
-        // the check, so the JsonSchema impl reports the allOf of the
-        // inner type's schema and the stored one (keyword for
-        // keyword).
+        // A value of the newtype is an inner value that also passes the check,
+        // so the JsonSchema impl reports the allOf of the inner type's schema
+        // and the stored one, keyword for keyword as schemars holds it (so
+        // `multipleOf` comes back as a float).
+        let stored = serde_json::to_value(
+            serde_json::from_value::<schemars::schema::Schema>(schema).unwrap(),
+        )
+        .unwrap();
         let mut generator = schemars::r#gen::SchemaGenerator::default();
         assert_eq!(
             serde_json::to_value(<EvenCoords as schemars::JsonSchema>::json_schema(
@@ -5183,7 +5187,7 @@ fn test_render_constrained_newtype_json_schema() {
             ))
             .unwrap(),
             serde_json::json!({
-                "allOf": [{ "$ref": "#/definitions/Coords" }, schema],
+                "allOf": [{ "$ref": "#/definitions/Coords" }, stored],
             })
         );
     }
@@ -5292,6 +5296,164 @@ fn test_render_constrained_newtype_json_schema_draft() {
         Pair::try_from(vec![2, 4]).unwrap();
         Pair::try_from(vec![2, 4, 6]).expect_err("additionalItems refuses a third element");
     }
+}
+
+// A stored schema that names no draft is validated as draft-07, the
+// dialect schemars 0.8 reports, rather than the `jsonschema` crate's
+// default of 2020-12. The array form of `items` proves it: 2020-12
+// refuses to compile that form, so the generated code building at all
+// is the evidence, and the assertion shows `additionalItems` enforced.
+#[test]
+fn json_schema_constraint_without_a_draft_validates_as_draft_07() {
+    let schema = serde_json::json! {{
+        "type": "array",
+        "items": [{ "type": "integer" }, { "type": "integer" }],
+        "additionalItems": false,
+    }};
+
+    let ts = {
+        let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+        builder
+            .insert("i64".to_string(), Type::Integer("i64".to_string()))
+            .unwrap();
+        builder
+            .insert("vec".to_string(), Type::Vec("i64".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Pair".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("vec".to_string())
+                        .name("Pair")
+                        .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+                ),
+            )
+            .unwrap();
+
+        builder.finalize(no_cycles).unwrap()
+    };
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_json_schema_constraint_without_a_draft.rs", out)]
+    fn inner() {
+        use import::*;
+
+        Pair::try_from(vec![2, 4]).unwrap();
+        Pair::try_from(vec![2, 4, 6]).expect_err("additionalItems refuses a third element");
+    }
+}
+
+// The `JsonSchema` impl reports a stored schema as part of the type's
+// schema, keyword by keyword, so the trait exists only when schemars
+// 0.8 can hold every keyword.
+
+/// Build a `Pair` newtype over `Vec<i64>` constrained by `schema`.
+fn schema_constrained_pair(
+    settings: Settings,
+    schema: serde_json::Value,
+) -> TypespaceBuilder<String> {
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("i64".to_string(), Type::Integer("i64".to_string()))
+        .unwrap();
+    builder
+        .insert("vec".to_string(), Type::Vec("i64".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Pair".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("vec".to_string())
+                    .name("Pair")
+                    .constraints(NewtypeConstraints::JsonSchema(JsonValue::new(schema))),
+            ),
+        )
+        .unwrap();
+    builder
+}
+
+/// The conflict `finalize` reports when `JsonSchema` is required of a
+/// newtype whose stored schema schemars cannot hold, checked down to
+/// the keyword it names.
+fn refused_keyword(schema: serde_json::Value) -> String {
+    let builder = schema_constrained_pair(
+        Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema),
+        schema,
+    );
+    let Err(Error::TraitConflicts { conflicts }) = builder.finalize(no_cycles) else {
+        panic!("a schema schemars cannot hold refuses JsonSchema");
+    };
+    assert_eq!(conflicts.len(), 1, "{conflicts:#?}");
+    let conflict = &conflicts[0];
+    assert_eq!(conflict.required, TypespaceTrait::JsonSchema);
+    assert_eq!(conflict.offender, "Pair");
+    match &conflict.reason {
+        OffenderReason::SchemaKeyword { keyword } => keyword.clone(),
+        other => panic!("expected SchemaKeyword, got {other:?}"),
+    }
+}
+
+/// A 2020-12 keyword has no field in schemars 0.8, so the trait is
+/// refused and the conflict names the keyword.
+#[test]
+fn json_schema_constraint_with_a_2020_12_keyword_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "type": "array",
+        "prefixItems": [{ "type": "integer" }],
+    }});
+    assert_eq!(keyword, "prefixItems");
+}
+
+/// A keyword nested below the root is found the same way.
+#[test]
+fn json_schema_constraint_with_a_nested_unknown_keyword_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "type": "array",
+        "items": { "type": "integer", "exclusiveMaximumValue": 3 },
+    }});
+    assert_eq!(keyword, "exclusiveMaximumValue");
+}
+
+/// A `$ref` points into the document the constraint came from, which
+/// the reported schema does not carry.
+#[test]
+fn json_schema_constraint_with_a_ref_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "$ref": "#/definitions/Pair",
+    }});
+    assert_eq!(keyword, "$ref");
+}
+
+/// A `$schema` naming any draft but draft-07 is refused, since the
+/// reported document is draft-07 whatever the constraint says.
+#[test]
+fn json_schema_constraint_naming_another_draft_refuses_json_schema() {
+    let keyword = refused_keyword(serde_json::json! {{
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "array",
+    }});
+    assert_eq!(keyword, "$schema");
+}
+
+/// The same schema with `JsonSchema` merely desired finalizes; the
+/// trait is withheld from the newtype and nothing else.
+#[test]
+fn json_schema_constraint_schemars_cannot_hold_withholds_desired_json_schema() {
+    let builder = schema_constrained_pair(
+        Settings::minimal().with_desired_trait(TypespaceTrait::JsonSchema),
+        serde_json::json! {{
+            "type": "array",
+            "prefixItems": [{ "type": "integer" }],
+        }},
+    );
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("a desired trait is withheld, not refused");
+    assert!(
+        !ts.get_type(&"Pair".to_string())
+            .has_impl(TypespaceTrait::JsonSchema)
+    );
 }
 
 // `feasibility` in `trait_resolution.rs` answers `IfSomeChildren`

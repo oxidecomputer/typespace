@@ -1521,6 +1521,87 @@ impl<Id> NewtypeStruct<Id> {
     }
 }
 
+/// The first keyword of a JSON schema constraint that schemars 0.8 has no
+/// typed field for, or `None` when the whole schema can be reported
+/// through typed fields.
+///
+/// A `JsonSchema` impl reports the constraint as part of the type's
+/// schema, so the constraint has to be one schemars can hold: draft-07
+/// keywords, no `$ref` (the target would be in another document), and a
+/// `$schema` only if it names draft-07, which the reported document
+/// already declares at its root. A keyword schemars does not model lands
+/// in `extensions` when parsed, which is how one is found.
+pub(crate) fn schemars_unrepresentable(schema: &serde_json::Value) -> Option<String> {
+    use schemars::schema::{Schema, SchemaObject, SingleOrVec};
+
+    fn in_schema(schema: &Schema) -> Option<String> {
+        match schema {
+            Schema::Bool(_) => None,
+            Schema::Object(object) => in_object(object),
+        }
+    }
+
+    fn in_object(object: &SchemaObject) -> Option<String> {
+        if let Some(keyword) = object.extensions.keys().next() {
+            return Some(keyword.clone());
+        }
+        if object.reference.is_some() {
+            return Some("$ref".to_string());
+        }
+        let mut children: Vec<&Schema> = Vec::new();
+        if let Some(subschemas) = &object.subschemas {
+            for list in [&subschemas.all_of, &subschemas.any_of, &subschemas.one_of] {
+                children.extend(list.iter().flatten());
+            }
+            for one in [
+                &subschemas.not,
+                &subschemas.if_schema,
+                &subschemas.then_schema,
+                &subschemas.else_schema,
+            ] {
+                children.extend(one.as_deref());
+            }
+        }
+        if let Some(array) = &object.array {
+            match &array.items {
+                Some(SingleOrVec::Single(item)) => children.push(item),
+                Some(SingleOrVec::Vec(items)) => children.extend(items),
+                None => (),
+            }
+            children.extend(array.additional_items.as_deref());
+            children.extend(array.contains.as_deref());
+        }
+        if let Some(obj) = &object.object {
+            children.extend(obj.properties.values());
+            children.extend(obj.pattern_properties.values());
+            children.extend(obj.additional_properties.as_deref());
+            children.extend(obj.property_names.as_deref());
+        }
+        children.into_iter().find_map(in_schema)
+    }
+
+    let serde_json::Value::Object(_) = schema else {
+        return None;
+    };
+    let mut root = match serde_json::from_value::<SchemaObject>(schema.clone()) {
+        Ok(root) => root,
+        Err(err) => return Some(err.to_string()),
+    };
+    if let Some(draft) = root.extensions.remove("$schema") {
+        let draft_07 = matches!(
+            draft.as_str(),
+            Some(
+                "http://json-schema.org/draft-07/schema#"
+                    | "http://json-schema.org/draft-07/schema"
+            )
+        );
+        if !draft_07 {
+            return Some("$schema".to_string());
+        }
+    }
+    in_object(&root)
+}
+
 // TODO 3/7/2026
 // I'm ambivalent as to whether the constrained form of a newtype should be
 // its own, fundamentally distinct entity. However for now I'm going to just
@@ -1562,8 +1643,15 @@ pub enum NewtypeConstraints {
     /// resolution requires that of it.
     ///
     /// The schema's own `$schema` field selects the draft it is validated
-    /// under; without one, the `jsonschema` crate applies its default (draft
-    /// 2020-12).
+    /// under; without one it is validated as draft-07, the dialect schemars
+    /// 0.8 reports.
+    ///
+    /// A `JsonSchema` impl reports the constraint as part of the type's
+    /// schema, keyword by keyword, so trait resolution grants `JsonSchema`
+    /// only when schemars can hold every keyword: draft-07 keywords, no
+    /// `$ref` (its target is in the document the constraint came from),
+    /// and a `$schema` only if it names draft-07. Anything else refuses the
+    /// trait with [`OffenderReason::SchemaKeyword`](crate::error::OffenderReason::SchemaKeyword).
     JsonSchema(JsonValue),
 }
 
@@ -2009,6 +2097,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
                 let schema_string = serde_json::to_string(schema).unwrap();
 
+                // A schema that names no draft is validated as draft-07,
+                // the dialect the reported schema is written in; one that
+                // names its draft is validated under that.
+                let draft = (schema.get("$schema").is_none()).then(|| quote! { , draft = Draft7 });
+
                 // A newtype's Display is the inner value's Display, as it is
                 // for an unconstrained newtype: a value that exists has
                 // already been validated.
@@ -2073,34 +2166,22 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
                 // An instance of this type is an inner value that also
                 // satisfies the stored schema. The reported schema is the
-                // allOf of the two. The stored keywords go in
-                // verbatim, through `extensions`: a stored schema may
-                // be written against any draft, and schemars 0.8
-                // models draft-07, so anything read into its typed
-                // keyword fields would have to be translated back out
-                // again.
+                // allOf of the two. The stored schema is read into
+                // schemars's typed fields, which trait resolution has
+                // already established can hold every keyword (see
+                // `schemars_unrepresentable`); a `$schema` naming
+                // draft-07 is dropped, since the reported document
+                // declares its draft at the root.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
-                    let constraint_schema = match schema {
-                        serde_json::Value::Bool(value) => quote! {
-                            ::schemars::schema::Schema::Bool(#value)
-                        },
-                        _ => quote! {
-                            ::schemars::schema::Schema::Object(
-                                ::schemars::schema::SchemaObject {
-                                    extensions: ::serde_json::from_str::<
-                                        ::serde_json::Map<
-                                            ::std::string::String,
-                                            ::serde_json::Value,
-                                        >,
-                                    >(#schema_string)
-                                        .unwrap()
-                                        .into_iter()
-                                        .collect(),
-                                    ..::std::default::Default::default()
-                                },
-                            )
-                        },
+                    let reported = match schema {
+                        serde_json::Value::Object(map) => {
+                            let mut map = map.clone();
+                            map.remove("$schema");
+                            serde_json::Value::Object(map)
+                        }
+                        other => other.clone(),
                     };
+                    let reported_string = serde_json::to_string(&reported).unwrap();
                     quote! {
                         impl ::schemars::JsonSchema for #name_ident {
                             fn schema_name() -> ::std::string::String {
@@ -2111,7 +2192,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                                 g: &mut ::schemars::r#gen::SchemaGenerator
                             ) -> ::schemars::schema::Schema {
                                 let inner = g.subschema_for::<#inner_ident>();
-                                let constraint = #constraint_schema;
+                                let constraint = ::serde_json::from_str::<
+                                    ::schemars::schema::Schema>(
+                                        #reported_string
+                                    ).unwrap();
                                 ::schemars::schema::Schema::Object(
                                     ::schemars::schema::SchemaObject {
                                         subschemas: ::std::option::Option::Some(
@@ -2147,7 +2231,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             value: #inner_ident
                         ) -> ::std::result::Result<Self, self::error::ConversionError>
                         {
-                            #[::jsonschema::validator(schema = #schema_string)]
+                            #[::jsonschema::validator(schema = #schema_string #draft)]
                             struct Schema;
                             let json = ::serde_json::to_value(&value)
                                 .map_err(|e| e.to_string())?;
