@@ -1432,14 +1432,11 @@ impl<Id> NewtypeStruct<Id> {
             } if patterns.is_empty() => Some("string"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
             NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
-            // The two schemas every value satisfies. Whether a longer
-            // schema does too is not a question a syntactic check can
-            // answer, so these two are where the check stops.
             NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Bool(true))) => {
                 Some("JSON schema")
             }
-            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Object(keywords)))
-                if keywords.is_empty() =>
+            NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Object(schema)))
+                if schema.is_empty() =>
             {
                 Some("JSON schema")
             }
@@ -2001,13 +1998,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             }
             NewtypeConstraints::Array { .. } => todo!(),
 
-            // The fallback constraint. This is used for schemas that can't
-            // be neatly described by structural types. Those constraints
-            // are checked at runtime by serializing to a serde_json::Value
-            // and validating against the provided schema. The inner type
-            // may be anything, but it must implement Serialize; trait
-            // resolution ensures this even if Serialize is neither required
-            // nor desired.
+            // The fallback constraint. This is used for schemas that can't be
+            // cleanly described by structural types. Those constraints are
+            // checked at runtime by serializing to a serde_json::Value and
+            // validating against the provided schema. The inner type may be
+            // anything, but it must implement Serialize; trait resolution
+            // ensures this.
             NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
                 typespace.add_error_mod(out);
 
@@ -2075,9 +2071,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // A value of this type is an inner value that also
-                // satisfies the stored schema, so the reported schema
-                // is the allOf of the two. The stored keywords go in
+                // An instance of this type is an inner value that also
+                // satisfies the stored schema. The reported schema is the
+                // allOf of the two. The stored keywords go in
                 // verbatim, through `extensions`: a stored schema may
                 // be written against any draft, and schemars 0.8
                 // models draft-07, so anything read into its typed

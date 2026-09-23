@@ -785,22 +785,6 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
     }
 }
 
-/// The inner type of `ty`, if `ty` is a newtype constrained by a JSON
-/// schema.
-///
-/// Its `TryFrom` impl checks a value by serializing it and validating
-/// the result against the schema, so the inner type has to implement
-/// `Serialize` whatever the consumer asked for.
-fn json_schema_validated_inner<Id>(ty: &Type<Id>) -> Option<&Id> {
-    match ty {
-        Type::NewtypeStruct(newtype) => match &newtype.constraints {
-            NewtypeConstraints::JsonSchema(_) => Some(&newtype.inner),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 fn required_resolution<Id>(
     types: &mut BTreeMap<Id, Type<Id>>,
     settings: &Settings,
@@ -983,13 +967,17 @@ where
 
     // A newtype constrained by a JSON schema checks a value by
     // serializing it and validating the result against that schema, so
-    // the inner type must implement Serialize. The check is written
-    // into the TryFrom impl, which every such newtype gets whatever its
-    // trait set holds, so the requirement stands even where the
-    // consumer asked for no serde traits at all.
+    // the inner type must implement Serialize.
     for (type_id, ty) in types.iter() {
-        if let Some(inner_id) = json_schema_validated_inner(ty) {
-            work.push_back(WorkItem::init_schema_check(type_id, inner_id));
+        match ty {
+            Type::NewtypeStruct(NewtypeStruct {
+                inner,
+                constraints: NewtypeConstraints::JsonSchema(_),
+                ..
+            }) => {
+                work.push_back(WorkItem::init_schema_check(type_id, inner));
+            }
+            _ => (),
         }
     }
 
