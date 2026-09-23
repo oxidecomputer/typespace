@@ -245,9 +245,9 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 
 use crate::build::{
-    Enum, JsonValue, Native, NewtypeStruct, Struct, StructProperty, StructPropertySerde,
-    StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt, UnitStruct, VariantDetails,
-    all_named_types,
+    Enum, EnumTagType, JsonValue, Native, NewtypeStruct, Struct, StructProperty,
+    StructPropertySerde, StructPropertyState, TupleStruct, Type, TypeAlias, TypeCommonBuilt,
+    UnitStruct, VariantDetails, all_named_types,
 };
 use crate::default::{SharedDefaultFn, shared_default_fn};
 use crate::error::Error;
@@ -776,44 +776,180 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(checks)
     }
 
-    /// Per-type structural validation: rules a single type's own
-    /// declaration must satisfy, judged without reference to any other
-    /// type.
+    /// Per-type structural validation: rules a type's declaration must
+    /// satisfy, judged from that declaration and the types it reaches.
     ///
-    /// It holds one rule, that a struct cannot both deny unknown
-    /// fields and flatten a property. Two more belong here:
-    ///
-    /// - a flattened property's type must be an object, which is what
-    ///   makes flattening meaningful at all;
-    /// - the Never-position rules, which `check_never_positions` holds
-    ///   separately though they are per-type in exactly this sense.
+    /// It holds two rules, each applying to a struct's properties and
+    /// to a struct-style enum variant's, which serialize the same way.
+    /// A type cannot both deny unknown fields and flatten a property.
+    /// And a flattened property's type must be one serde can splice
+    /// into the containing object, which is what makes flattening
+    /// meaningful at all. One more rule belongs here: the
+    /// Never-position rules, which `check_never_positions` holds
+    /// separately though they are per-type in exactly this sense.
     ///
     /// Add rules here rather than as new `check_*` methods.
     fn check_type_structure(&self) -> Result<(), Error<Id>> {
         for typ in self.types.values() {
-            let Type::Struct(struct_info) = typ else {
-                continue;
-            };
-            if !struct_info.deny_unknown_fields {
-                continue;
+            // A struct-style variant's fields are properties like a
+            // struct's and its serialized form is an object under every
+            // tagging, so both rules reach through it; the enum's own
+            // deny_unknown_fields governs each variant's deserializer.
+            // Each entry is one property list with the name of the type
+            // and, for a variant, of the variant.
+            struct PropertyList<'a, Id> {
+                type_name: &'a str,
+                variant: Option<&'a str>,
+                properties: &'a [StructProperty<Id>],
+                deny_unknown_fields: bool,
             }
-            // serde decides deny_unknown_fields in the outer struct's
-            // deserializer, which cannot know whether a flattened type
-            // claims a given key, so the pair has no implementable
-            // meaning. Naming the first flattened property in
-            // declaration order is enough to locate the problem.
-            if let Some(prop) = struct_info
-                .properties
-                .iter()
-                .find(|prop| matches!(prop.json_name, StructPropertySerde::Flatten))
+            let property_lists = match typ {
+                Type::Struct(struct_info) => vec![PropertyList {
+                    type_name: struct_info.common.built_name(),
+                    variant: None,
+                    properties: &struct_info.properties,
+                    deny_unknown_fields: struct_info.deny_unknown_fields,
+                }],
+                Type::Enum(enum_info) => enum_info
+                    .variants
+                    .iter()
+                    .filter_map(|variant| match &variant.details {
+                        VariantDetails::Struct(props) => Some(PropertyList {
+                            type_name: enum_info.common.built_name(),
+                            variant: Some(variant.rust_name.as_str()),
+                            properties: props.as_slice(),
+                            deny_unknown_fields: enum_info.deny_unknown_fields,
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            for PropertyList {
+                type_name,
+                variant,
+                properties,
+                deny_unknown_fields,
+            } in property_lists
             {
-                return Err(Error::FlattenWithDenyUnknownFields {
-                    type_name: struct_info.common.built_name().to_string(),
-                    property: prop.rust_name.clone(),
-                });
+                let flattened = properties
+                    .iter()
+                    .filter(|prop| matches!(prop.json_name, StructPropertySerde::Flatten));
+
+                // A flattened property contributes its own keys to the
+                // object the type serializes as, so its type has to
+                // serialize as an object. Naming the first property in
+                // declaration order whose type does not is enough to
+                // locate the problem.
+                if let Some(prop) = flattened
+                    .clone()
+                    .find(|prop| !self.flattens_as_object(&prop.type_id, &mut BTreeSet::new()))
+                {
+                    return Err(Error::InvalidFlatten {
+                        type_name: type_name.to_string(),
+                        variant: variant.map(str::to_string),
+                        property: prop.rust_name.clone(),
+                    });
+                }
+
+                // serde decides deny_unknown_fields in the outer
+                // deserializer, which cannot know whether a flattened type
+                // claims a given key, so the pair has no implementable
+                // meaning. Naming the first flattened property in
+                // declaration order is enough to locate the problem.
+                if deny_unknown_fields && let Some(prop) = flattened.clone().next() {
+                    return Err(Error::FlattenWithDenyUnknownFields {
+                        type_name: type_name.to_string(),
+                        variant: variant.map(str::to_string),
+                        property: prop.rust_name.clone(),
+                    });
+                }
             }
         }
         Ok(())
+    }
+
+    /// Whether a value of type `id` serializes as an object, and so can
+    /// be the type of a flattened property.
+    ///
+    /// serde decides this when it runs, not when it compiles:
+    /// `#[serde(flatten)]` builds against any `Serialize` type and
+    /// fails at serialization with "can only flatten structs and maps"
+    /// if the value turns out to be anything else. This answers the
+    /// same question from the declaration alone.
+    ///
+    /// A struct and a map serialize as objects outright. So does an
+    /// enum under any of serde's three tagged representations, each of
+    /// which writes the tag as a key: an externally tagged variant
+    /// writes its own name as the key, even a unit variant, which
+    /// serde renders as `null` under the key rather than as the bare
+    /// string it would produce unflattened. An untagged enum writes
+    /// whatever its selected variant writes, so every one of its
+    /// variants has to serialize as an object in turn. A native and a
+    /// `serde_json::Value` are both taken at their word: neither is
+    /// certain to hold an object, but neither is certain not to, and
+    /// refusing them would turn away graphs that work.
+    ///
+    /// The four transparent wrappers--an option, a box, a type alias,
+    /// and a newtype struct--answer as what they wrap, since each
+    /// passes the flatten through to its inner value. An option is
+    /// transparent in this sense even though `None` writes nothing at
+    /// all: `Some` is the case that reaches serde's check, so an
+    /// `Option<u32>` fails as surely as a `u32` does, just not until a
+    /// value is present.
+    ///
+    /// Everything else--a sequence, a tuple, a tuple struct, a unit, a
+    /// scalar--serializes as something other than an object and is
+    /// refused. A cycle answers `false` on revisit, matching
+    /// [`has_trait`]: a type that reaches only itself reaches no object.
+    fn flattens_as_object(&self, id: &Id, seen: &mut BTreeSet<Id>) -> bool {
+        if !seen.insert(id.clone()) {
+            return false;
+        }
+
+        let answer = match self.types.get(id).unwrap() {
+            Type::Struct(_) | Type::Map(_, _) => true,
+
+            // `Enum::build` requires a tag type, so the `None` arm is
+            // unreachable; it joins the tagged arms because every
+            // tagged representation writes an object.
+            Type::Enum(enum_info) => match &enum_info.tag_type {
+                Some(EnumTagType::Untagged) => {
+                    enum_info
+                        .variants
+                        .iter()
+                        .all(|variant| match &variant.details {
+                            VariantDetails::Struct(_) => true,
+                            VariantDetails::Item(inner) => self.flattens_as_object(inner, seen),
+                            VariantDetails::Unit | VariantDetails::Tuple(_) => false,
+                        })
+                }
+                _ => true,
+            },
+
+            Type::Option(inner) | Type::Box(inner) => self.flattens_as_object(inner, seen),
+            Type::TypeAlias(alias) => self.flattens_as_object(&alias.target, seen),
+            Type::NewtypeStruct(newtype) => self.flattens_as_object(&newtype.inner, seen),
+
+            Type::Native(_) | Type::JsonValue => true,
+
+            Type::UnitStruct(_)
+            | Type::TupleStruct(_)
+            | Type::Vec(_)
+            | Type::Set(_)
+            | Type::Array(_, _)
+            | Type::Tuple(_)
+            | Type::Unit
+            | Type::Boolean
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String
+            | Type::Never => false,
+        };
+
+        seen.remove(id);
+        answer
     }
 
     /// Reject `Type::Never` in any position that requires a value.
