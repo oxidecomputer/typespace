@@ -883,6 +883,15 @@ where
                 path: Default::default(),
             }
         }
+
+        fn init_foreign_derive(type_id: &Id, derive: String, traits: TypespaceTraitSet) -> Self {
+            Self {
+                target: type_id.clone(),
+                traits,
+                origin: RequirementOrigin::ForeignDerive { derive },
+                path: Default::default(),
+            }
+        }
     }
 
     // Initialize the work queue with Container obligations.
@@ -1005,6 +1014,26 @@ where
         for (type_id, ty) in types.iter() {
             if ty.is_named() {
                 work.push_back(WorkItem::init_global(type_id, required.clone()));
+            }
+        }
+    }
+
+    // A foreign derive with bounds is applied to every named type, so
+    // its bounds are required of every named type, each with the
+    // derive named as the origin.
+    for derive in settings
+        .extra_derives
+        .iter()
+        .filter(|derive| !derive.bounds().is_empty())
+    {
+        let required = expand_supertraits(derive.bounds().clone());
+        for (type_id, ty) in types.iter() {
+            if ty.is_named() {
+                work.push_back(WorkItem::init_foreign_derive(
+                    type_id,
+                    derive.path_text(),
+                    required.clone(),
+                ));
             }
         }
     }

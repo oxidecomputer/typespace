@@ -1,4 +1,4 @@
-#[derive(::std::hash::Hash, Clone, Debug, Eq, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd)]
 pub struct Widget {
     pub x: u32,
 }

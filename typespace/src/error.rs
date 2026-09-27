@@ -593,6 +593,13 @@ impl<Id: std::fmt::Display> std::fmt::Display for TraitConflict<Id> {
                      `{required}` of all types"
                 )
             }
+            RequirementOrigin::ForeignDerive { derive } => {
+                write!(
+                    f,
+                    "\n    required because the derive `{derive}` requires \
+                     `{required}` of the types it is applied to"
+                )
+            }
         }
     }
 }
@@ -628,6 +635,14 @@ pub enum RequirementOrigin<Id> {
     /// The requirement applies to every named type, via
     /// [`Settings::with_required_trait`](crate::settings::Settings::with_required_trait).
     GlobalSettings,
+    /// The requirement is a bound of a foreign derive applied to every
+    /// named type, via
+    /// [`Settings::with_derive`](crate::settings::Settings::with_derive)
+    /// and [`ForeignTrait::requires`](crate::settings::ForeignTrait::requires).
+    ForeignDerive {
+        /// The derive's path, as given.
+        derive: String,
+    },
 }
 
 /// One hop in a trait requirement's propagation path.
