@@ -244,6 +244,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
+use strum::IntoEnumIterator;
 
 use crate::build::{
     Enum, EnumTagType, JsonValue, Native, NewtypeStruct, Struct, StructProperty,
@@ -344,6 +345,47 @@ impl TypespaceTrait {
                 TypespaceTrait::Default => quote! { Default },
             }
         }
+    }
+}
+
+impl TypespaceTrait {
+    /// The trait's canonical path, as a consumer would write it in full.
+    pub fn canonical_path(&self) -> &'static str {
+        match self {
+            TypespaceTrait::Clone => "::std::clone::Clone",
+            TypespaceTrait::Copy => "::std::marker::Copy",
+            TypespaceTrait::Debug => "::std::fmt::Debug",
+            TypespaceTrait::Serialize => "::serde::Serialize",
+            TypespaceTrait::Deserialize => "::serde::Deserialize",
+            TypespaceTrait::JsonSchema => "::schemars::JsonSchema",
+            TypespaceTrait::Display => "::std::fmt::Display",
+            TypespaceTrait::FromStr => "::std::str::FromStr",
+            TypespaceTrait::Eq => "::std::cmp::Eq",
+            TypespaceTrait::PartialEq => "::std::cmp::PartialEq",
+            TypespaceTrait::Ord => "::std::cmp::Ord",
+            TypespaceTrait::PartialOrd => "::std::cmp::PartialOrd",
+            TypespaceTrait::Hash => "::std::hash::Hash",
+            TypespaceTrait::Default => "::std::default::Default",
+        }
+    }
+
+    /// The trait a path names, if it is one typespace models.
+    ///
+    /// Recognizes the bare name (`Ord`), the canonical path with or without
+    /// its leading `::`, and the `core` synonym of a `std` path. Anything else
+    /// is not a trait typespace models.
+    pub fn from_path(path: &str) -> Option<Self> {
+        let path = path.trim();
+        Self::iter().find(|trait_| {
+            let canonical = trait_.canonical_path();
+            let unrooted = &canonical[2..];
+            path == trait_.to_string()
+                || path == canonical
+                || path == unrooted
+                || unrooted.strip_prefix("std::").is_some_and(|rest| {
+                    path == format!("core::{rest}") || path == format!("::core::{rest}")
+                })
+        })
     }
 }
 
@@ -615,10 +657,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         TypespaceRenderer::new(&self.types, &self.settings)
     }
 
-    /// Reject unparseable extra derives so that rendering--which is
+    /// Reject unparseable per-type extra derives so that rendering--which is
     /// infallible--can rely on them parsing.
     fn check_derives(&self) -> Result<(), Error<Id>> {
-        for derive in &self.settings.extra_derives {
+        for derive in self.types.values().flat_map(|typ| typ.extra_derives()) {
             if let Err(err) = syn::parse_str::<syn::Path>(derive) {
                 return Err(Error::InvalidDerive {
                     derive: derive.clone(),
@@ -1132,7 +1174,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         // 3. Trait resolution to populate the post-finalization cache of
         //    traits for each named type.
 
-        // Validate that derives are parseable as Rust paths.
+        // Validate that per-type derives are parseable as Rust paths.
         // TODO 9/1/2026
         // We should cache this and save it in the finalized Typespace rather
         // than saving the raw settings.
@@ -1577,13 +1619,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 self.settings
                     .extra_derives
                     .iter()
-                    .chain(extra_derives.iter())
-                    .map(|derive| {
-                        syn::parse_str::<syn::Path>(derive)
-                            .expect("invalid derive path")
-                            .to_token_stream()
-                    }),
+                    .map(|derive| derive.path().to_token_stream()),
             )
+            .chain(extra_derives.iter().map(|derive| {
+                syn::parse_str::<syn::Path>(derive)
+                    .expect("invalid derive path")
+                    .to_token_stream()
+            }))
             .map(|tokens| (tokens.to_string(), tokens))
             .collect::<BTreeMap<_, _>>();
 

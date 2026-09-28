@@ -9,7 +9,9 @@ use typespace::build::{
     StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
-use typespace::settings::{ContainerType, GeneratedCrate, OptionalNullable, Settings, Std};
+use typespace::settings::{
+    ContainerType, ForeignTrait, GeneratedCrate, OptionalNullable, Settings, Std,
+};
 use typespace::{TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
 
@@ -1670,8 +1672,8 @@ fn test_container_overrides() {
     }
 }
 
-// Traits requested via with_trait_impl seed every named type and are
-// realized as derives; with_derive paths are appended opaquely.
+// Traits requested via with_required_trait seed every named type and are
+// realized as derives; a foreign derive is appended verbatim.
 #[test]
 fn test_trait_impls() {
     let settings = Settings::minimal()
@@ -1682,7 +1684,8 @@ fn test_trait_impls() {
         .with_required_trait(typespace::TypespaceTrait::Debug)
         .with_required_trait(typespace::TypespaceTrait::PartialEq)
         .with_required_trait(typespace::TypespaceTrait::Eq)
-        .with_derive("::std::hash::Hash");
+        .with_required_trait(typespace::TypespaceTrait::Hash)
+        .with_derive(ForeignTrait::new("::typespace_test_macro::ForeignDerive").unwrap());
     let builder = typespace_builder!(settings, {
         struct Widget {
             name: String,
@@ -1708,7 +1711,8 @@ fn test_trait_impls() {
 
     #[check_and_include("tests/output/test_trait_impls.rs", ts.to_codespace().into_stream())]
     fn inner() {
-        // Clone + PartialEq/Eq from with_trait_impl; Hash from with_derive.
+        // Clone, PartialEq/Eq, and Hash from with_required_trait; the foreign
+        // derive expands to nothing.
         let v: import::Widget = serde_json::from_str(r#"{"name": "w", "tags": ["a"]}"#).unwrap();
         let w = v.clone();
         assert_eq!(v, w);
@@ -1759,11 +1763,17 @@ fn test_trait_impls_conflict() {
     );
 }
 
-// An extra derive that isn't a valid Rust path is rejected at finalize.
+// A per-type extra derive that isn't a valid Rust path is rejected at
+// finalize. (A crate-wide one cannot be made: `ForeignTrait::new`
+// refuses it.)
 #[test]
 fn test_invalid_derive() {
-    let settings = Settings::minimal().with_derive("not a path!");
-    let builder = TypespaceBuilder::<String>::new(settings);
+    let builder = typespace_builder!(Settings::minimal(), {
+        #[derive = ["not a path!"]]
+        struct Widget {
+            x: u32,
+        }
+    });
 
     let Err(err) = builder.finalize(no_cycles) else {
         panic!("expected finalize to fail");
@@ -2957,7 +2967,7 @@ fn test_extra_derives_combine() {
         .with_required_trait(TypespaceTrait::Clone)
         .with_required_trait(TypespaceTrait::PartialEq)
         .with_required_trait(TypespaceTrait::Eq)
-        .with_derive("::std::hash::Hash");
+        .with_required_trait(TypespaceTrait::Hash);
 
     let builder = typespace_builder!(settings, {
         #[derive = ["PartialOrd"]]
@@ -2970,8 +2980,7 @@ fn test_extra_derives_combine() {
 
     #[check_and_include("tests/output/test_extra_derives_combine.rs", ts.to_codespace().into_stream())]
     fn inner() {
-        // Hash comes from the crate-wide with_derive; PartialOrd is the
-        // per-type extra, additional to it.
+        // Hash is required crate-wide; PartialOrd is the per-type extra.
         let a = import::Widget { x: 1 };
         let b = import::Widget { x: 2 };
         assert!(a < b);
@@ -2994,7 +3003,7 @@ fn test_extra_derives_multi_shape() {
         .with_required_trait(TypespaceTrait::PartialEq)
         .with_required_trait(TypespaceTrait::Serialize)
         .with_required_trait(TypespaceTrait::Deserialize)
-        .with_derive("::std::hash::Hash");
+        .with_required_trait(TypespaceTrait::Hash);
 
     let builder = typespace_builder!(settings, {
         #[derive = ["PartialOrd"]]

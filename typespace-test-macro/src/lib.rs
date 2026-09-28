@@ -283,3 +283,10 @@ pub fn check_and_include(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn typespace_builder(input: TokenStream) -> TokenStream {
     builder::expand(input.into()).into()
 }
+
+/// A derive that expands to nothing, for tests that need a derive typespace
+/// does not model.
+#[proc_macro_derive(ForeignDerive)]
+pub fn foreign_derive(_item: TokenStream) -> TokenStream {
+    TokenStream::new()
+}

@@ -65,9 +65,10 @@ pub struct Settings {
     #[serde(default)]
     pub desired_traits: TypespaceTraitSet,
 
-    /// Opaque derive paths included in every derive attribute.
+    /// Foreign derives included in every derive attribute; see
+    /// [`ForeignTrait`].
     #[serde(default)]
-    pub extra_derives: Vec<String>,
+    pub extra_derives: Vec<ForeignTrait>,
 
     /// Opaque attributes included in every type.
     #[serde(default)]
@@ -341,17 +342,30 @@ impl Settings {
         self
     }
 
-    /// Add a derived trait to every named type.
+    /// Add a foreign derive to every named type.
     ///
-    /// The path is emitted verbatim. Callers should take care not to specify
-    /// traits present in [`TypespaceTrait`], as those may require special
-    /// handling. Callers should also take care not to specify two aliases of
-    /// the same trait. Traits that cannot be derived for a type may cause
-    /// generated code to fail to compile; `typespace` has no way to validate
-    /// the validity or applicability of a derive path.
-    pub fn with_derive(mut self, derive: impl Into<String>) -> Self {
-        self.extra_derives.push(derive.into());
+    /// The path is emitted verbatim into every derive attribute. A derive that
+    /// declares bounds ([`ForeignTrait::requires`]) makes them required of
+    /// every named type, so a type that cannot satisfy one fails finalization
+    /// naming the derive. Beyond its bounds, `typespace` has no way to
+    /// validate the applicability of a derive; one that does not apply to a
+    /// type fails the consumer's build.
+    pub fn with_derive(mut self, derive: ForeignTrait) -> Self {
+        self.extra_derives.push(derive);
         self
+    }
+
+    /// Add a required trait by name.
+    ///
+    /// For callers whose input is text, such as a command line or a
+    /// configuration file; see [`TraitSpec::parse`]. A caller that knows
+    /// the trait can call [`Settings::with_required_trait`] or
+    /// [`Settings::with_derive`] directly.
+    pub fn with_extra_required_trait(self, request: TraitSpec) -> Self {
+        match request {
+            TraitSpec::Known(trait_) => self.with_required_trait(trait_),
+            TraitSpec::Foreign(derive) => self.with_derive(derive),
+        }
     }
 
     /// Specify an attribute that will precede every generated type.
@@ -1003,6 +1017,204 @@ impl ProvisionTable {
                 table
             })
     }
+}
+
+/// A trait for which `typespace` has no special handling.
+///
+/// The path is emitted verbatim into derive attributes. The bounds are traits
+/// `typespace` models that the derive requires of the type; they are required
+/// alongside it, so a type that cannot satisfy one fails finalization naming
+/// the derive rather than failing the consumer's build.
+#[derive(Clone, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ForeignTrait {
+    path: syn::Path,
+    bounds: TypespaceTraitSet,
+}
+
+// `syn::Path` implements `Debug` only under syn's `extra-traits`
+// feature; render the path instead, as `ContainerType` does.
+impl std::fmt::Debug for ForeignTrait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForeignTrait")
+            .field("path", &self.path_text())
+            .field("bounds", &self.bounds)
+            .finish()
+    }
+}
+
+impl ForeignTrait {
+    /// A foreign derive by crate path.
+    ///
+    /// Refuses a trait `typespace` models (for those, use
+    /// [`Settings::with_required_trait`]) and a bare identifier, which
+    /// generated code, having no `use` items, could not resolve.
+    pub fn new(path: &str) -> Result<Self, InvalidTraitSpec> {
+        let invalid = |reason: String| InvalidTraitSpec {
+            text: path.to_string(),
+            reason,
+        };
+        if let Some(trait_) = TypespaceTrait::from_path(path) {
+            return Err(invalid(format!(
+                "`{trait_}` is a trait typespace models; request it with \
+                 `with_required_trait(TypespaceTrait::{trait_})`"
+            )));
+        }
+        let parsed = syn::parse_str::<syn::Path>(path.trim())
+            .map_err(|err| invalid(format!("not a Rust path: {err}")))?;
+        if parsed.leading_colon.is_none() && parsed.segments.len() == 1 {
+            return Err(invalid(
+                "a foreign derive needs its crate path; generated code has no \
+                 `use` items to resolve a bare name"
+                    .to_string(),
+            ));
+        }
+        Ok(Self {
+            path: parsed,
+            bounds: TypespaceTraitSet::empty(),
+        })
+    }
+
+    /// The traits the derive requires of the type it is applied to.
+    pub fn requires(mut self, bounds: impl IntoIterator<Item = TypespaceTrait>) -> Self {
+        bounds.into_iter().for_each(|bound| self.bounds.add(bound));
+        self
+    }
+
+    /// The derive's path, as it is emitted.
+    pub fn path(&self) -> &syn::Path {
+        &self.path
+    }
+
+    /// The traits the derive requires of the type it is applied to.
+    pub fn bounds(&self) -> &TypespaceTraitSet {
+        &self.bounds
+    }
+
+    /// The path as text, for messages.
+    pub(crate) fn path_text(&self) -> String {
+        use quote::ToTokens;
+        let leading = if self.path.leading_colon.is_some() {
+            "::"
+        } else {
+            ""
+        };
+        let segments = self
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.to_token_stream().to_string())
+            .collect::<Vec<_>>();
+        format!("{leading}{}", segments.join("::"))
+    }
+}
+
+impl TryFrom<String> for ForeignTrait {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        match TraitSpec::parse(&text).map_err(|err| err.to_string())? {
+            TraitSpec::Foreign(derive) => Ok(derive),
+            TraitSpec::Known(trait_) => Err(format!(
+                "`{trait_}` is a trait typespace models; list it under \
+                 `required_traits` rather than `extra_derives`"
+            )),
+        }
+    }
+}
+
+/// A trait asked for by name: one `typespace` models, or a foreign one.
+///
+/// Produced by [`TraitSpec::parse`] from text such as a command-line
+/// argument, and consumed by [`Settings::with_extra_required_trait`]. A
+/// caller that knows which kind it holds has no need of this type.
+#[derive(Debug, Clone)]
+pub enum TraitSpec {
+    /// A trait `typespace` models.
+    Known(TypespaceTrait),
+    /// A derive `typespace` does not model.
+    Foreign(ForeignTrait),
+}
+
+impl TraitSpec {
+    /// Parse `path [: bound + bound ...]`.
+    ///
+    /// The path names a trait `typespace` models (its bare name or its
+    /// canonical path) or a foreign derive by crate path. Each bound must
+    /// be a trait `typespace` models, and a modeled trait takes no bounds,
+    /// since its supertraits are already known.
+    pub fn parse(spec: &str) -> Result<Self, InvalidTraitSpec> {
+        let invalid = |reason: String| InvalidTraitSpec {
+            text: spec.to_string(),
+            reason,
+        };
+        // The bounds follow the first lone colon; `::` is a path
+        // separator.
+        let bytes = spec.as_bytes();
+        let lone_colon = (0..bytes.len()).find(|&i| {
+            bytes[i] == b':' && bytes.get(i + 1) != Some(&b':') && (i == 0 || bytes[i - 1] != b':')
+        });
+        let (path, bounds) = match lone_colon {
+            Some(index) => (&spec[..index], Some(&spec[index + 1..])),
+            None => (spec, None),
+        };
+        let bounds = bounds
+            .map(|bounds| {
+                bounds
+                    .split('+')
+                    .map(str::trim)
+                    .map(|bound| {
+                        TypespaceTrait::from_path(bound).ok_or_else(|| {
+                            invalid(format!(
+                                "the bound `{bound}` is not a trait typespace models"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+
+        match TypespaceTrait::from_path(path) {
+            Some(trait_) => match bounds {
+                Some(_) => Err(invalid(format!(
+                    "`{trait_}` is a trait typespace models and takes no bounds"
+                ))),
+                None => Ok(Self::Known(trait_)),
+            },
+            None => {
+                let derive = ForeignTrait::new(path).map_err(|err| invalid(err.reason))?;
+                Ok(Self::Foreign(match bounds {
+                    Some(bounds) => derive.requires(bounds),
+                    None => derive,
+                }))
+            }
+        }
+    }
+}
+
+impl std::str::FromStr for TraitSpec {
+    type Err = InvalidTraitSpec;
+
+    fn from_str(spec: &str) -> Result<Self, Self::Err> {
+        Self::parse(spec)
+    }
+}
+
+impl From<ForeignTrait> for TraitSpec {
+    fn from(derive: ForeignTrait) -> Self {
+        Self::Foreign(derive)
+    }
+}
+
+/// A trait request that could not be made; see [`ForeignTrait::new`] and
+/// [`TraitSpec::parse`].
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("invalid trait request `{text}`: {reason}")]
+pub struct InvalidTraitSpec {
+    /// The text as given.
+    pub text: String,
+    /// Why it was refused.
+    pub reason: String,
 }
 
 /// Specify the syntax used to render types in the `std` crate's
