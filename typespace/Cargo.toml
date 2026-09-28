@@ -1,6 +1,6 @@
 [package]
 name = "typespace"
-version = "0.0.1-alpha.1"
+version = "0.0.1-alpha.2"
 edition = "2024"
 rust-version = "1.97"
 license = "Apache-2.0"
