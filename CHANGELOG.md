@@ -10,7 +10,7 @@
   `Settings::with_extra_required_trait`, which routes either way. A foreign
   derive must carry its crate path and may declare the traits it requires (#16)
 * `Settings::with_crate_path` overrides the path by which generated code refers
-  a particular crate (#12)
+  to a particular crate (#12)
 * `Settings` derives `Clone` (#11)
 * `NewtypeConstraints::JsonSchema` renders: values are validated
   against the schema at construction and deserialization, and a `JsonSchema`
