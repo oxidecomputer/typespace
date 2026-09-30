@@ -22,7 +22,7 @@ use crate::{
 ///
 /// A default value for one of these is built through `new()` rather
 /// than written as a literal, since there is no literal form for them.
-const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
+pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
 /// The values an integer type accepts: the closed range it holds, and
 /// whether zero is among them.

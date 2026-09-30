@@ -5,8 +5,9 @@
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::build::{
-    Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct,
-    StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, VariantDetails,
+    Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct,
+    NumericBound, Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct,
+    Type, VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
 use typespace::settings::{
@@ -5073,6 +5074,250 @@ fn test_render_constrained_newtype_string() {
     }
 }
 
+// A length-constrained newtype over a `Vec`: the checks run on
+// `len()`, and the reported schema carries the length keywords.
+#[test]
+fn test_render_constrained_newtype_array() {
+    let mut builder = TypespaceBuilder::new(Settings::maximal());
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert("Vec<string>".to_string(), Type::Vec("string".to_string()))
+        .unwrap();
+
+    builder
+        .insert(
+            "tags".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("Vec<string>".to_string())
+                    .name("Tags")
+                    .constraints(NewtypeConstraints::Array {
+                        min: Some(1),
+                        max: Some(3),
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_array.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let tags = Tags::try_from(vec!["a".to_string()]).unwrap();
+        assert_eq!(tags.len(), 1);
+        Tags::try_from(Vec::new()).expect_err("fewer than one item");
+        Tags::try_from(vec!["a".to_string(); 4]).expect_err("more than three items");
+
+        // The hand-written Deserialize runs the same checks.
+        assert_eq!(serde_json::from_str::<Tags>(r#"["a"]"#).unwrap(), tags);
+        serde_json::from_str::<Tags>("[]").expect_err("fewer than one item");
+
+        // The JsonSchema impl reports the inner type's schema with the
+        // length keywords set.
+        let mut generator = schemars::r#gen::SchemaGenerator::default();
+        assert_eq!(
+            serde_json::to_value(<Tags as schemars::JsonSchema>::json_schema(&mut generator))
+                .unwrap(),
+            serde_json::json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "maxItems": 3,
+            })
+        );
+    }
+}
+
+// Numeric constraints over the four inner types they reach: a plain
+// unsigned integer, a float, a `NonZero` (compared through `get()`),
+// and one whose inclusive bounds sit at the type's own limits and so
+// render no check.
+#[test]
+fn test_render_constrained_newtype_number() {
+    // Every trait Settings::maximal() asks for except Default:
+    // typespace answers for a Type::Integer as though it were a
+    // primitive, and ::std::num::NonZeroU32 has no Default to derive.
+    let settings = [
+        TypespaceTrait::Display,
+        TypespaceTrait::FromStr,
+        TypespaceTrait::Eq,
+        TypespaceTrait::PartialEq,
+        TypespaceTrait::Ord,
+        TypespaceTrait::PartialOrd,
+        TypespaceTrait::Hash,
+        TypespaceTrait::Copy,
+    ]
+    .into_iter()
+    .fold(
+        Settings::typical().with_required_trait(TypespaceTrait::JsonSchema),
+        Settings::with_desired_trait,
+    );
+    let mut builder = TypespaceBuilder::new(settings);
+
+    builder
+        .insert("u32".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert("u8".to_string(), Type::Integer("u8".to_string()))
+        .unwrap();
+    builder
+        .insert("f64".to_string(), Type::Float("f64".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "nzu32".to_string(),
+            Type::Integer("::std::num::NonZeroU32".to_string()),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "count".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("u32".to_string())
+                    .name("Count")
+                    .constraints(NewtypeConstraints::Number {
+                        min: Some(NumericBound::Integer(5)),
+                        max: Some(NumericBound::Integer(100)),
+                        exclusive_min: None,
+                        exclusive_max: None,
+                        multiple_of: Some(NumericBound::Integer(5)),
+                    }),
+            ),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "ratio".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("f64".to_string())
+                    .name("Ratio")
+                    .constraints(NewtypeConstraints::Number {
+                        min: None,
+                        max: None,
+                        exclusive_min: Some(NumericBound::Float(0.0)),
+                        exclusive_max: Some(NumericBound::Float(1.0)),
+                        multiple_of: None,
+                    }),
+            ),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "even".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("nzu32".to_string())
+                    .name("Even")
+                    .constraints(NewtypeConstraints::Number {
+                        min: None,
+                        max: None,
+                        exclusive_min: None,
+                        exclusive_max: None,
+                        multiple_of: Some(NumericBound::Integer(2)),
+                    }),
+            ),
+        )
+        .unwrap();
+
+    // The minimum is `u8`'s own minimum, stated as a float the way a
+    // consumer reading schemars would state it.
+    builder
+        .insert(
+            "percent".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("u8".to_string())
+                    .name("Percent")
+                    .constraints(NewtypeConstraints::Number {
+                        min: Some(NumericBound::Float(0.0)),
+                        max: Some(NumericBound::Integer(100)),
+                        exclusive_min: None,
+                        exclusive_max: None,
+                        multiple_of: None,
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = ts.to_codespace().into_stream();
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_number.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let count = Count::try_from(10).unwrap();
+        assert_eq!(*count, 10);
+        Count::try_from(4).expect_err("less than five");
+        Count::try_from(105).expect_err("greater than one hundred");
+        Count::try_from(7).expect_err("not a multiple of five");
+
+        Ratio::try_from(0.5).unwrap();
+        Ratio::try_from(0.0).expect_err("not greater than zero");
+        Ratio::try_from(1.0).expect_err("not less than one");
+
+        // A NonZero is compared through its `get()`.
+        Even::try_from(std::num::NonZeroU32::new(4).unwrap()).unwrap();
+        Even::try_from(std::num::NonZeroU32::new(5).unwrap()).expect_err("not a multiple of two");
+
+        // `u8` holds nothing below zero, so the minimum renders no
+        // check of its own; the maximum does.
+        Percent::try_from(0).unwrap();
+        Percent::try_from(101).expect_err("greater than one hundred");
+
+        // FromStr parses the inner type and then runs the same checks.
+        assert_eq!("10".parse::<Count>().unwrap(), count);
+        "7".parse::<Count>().expect_err("not a multiple of five");
+        "ten".parse::<Count>().expect_err("not a number at all");
+        assert_eq!(count.to_string(), "10");
+
+        // The hand-written Deserialize runs the same checks.
+        assert_eq!(serde_json::from_str::<Count>("10").unwrap(), count);
+        serde_json::from_str::<Count>("7").expect_err("not a multiple of five");
+
+        // The JsonSchema impl reports each bound as its own keyword.
+        let mut generator = schemars::r#gen::SchemaGenerator::default();
+        assert_eq!(
+            serde_json::to_value(<Count as schemars::JsonSchema>::json_schema(&mut generator))
+                .unwrap(),
+            serde_json::json!({
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 5.0,
+                "maximum": 100.0,
+                "multipleOf": 5.0,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(<Ratio as schemars::JsonSchema>::json_schema(&mut generator))
+                .unwrap(),
+            serde_json::json!({
+                "type": "number",
+                "format": "double",
+                "exclusiveMinimum": 0.0,
+                "exclusiveMaximum": 1.0,
+            })
+        );
+        // The elided check is still reported.
+        assert_eq!(
+            serde_json::to_value(<Percent as schemars::JsonSchema>::json_schema(
+                &mut generator
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0,
+                "maximum": 100.0,
+            })
+        );
+    }
+}
+
 #[test]
 fn test_render_constrained_newtype_allow_list() {
     let settings = Settings::typical()
@@ -5976,6 +6221,232 @@ fn empty_deny_list_constraints_are_rejected() {
         ),
         "expected VacuousConstraints, got: {err}"
     );
+}
+
+// An array constraint with neither a minimum nor a maximum admits
+// every sequence, which is what the unconstrained newtype says.
+#[test]
+fn vacuous_array_constraints_are_rejected() {
+    let result = NewtypeStruct::new("Vec<string>".to_string())
+        .name("Vacuous")
+        .constraints(NewtypeConstraints::Array {
+            min: None,
+            max: None,
+        })
+        .build();
+
+    let Err(err) = result else {
+        panic!("an array constraint with no bounds is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::VacuousConstraints { name, kind }
+                if name == "Vacuous" && *kind == "array"
+        ),
+        "expected VacuousConstraints, got: {err}"
+    );
+}
+
+// The same for a numeric constraint that states no keyword at all.
+#[test]
+fn vacuous_number_constraints_are_rejected() {
+    let result = NewtypeStruct::new("u32".to_string())
+        .name("Vacuous")
+        .constraints(NewtypeConstraints::Number {
+            min: None,
+            max: None,
+            exclusive_min: None,
+            exclusive_max: None,
+            multiple_of: None,
+        })
+        .build();
+
+    let Err(err) = result else {
+        panic!("a numeric constraint with no keywords is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::VacuousConstraints { name, kind }
+                if name == "Vacuous" && *kind == "number"
+        ),
+        "expected VacuousConstraints, got: {err}"
+    );
+}
+
+// The check divides the value under test by the multiple, so a
+// multiple of zero has nothing to render.
+#[test]
+fn a_multiple_of_zero_is_rejected() {
+    let result = NewtypeStruct::new("u32".to_string())
+        .name("Impossible")
+        .constraints(NewtypeConstraints::Number {
+            min: None,
+            max: None,
+            exclusive_min: None,
+            exclusive_max: None,
+            multiple_of: Some(NumericBound::Integer(0)),
+        })
+        .build();
+
+    let Err(err) = result else {
+        panic!("a multiple of zero is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::InvalidConstraints { name, kind, reason }
+                if name == "Impossible" && *kind == "number"
+                    && reason.contains("not positive")
+        ),
+        "expected InvalidConstraints, got: {err}"
+    );
+}
+
+// A bound with no literal form has no check to render either.
+#[test]
+fn an_infinite_bound_is_rejected() {
+    let result = NewtypeStruct::new("f64".to_string())
+        .name("Impossible")
+        .constraints(NewtypeConstraints::Number {
+            min: None,
+            max: Some(NumericBound::Float(f64::INFINITY)),
+            exclusive_min: None,
+            exclusive_max: None,
+            multiple_of: None,
+        })
+        .build();
+
+    let Err(err) = result else {
+        panic!("an infinite bound is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::InvalidConstraints { name, kind, reason }
+                if name == "Impossible" && *kind == "number"
+                    && reason.contains("no literal form")
+        ),
+        "expected InvalidConstraints, got: {err}"
+    );
+}
+
+// The checks a numeric constraint renders compare the wrapped value
+// against literals, which only an integer or a float takes.
+#[test]
+fn number_constraints_need_a_numeric_inner_type() {
+    let mut builder = TypespaceBuilder::new(Settings::typical());
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "counted".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Counted")
+                    .constraints(NewtypeConstraints::Number {
+                        min: Some(NumericBound::Integer(1)),
+                        max: None,
+                        exclusive_min: None,
+                        exclusive_max: None,
+                        multiple_of: None,
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("a numeric constraint over a String is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::InvalidConstraints { name, kind, reason }
+                if name == "Counted" && *kind == "number"
+                    && reason.contains("neither an integer nor a floating-point type")
+        ),
+        "expected InvalidConstraints, got: {err}"
+    );
+}
+
+// A length constraint calls `len()`, which a scalar has not got.
+#[test]
+fn array_constraints_need_a_sequence_inner_type() {
+    let mut builder = TypespaceBuilder::new(Settings::typical());
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "tags".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Tags")
+                    .constraints(NewtypeConstraints::Array {
+                        min: Some(1),
+                        max: None,
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("an array constraint over a String is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::InvalidConstraints { name, kind, reason }
+                if name == "Tags" && *kind == "array" && reason.contains("len()")
+        ),
+        "expected InvalidConstraints, got: {err}"
+    );
+}
+
+// A bound the inner type cannot hold would render a literal the
+// consumer's build refuses.
+#[test]
+fn a_bound_must_fit_the_inner_type() {
+    let cases = [
+        ("u8", NumericBound::Integer(300), "out of range for u8"),
+        ("f32", NumericBound::Float(1e300), "out of range for f32"),
+        ("i64", NumericBound::Float(1.5), "not a whole number"),
+    ];
+
+    for (itype, bound, expected) in cases {
+        let mut builder = TypespaceBuilder::new(Settings::typical());
+        let inner = match itype {
+            "f32" => Type::Float(itype.to_string()),
+            _ => Type::Integer(itype.to_string()),
+        };
+        builder.insert(itype.to_string(), inner).unwrap();
+        builder
+            .insert(
+                "bounded".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new(itype.to_string())
+                        .name("Bounded")
+                        .constraints(NewtypeConstraints::Number {
+                            min: None,
+                            max: Some(bound),
+                            exclusive_min: None,
+                            exclusive_max: None,
+                            multiple_of: None,
+                        }),
+                ),
+            )
+            .unwrap();
+
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("a bound of {bound} over {itype} is rejected");
+        };
+        assert!(
+            matches!(
+                &err,
+                Error::InvalidConstraints { name, kind, reason }
+                    if name == "Bounded" && *kind == "number" && reason.contains(expected)
+            ),
+            "expected InvalidConstraints naming {expected}, got: {err}"
+        );
+    }
 }
 
 // The list tests below use the builder directly: the test macro has no

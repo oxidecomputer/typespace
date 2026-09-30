@@ -2,6 +2,17 @@
 
 ## Next
 
+* `NewtypeConstraints::Number` constrains a newtype over an integer or
+  floating-point type: an inclusive and an exclusive bound at each end and a
+  multiple-of, each optional, checked at construction and deserialization and
+  reported keyword by keyword in the `JsonSchema` impl. Bounds are
+  `NumericBound` values, an integer or a float
+* `NewtypeConstraints::Array` renders: the length of the wrapped sequence is
+  checked at construction and deserialization, and the `JsonSchema` impl
+  reports `minItems` and `maxItems`
+* A newtype's constraints are checked against the type it wraps at
+  finalization, reported as `Error::InvalidConstraints`
+
 ## [0.0.1-alpha.2] - 2026-09-28
 
 * `Settings::with_derive` takes a `ForeignTrait`; a derive that names a
