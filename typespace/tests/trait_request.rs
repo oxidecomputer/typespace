@@ -41,11 +41,11 @@ fn a_modeled_trait_is_not_foreign() {
     }
 }
 
-/// A bare identifier has no crate path for generated code to resolve.
+/// A bare identifier is a foreign derive the consumer brings into scope.
 #[test]
-fn a_bare_identifier_is_not_foreign() {
-    let err = ForeignTrait::new("Deftly").unwrap_err();
-    assert!(err.reason.contains("crate path"), "{err}");
+fn a_bare_identifier_is_foreign() {
+    let derive = ForeignTrait::new("Deftly").unwrap();
+    assert_eq!(path_of(&derive), "Deftly");
 }
 
 /// Anything syn cannot read as a path is refused.
@@ -116,9 +116,6 @@ fn parse_refuses_bad_input() {
 
     let err = TraitSpec::parse("Ord: Hash").unwrap_err();
     assert!(err.reason.contains("takes no bounds"), "{err}");
-
-    let err = TraitSpec::parse("Deftly").unwrap_err();
-    assert!(err.reason.contains("crate path"), "{err}");
 
     let err = TraitSpec::parse("not a path!").unwrap_err();
     assert_eq!(err.text, "not a path!");
@@ -218,7 +215,8 @@ fn foreign_derives_deserialize() {
     );
 
     serde_json::from_str::<Settings>(r#"{ "extra_derives": ["Hash"] }"#).unwrap_err();
-    serde_json::from_str::<Settings>(r#"{ "extra_derives": ["Deftly"] }"#).unwrap_err();
+    let bare = serde_json::from_str::<Settings>(r#"{ "extra_derives": ["Deftly"] }"#).unwrap();
+    assert_eq!(path_of(&bare.extra_derives[0]), "Deftly");
     serde_json::from_str::<Settings>(&format!(r#"{{ "extra_derives": ["{FOREIGN}: Deftly"] }}"#))
         .unwrap_err();
 }

@@ -1044,11 +1044,12 @@ impl std::fmt::Debug for ForeignTrait {
 }
 
 impl ForeignTrait {
-    /// A foreign derive by crate path.
+    /// A foreign derive by path.
     ///
-    /// Refuses a trait `typespace` models (for those, use
-    /// [`Settings::with_required_trait`]) and a bare identifier, which
-    /// generated code, having no `use` items, could not resolve.
+    /// The path is emitted as given: a crate path (`::deftly::Deftly`)
+    /// resolves anywhere, while a bare name (`Deftly`) relies on the consumer
+    /// bringing it into scope alongside the generated code. Refuses a trait
+    /// `typespace` models; for those, use [`Settings::with_required_trait`].
     pub fn new(path: &str) -> Result<Self, InvalidTraitSpec> {
         let invalid = |reason: String| InvalidTraitSpec {
             text: path.to_string(),
@@ -1062,13 +1063,6 @@ impl ForeignTrait {
         }
         let parsed = syn::parse_str::<syn::Path>(path.trim())
             .map_err(|err| invalid(format!("not a Rust path: {err}")))?;
-        if parsed.leading_colon.is_none() && parsed.segments.len() == 1 {
-            return Err(invalid(
-                "a foreign derive needs its crate path; generated code has no \
-                 `use` items to resolve a bare name"
-                    .to_string(),
-            ));
-        }
         Ok(Self {
             path: parsed,
             bounds: TypespaceTraitSet::empty(),
@@ -1139,10 +1133,10 @@ pub enum TraitSpec {
 impl TraitSpec {
     /// Parse `path [: bound + bound ...]`.
     ///
-    /// The path names a trait `typespace` models (its bare name or its
-    /// canonical path) or a foreign derive by crate path. Each bound must
-    /// be a trait `typespace` models, and a modeled trait takes no bounds,
-    /// since its supertraits are already known.
+    /// The path names a trait that `typespace` models (its bare name or its
+    /// canonical path) or a foreign derive. Each bound must be a trait
+    /// `typespace` models; a modeled trait takes no bounds, since its
+    /// supertraits are already known.
     pub fn parse(spec: &str) -> Result<Self, InvalidTraitSpec> {
         let invalid = |reason: String| InvalidTraitSpec {
             text: spec.to_string(),

@@ -2,19 +2,10 @@
 
 ## Next
 
-* `NewtypeConstraints::Integer` constrains a newtype over an integer type,
-  including the `NonZero` types: an inclusive bound at each end (`i128`) and a
-  multiple-of (`u128`), each optional, checked at construction and
-  deserialization and reported keyword by keyword in the `JsonSchema` impl. A
-  consumer with an exclusive bound states the adjacent inclusive one
-* `NewtypeConstraints::Float` does the same for a newtype over `f32` or `f64`,
-  with an exclusive bound at each end as well and every bound an `f64`. A NaN
-  fails every check, so a value of such a newtype is never a NaN
-* `NewtypeConstraints::Array` renders: the length of the wrapped sequence is
-  checked at construction and deserialization, and the `JsonSchema` impl
-  reports `minItems` and `maxItems`
+* Adds `NewtypeConstraits` for `Array`, `Integer`, and `Number` (#19)
 * A newtype's constraints are checked against the type it wraps at
-  finalization, reported as `Error::InvalidConstraints`
+  finalization, reported as `Error::InvalidConstraints` (#19)
+* Allow a foreign derive to be a bare (unscoped) name (#18)
 
 ## [0.0.1-alpha.2] - 2026-09-28
 
