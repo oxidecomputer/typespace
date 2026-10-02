@@ -5413,6 +5413,22 @@ fn test_render_constrained_newtype_float() {
         )
         .unwrap();
 
+    // A multiple that binary floating point cannot hold exactly.
+    builder
+        .insert(
+            "tenths".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("f64".to_string())
+                    .name("Tenths")
+                    .constraints(NewtypeConstraints::Float {
+                        min: None,
+                        max: None,
+                        multiple_of: Some(0.1),
+                    }),
+            ),
+        )
+        .unwrap();
+
     let ts = builder.finalize(no_cycles).unwrap();
     let out = ts.to_codespace().into_stream();
 
@@ -5430,6 +5446,14 @@ fn test_render_constrained_newtype_float() {
         Scale::try_from(-1.5).expect_err("less than negative one");
         Scale::try_from(1.5).expect_err("greater than one");
         Scale::try_from(0.25).expect_err("not a multiple of one half");
+
+        // 0.3 % 0.1 is not zero in binary floating point; the check still
+        // accepts it, as a JSON Schema validator does.
+        Tenths::try_from(0.3).unwrap();
+        Tenths::try_from(0.7).unwrap();
+        Tenths::try_from(-1.2).unwrap();
+        Tenths::try_from(0.0).unwrap();
+        Tenths::try_from(0.35).expect_err("not a multiple of one tenth");
 
         // A NaN compares false against every bound, so the checks
         // refuse it first.
@@ -6715,6 +6739,118 @@ fn a_float_bound_must_fit_the_inner_type() {
         ),
         "expected InvalidConstraints, got: {err}"
     );
+}
+
+// A minimum above the maximum admits nothing, whichever form states it.
+#[test]
+fn a_minimum_above_the_maximum_is_rejected() {
+    let cases: [(&str, Type<String>, NewtypeConstraints); 3] = [
+        (
+            "array",
+            Type::Vec("u32".to_string()),
+            NewtypeConstraints::Array {
+                min: Some(3),
+                max: Some(2),
+            },
+        ),
+        (
+            "integer",
+            Type::Integer("u32".to_string()),
+            NewtypeConstraints::Integer {
+                min: Some(3),
+                max: Some(2),
+                multiple_of: None,
+            },
+        ),
+        (
+            "float",
+            Type::Float("f64".to_string()),
+            NewtypeConstraints::Float {
+                min: Some(FloatConstraint::Inclusive(3.0)),
+                max: Some(FloatConstraint::Inclusive(2.0)),
+                multiple_of: None,
+            },
+        ),
+    ];
+
+    for (kind, inner, constraints) in cases {
+        let mut builder = TypespaceBuilder::new(Settings::typical());
+        builder
+            .insert("u32".to_string(), Type::Integer("u32".to_string()))
+            .unwrap();
+        builder.insert("inner".to_string(), inner).unwrap();
+        let Err(err) = builder.insert(
+            "bounded".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("inner".to_string())
+                    .name("Bounded")
+                    .constraints(constraints),
+            ),
+        ) else {
+            panic!("a {kind} minimum above its maximum is rejected");
+        };
+        assert!(
+            matches!(
+                &err,
+                Error::InvalidConstraints { name, kind: found, .. }
+                    if name == "Bounded" && found == &kind
+            ),
+            "expected InvalidConstraints for {kind}, got: {err}"
+        );
+    }
+}
+
+// Float bounds that meet admit nothing when either side excludes the
+// meeting point; two inclusive bounds that meet admit that one value.
+#[test]
+fn float_bounds_that_meet_are_empty_unless_both_include_the_point() {
+    let cases = [
+        (
+            FloatConstraint::Inclusive(1.0),
+            FloatConstraint::Exclusive(1.0),
+            true,
+        ),
+        (
+            FloatConstraint::Exclusive(1.0),
+            FloatConstraint::Inclusive(1.0),
+            true,
+        ),
+        (
+            FloatConstraint::Exclusive(1.0),
+            FloatConstraint::Exclusive(1.0),
+            true,
+        ),
+        (
+            FloatConstraint::Inclusive(1.0),
+            FloatConstraint::Inclusive(1.0),
+            false,
+        ),
+    ];
+
+    for (min, max, empty) in cases {
+        let mut builder = TypespaceBuilder::new(Settings::typical());
+        builder
+            .insert("f64".to_string(), Type::Float("f64".to_string()))
+            .unwrap();
+        let result = builder.insert(
+            "bounded".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("f64".to_string())
+                    .name("Bounded")
+                    .constraints(NewtypeConstraints::Float {
+                        min: Some(min),
+                        max: Some(max),
+                        multiple_of: None,
+                    }),
+            ),
+        );
+        assert_eq!(
+            result.is_err(),
+            empty,
+            "bounds {min:?} and {max:?}: {:?}",
+            result.err()
+        );
+    }
 }
 
 // The list tests below use the builder directly: the test macro has no

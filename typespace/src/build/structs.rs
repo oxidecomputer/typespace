@@ -2087,12 +2087,24 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Tok
                     }
                 }
             });
+            // A remainder test on binary floats fails for multiples such as
+            // 0.1, where 0.3 % 0.1 is not zero, so the check divides and asks
+            // whether the quotient is close enough to an integer. The value,
+            // the multiple, and the division each round by up to half of
+            // EPSILON relative to their size, so a true multiple can land up
+            // to about 1.5 EPSILON away; 4 leaves margin for a value that has
+            // been through arithmetic before it got here. Scaling by the
+            // quotient keeps that margin relative for large quotients, and
+            // max(1.0) keeps it from vanishing for small ones.
             let multiple_check = multiple_of.map(|multiple| {
                 let literal = suffixed_literal(multiple, ftype);
-                let zero = suffixed_literal(0, ftype);
+                let float_type = format_ident!("{ftype}");
                 let err = format!("not a multiple of {multiple}");
                 quote! {
-                    if value % #literal != #zero {
+                    let quotient = value / #literal;
+                    if (quotient - quotient.round()).abs()
+                        > quotient.abs().max(1.0) * (4.0 * #float_type::EPSILON)
+                    {
                         return Err(#err.into());
                     }
                 }
