@@ -30,8 +30,8 @@ impl ::std::convert::TryFrom<::std::vec::Vec<::std::string::String>> for Tags {
         if value.len() > 3usize {
             return Err("more than 3 items".into());
         }
-        if value.len() < 1usize {
-            return Err("fewer than 1 items".into());
+        if value.is_empty() {
+            return Err("at least one item required".into());
         }
         Ok(Self(value))
     }

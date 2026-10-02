@@ -5,8 +5,9 @@
 use codespace::Codespace;
 use quote::{format_ident, quote};
 use typespace::build::{
-    Enum, EnumTagType, EnumVariant, JsonValue, Native, NewtypeConstraints, NewtypeStruct, Struct,
-    StructProperty, StructPropertySerde, StructPropertyState, TupleStruct, Type, VariantDetails,
+    Enum, EnumTagType, EnumVariant, FloatConstraint, JsonValue, Native, NewtypeConstraints,
+    NewtypeStruct, Struct, StructProperty, StructPropertySerde, StructPropertyState, TupleStruct,
+    Type, VariantDetails,
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
 use typespace::settings::{
@@ -5389,10 +5390,8 @@ fn test_render_constrained_newtype_float() {
                 NewtypeStruct::new("f64".to_string())
                     .name("Ratio")
                     .constraints(NewtypeConstraints::Float {
-                        min: None,
-                        max: None,
-                        exclusive_min: Some(0.0),
-                        exclusive_max: Some(1.0),
+                        min: Some(FloatConstraint::Exclusive(0.0)),
+                        max: Some(FloatConstraint::Exclusive(1.0)),
                         multiple_of: None,
                     }),
             ),
@@ -5406,10 +5405,8 @@ fn test_render_constrained_newtype_float() {
                 NewtypeStruct::new("f32".to_string())
                     .name("Scale")
                     .constraints(NewtypeConstraints::Float {
-                        min: Some(-1.0),
-                        max: Some(1.0),
-                        exclusive_min: None,
-                        exclusive_max: None,
+                        min: Some(FloatConstraint::Inclusive(-1.0)),
+                        max: Some(FloatConstraint::Inclusive(1.0)),
                         multiple_of: Some(0.5),
                     }),
             ),
@@ -6438,8 +6435,6 @@ fn vacuous_float_constraints_are_rejected() {
         .constraints(NewtypeConstraints::Float {
             min: None,
             max: None,
-            exclusive_min: None,
-            exclusive_max: None,
             multiple_of: None,
         })
         .build();
@@ -6493,8 +6488,6 @@ fn a_float_multiple_must_be_positive() {
             .constraints(NewtypeConstraints::Float {
                 min: None,
                 max: None,
-                exclusive_min: None,
-                exclusive_max: None,
                 multiple_of: Some(multiple),
             })
             .build();
@@ -6522,9 +6515,7 @@ fn a_non_finite_bound_is_rejected() {
             .name("Impossible")
             .constraints(NewtypeConstraints::Float {
                 min: None,
-                max: Some(bound),
-                exclusive_min: None,
-                exclusive_max: None,
+                max: Some(FloatConstraint::Inclusive(bound)),
                 multiple_of: None,
             })
             .build();
@@ -6594,10 +6585,8 @@ fn float_constraints_need_a_float_inner_type() {
                 NewtypeStruct::new("u32".to_string())
                     .name("Ratio")
                     .constraints(NewtypeConstraints::Float {
-                        min: Some(0.5),
+                        min: Some(FloatConstraint::Inclusive(0.5)),
                         max: None,
-                        exclusive_min: None,
-                        exclusive_max: None,
                         multiple_of: None,
                     }),
             ),
@@ -6707,9 +6696,7 @@ fn a_float_bound_must_fit_the_inner_type() {
                     .name("Bounded")
                     .constraints(NewtypeConstraints::Float {
                         min: None,
-                        max: Some(1e300),
-                        exclusive_min: None,
-                        exclusive_max: None,
+                        max: Some(FloatConstraint::Inclusive(1e300)),
                         multiple_of: None,
                     }),
             ),

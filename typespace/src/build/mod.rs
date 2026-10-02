@@ -601,9 +601,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
 ///
 /// A Type::Integer names a Rust integer type by its path: a built-in width
 /// such as `u32`, or a `NonZeroU*` type such as `::std::num::NonZeroU32`.
-///
-/// A default value for NonZeroU* is built through `new()` rather than written
-/// as a literal.
 pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
 /// The width that an integer type holds, and whether it is a NonZero.

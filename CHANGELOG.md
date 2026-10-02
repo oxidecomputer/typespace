@@ -2,7 +2,7 @@
 
 ## Next
 
-* Adds `NewtypeConstraits` for `Array`, `Integer`, and `Number` (#19)
+* Adds `NewtypeConstraints` for `Array`, `Integer`, and `Number` (#19)
 * A newtype's constraints are checked against the type it wraps at
   finalization, reported as `Error::InvalidConstraints` (#19)
 * Allow a foreign derive to be a bare (unscoped) name (#18)

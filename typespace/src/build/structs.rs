@@ -1,5 +1,6 @@
 // Copyright 2026 Oxide Computer Company
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
@@ -1434,6 +1435,10 @@ impl<Id> NewtypeStruct<Id> {
             NewtypeConstraints::Array {
                 min: None,
                 max: None,
+            }
+            | NewtypeConstraints::Array {
+                min: Some(0),
+                max: None,
             } => Some("array"),
             NewtypeConstraints::Integer {
                 min: None,
@@ -1443,8 +1448,6 @@ impl<Id> NewtypeStruct<Id> {
             NewtypeConstraints::Float {
                 min: None,
                 max: None,
-                exclusive_min: None,
-                exclusive_max: None,
                 multiple_of: None,
             } => Some("float"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
@@ -1470,6 +1473,28 @@ impl<Id> NewtypeStruct<Id> {
         // A NaN or infinite bound has no literal to compare against, and a
         // multiple of zero would divide by zero, so both are rejected here.
         match &self.constraints {
+            NewtypeConstraints::Array {
+                min: Some(min),
+                max: Some(max),
+            } if min > max => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "array",
+                    reason: format!("the minimum {min} is greater than the maximum {max}"),
+                });
+            }
+
+            NewtypeConstraints::Integer {
+                min: Some(min),
+                max: Some(max),
+                ..
+            } if min > max => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "integer",
+                    reason: format!("the minimum {min} is greater than the maximum {max}"),
+                });
+            }
             NewtypeConstraints::Integer {
                 multiple_of: Some(0),
                 ..
@@ -1484,14 +1509,16 @@ impl<Id> NewtypeStruct<Id> {
             NewtypeConstraints::Float {
                 min,
                 max,
-                exclusive_min,
-                exclusive_max,
                 multiple_of,
             } => {
-                if let Some(non_finite) = [min, max, exclusive_min, exclusive_max, multiple_of]
-                    .into_iter()
-                    .flatten()
-                    .find(|bound| !bound.is_finite())
+                if let Some(non_finite) = [
+                    &min.map(FloatConstraint::as_f64),
+                    &max.map(FloatConstraint::as_f64),
+                    multiple_of,
+                ]
+                .into_iter()
+                .flatten()
+                .find(|bound| !bound.is_finite())
                 {
                     return Err(Error::InvalidConstraints {
                         name: self.common.built_name().to_string(),
@@ -1500,16 +1527,47 @@ impl<Id> NewtypeStruct<Id> {
                     });
                 }
 
-                // We know this is finite.
-                match multiple_of {
-                    Some(multiple) if *multiple <= 0.0 => {
+                // Below, we know all bounds are finite.
+
+                if let Some(multiple) = multiple_of
+                    && *multiple <= 0.0
+                {
+                    return Err(Error::InvalidConstraints {
+                        name: self.common.built_name().to_string(),
+                        kind: "float",
+                        reason: format!("the multiple {multiple} is not positive"),
+                    });
+                }
+
+                if let (Some(min), Some(max)) = (min, max) {
+                    let is_empty_range = match min.as_f64().partial_cmp(&max.as_f64()) {
+                        Some(Ordering::Greater) => true,
+                        Some(Ordering::Equal) => {
+                            matches!(min, FloatConstraint::Exclusive(_))
+                                || matches!(max, FloatConstraint::Exclusive(_))
+                        }
+                        _ => false,
+                    };
+
+                    if is_empty_range {
                         return Err(Error::InvalidConstraints {
                             name: self.common.built_name().to_string(),
                             kind: "float",
-                            reason: format!("the multiple {multiple} is not positive"),
+                            reason: format!(
+                                "the range {}{}, {}{} is empty",
+                                match min {
+                                    FloatConstraint::Inclusive(_) => "[",
+                                    FloatConstraint::Exclusive(_) => "(",
+                                },
+                                min.as_f64(),
+                                max.as_f64(),
+                                match max {
+                                    FloatConstraint::Inclusive(_) => "]",
+                                    FloatConstraint::Exclusive(_) => ")",
+                                }
+                            ),
                         });
                     }
-                    _ => {}
                 }
             }
 
@@ -1622,28 +1680,34 @@ impl<Id> NewtypeStruct<Id> {
             NewtypeConstraints::Float {
                 min,
                 max,
-                exclusive_min,
-                exclusive_max,
                 multiple_of,
-            } => match inner {
-                // A bound renders as a literal suffixed with the inner type,
-                // so `1e300_f32` would be invalid.
-                Type::Float(ftype) => [min, max, exclusive_min, exclusive_max, multiple_of]
+            } => {
+                match inner {
+                    // A bound renders as a literal suffixed with the inner type,
+                    // so `1e300_f32` would be invalid.
+                    Type::Float(ftype) => [
+                        &min.map(FloatConstraint::as_f64),
+                        &max.map(FloatConstraint::as_f64),
+                        multiple_of,
+                    ]
                     .into_iter()
                     .flatten()
-                    .try_for_each(|bound| match (ftype.as_str(), *bound as f32) {
-                        ("f32", narrowed) if narrowed.is_infinite() => Err(invalid(
-                            "float",
-                            format!("the bound {bound} is out of range for {ftype}"),
-                        )),
-                        _ => Ok(()),
+                    .try_for_each(|bound| {
+                        match (ftype.as_str(), *bound as f32) {
+                            ("f32", narrowed) if narrowed.is_infinite() => Err(invalid(
+                                "float",
+                                format!("the bound {bound} is out of range for {ftype}"),
+                            )),
+                            _ => Ok(()),
+                        }
                     }),
 
-                _ => Err(invalid(
-                    "float",
-                    "the inner type is not a floating-point type".to_string(),
-                )),
-            },
+                    _ => Err(invalid(
+                        "float",
+                        "the inner type is not a floating-point type".to_string(),
+                    )),
+                }
+            }
 
             _ => Ok(()),
         }
@@ -1770,10 +1834,25 @@ pub(crate) fn schemars_unrepresentable(schema: &serde_json::Value) -> Option<Str
     in_object(&root)
 }
 
-// TODO 3/7/2026
-// I'm ambivalent as to whether the constrained form of a newtype should be
-// its own, fundamentally distinct entity. However for now I'm going to just
-// shove it into the existing newtype representation.
+/// Constraint for floating-point numbers.
+#[derive(Debug, Clone, Copy)]
+pub enum FloatConstraint {
+    /// Includes the given value.
+    Inclusive(f64),
+    /// Excludes the given value.
+    Exclusive(f64),
+}
+
+impl FloatConstraint {
+    fn as_f64(self) -> f64 {
+        match self {
+            FloatConstraint::Inclusive(f) => f,
+            FloatConstraint::Exclusive(f) => f,
+        }
+    }
+}
+
+/// Constraints applied to a [`NewtypeStruct`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum NewtypeConstraints {
@@ -1822,19 +1901,15 @@ pub enum NewtypeConstraints {
 
     /// Bounds on a floating-point number.
     ///
-    /// The inner type must be a [`Type::Float`]; Nan values are not permitted.
+    /// The inner type must be a [`Type::Float`]; NaN values are not permitted.
     ///
     /// Each field corresponds to a JSON Schema keyword; the `JsonSchema`
     /// impl reports it as that keyword (if applicable).
     Float {
-        /// Inclusive lower bound, JSON Schema's `minimum`.
-        min: Option<f64>,
-        /// Inclusive upper bound, JSON Schema's `maximum`.
-        max: Option<f64>,
-        /// Exclusive lower bound, JSON Schema's `exclusiveMinimum`.
-        exclusive_min: Option<f64>,
-        /// Exclusive upper bound, JSON Schema's `exclusiveMaximum`.
-        exclusive_max: Option<f64>,
+        /// Lower bound, JSON Schema's `minimum` or `exclusiveMinimum`.
+        min: Option<FloatConstraint>,
+        /// Upper bound, JSON Schema's `maximum` or `exclusiveMaximum`.
+        max: Option<FloatConstraint>,
         /// The value must divide evenly by this, JSON Schema's `multipleOf`;
         /// must be positive.
         multiple_of: Option<f64>,
@@ -1969,8 +2044,6 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Tok
             NewtypeConstraints::Float {
                 min,
                 max,
-                exclusive_min,
-                exclusive_max,
                 multiple_of,
             },
             Type::Float(ftype),
@@ -1983,37 +2056,33 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Tok
                 }
             };
             let min_check = min.map(|bound| {
+                let (bound, comparison, err) = match bound {
+                    FloatConstraint::Inclusive(bound) => {
+                        (bound, quote! { < }, format!("less than {bound}"))
+                    }
+                    FloatConstraint::Exclusive(bound) => {
+                        (bound, quote! { <= }, format!("not greater than {bound}"))
+                    }
+                };
                 let literal = suffixed_literal(bound, ftype);
-                let err = format!("less than {bound}");
                 quote! {
-                    if value < #literal {
+                    if value #comparison #literal {
                         return Err(#err.into());
                     }
                 }
             });
             let max_check = max.map(|bound| {
-                let literal = suffixed_literal(bound, ftype);
-                let err = format!("greater than {bound}");
-                quote! {
-                    if value > #literal {
-                        return Err(#err.into());
+                let (bound, comparison, err) = match bound {
+                    FloatConstraint::Inclusive(bound) => {
+                        (bound, quote! { > }, format!("greater than {bound}"))
                     }
-                }
-            });
-            let exclusive_min_check = exclusive_min.map(|bound| {
-                let literal = suffixed_literal(bound, ftype);
-                let err = format!("not greater than {bound}");
-                quote! {
-                    if value <= #literal {
-                        return Err(#err.into());
+                    FloatConstraint::Exclusive(bound) => {
+                        (bound, quote! { >= }, format!("not less than {bound}"))
                     }
-                }
-            });
-            let exclusive_max_check = exclusive_max.map(|bound| {
+                };
                 let literal = suffixed_literal(bound, ftype);
-                let err = format!("not less than {bound}");
                 quote! {
-                    if value >= #literal {
+                    if value #comparison #literal {
                         return Err(#err.into());
                     }
                 }
@@ -2029,17 +2098,10 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Tok
                 }
             });
 
-            [
-                Some(nan_check),
-                min_check,
-                max_check,
-                exclusive_min_check,
-                exclusive_max_check,
-                multiple_check,
-            ]
-            .into_iter()
-            .flatten()
-            .collect()
+            [Some(nan_check), min_check, max_check, multiple_check]
+                .into_iter()
+                .flatten()
+                .collect()
         }
 
         _ => unreachable!("finalization refuses a numeric constraint over any other inner type"),
@@ -2059,39 +2121,37 @@ fn numeric_keywords(constraints: &NewtypeConstraints) -> TokenStream {
             max,
             multiple_of,
         } => vec![
-            (min.map(|bound| bound as f64), quote! { minimum }),
-            (max.map(|bound| bound as f64), quote! { maximum }),
-            (
-                multiple_of.map(|multiple| multiple as f64),
-                quote! { multiple_of },
-            ),
+            min.map(|value| (value as f64, quote! { minimum })),
+            max.map(|value| (value as f64, quote! { maximum })),
+            multiple_of.map(|value| (value as f64, quote! { multiple_of })),
         ],
 
         NewtypeConstraints::Float {
             min,
             max,
-            exclusive_min,
-            exclusive_max,
             multiple_of,
         } => vec![
-            (*min, quote! { minimum }),
-            (*max, quote! { maximum }),
-            (*exclusive_min, quote! { exclusive_minimum }),
-            (*exclusive_max, quote! { exclusive_maximum }),
-            (*multiple_of, quote! { multiple_of }),
+            min.map(|bound| match bound {
+                FloatConstraint::Inclusive(value) => (value, quote! { minimum }),
+                FloatConstraint::Exclusive(value) => (value, quote! { exclusive_minimum }),
+            }),
+            max.map(|bound| match bound {
+                FloatConstraint::Inclusive(value) => (value, quote! { maximum }),
+                FloatConstraint::Exclusive(value) => (value, quote! { exclusive_maximum }),
+            }),
+            multiple_of.map(|value| (value, quote! { multiple_of })),
         ],
-
         _ => unreachable!("only the numeric constraints report numeric keywords"),
     };
 
     bounds
         .into_iter()
-        .filter_map(|(bound, keyword)| {
-            let value = bound?;
-            Some(quote! {
+        .flatten()
+        .map(|(value, keyword)| {
+            quote! {
                 schema.number().#keyword =
                     ::std::option::Option::Some(#value);
-            })
+            }
         })
         .collect()
 }
@@ -2544,18 +2604,40 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 typespace.add_error_mod(out);
 
                 let max_check = max.map(|v| {
-                    let err = format!("more than {} items", v);
-                    quote! {
-                        if value.len() > #v {
-                            return Err(#err.into());
+                    if v == 0 {
+                        quote! {
+                            if !value.is_empty() {
+                                return Err("must be empty".into());
+                            }
+                        }
+                    } else {
+                        let err = format!("more than {} items", v);
+                        quote! {
+                            if value.len() > #v {
+                                return Err(#err.into());
+                            }
                         }
                     }
                 });
-                let min_check = min.map(|v| {
-                    let err = format!("fewer than {} items", v);
-                    quote! {
-                        if value.len() < #v {
-                            return Err(#err.into());
+                let min_check = min.map(|v| match v {
+                    // A min of 0 is not a useful check, but we allow it when
+                    // a max is also specified.
+                    0 => {
+                        assert!(max.is_some());
+                        quote! {}
+                    }
+
+                    1 => quote! {
+                        if value.is_empty() {
+                            return Err("at least one item required".into());
+                        }
+                    },
+                    _ => {
+                        let err = format!("fewer than {} items", v);
+                        quote! {
+                            if value.len() < #v {
+                                return Err(#err.into());
+                            }
                         }
                     }
                 });
