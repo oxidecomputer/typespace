@@ -2046,11 +2046,12 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Tok
     }
 }
 
-/// The keyword assignments an integer or float constraint reports in
-/// its `JsonSchema` impl, one per bound it states.
+/// The keyword assignments an integer or float constraint reports in its
+/// `JsonSchema` impl, one per bound it states.
 ///
-/// schemars 0.8 holds every numeric keyword as an `f64`, so an integer
-/// bound past its 53 bit mantissa reports as the nearest `f64`.
+/// schemars 0.8 holds every numeric keyword as an `f64`, so an integer bound
+/// past its 53 bit mantissa reports as the nearest `f64`. Note that this can
+/// be a real problem for schemas that want to save u64::MAX!
 fn numeric_keywords(constraints: &NewtypeConstraints) -> TokenStream {
     let bounds = match constraints {
         NewtypeConstraints::Integer {
