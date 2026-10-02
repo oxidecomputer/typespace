@@ -599,21 +599,19 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
 
 /// Prefix shared by the `::std::num::NonZero*` type paths.
 ///
-/// A [`Type::Integer`] names a Rust integer type by its path: a
-/// built-in width such as `u32`, or a `NonZero` type such as
-/// `::std::num::NonZeroU32`.
+/// A [`Type::Integer`] names a Rust integer type by its path: a built-in width
+/// such as `u32`, or a `NonZero` type such as `::std::num::NonZeroU32`.
 ///
-/// A default value for one of these is built through `new()` rather
-/// than written as a literal, since there is no literal form for them.
+/// A default value for one of these is built through `new()` rather than
+/// written as a literal, since there is no literal form for them.
 pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
-/// The width an integer type path holds, and whether it is a
-/// `NonZero`.
+/// The width an integer type path holds, and whether it is a `NonZero`.
 ///
-/// The width comes back lowercased, so `::std::num::NonZeroU32`
-/// answers `("u32", true)` and `u32` answers `("u32", false)`. A path
-/// that is neither answers itself and `false`; the callers that care
-/// about the width look it up and treat an unknown one as unbounded.
+/// The width comes back lowercased, so `::std::num::NonZeroU32` answers
+/// `("u32", true)` and `u32` answers `("u32", false)`. A path that is neither
+/// answers itself and `false`; the callers that care about the width look it
+/// up and treat an unknown one as unbounded.
 pub(crate) fn integer_width(itype: &str) -> (String, bool) {
     match itype.strip_prefix(STD_NUM_NONZERO_PREFIX) {
         Some(width) => (width.to_ascii_lowercase(), true),

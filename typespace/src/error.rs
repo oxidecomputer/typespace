@@ -412,11 +412,11 @@ where
 
     /// A newtype struct's constraints cannot be checked as stated.
     ///
-    /// A length constraint calls `len()` and so needs a sequence to
-    /// wrap; an integer or float constraint compares the wrapped value
-    /// against literals of the inner type. A length constraint over a
-    /// `String`, an integer constraint over an `f64`, a maximum of 300
-    /// over a `u8`, and a multiple of zero each land here.
+    /// A length constraint calls `len()` and so needs a sequence to wrap; an
+    /// integer or float constraint compares the wrapped value against literals
+    /// of the inner type. A length constraint over a `String`, an integer
+    /// constraint over an `f64`, a maximum of 300 over a `u8`, and a multiple
+    /// of zero each land here.
     #[error(
         "the newtype struct `{name}` states {kind} constraints that cannot be checked: {reason}"
     )]

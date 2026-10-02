@@ -1467,14 +1467,19 @@ impl<Id> NewtypeStruct<Id> {
             });
         }
 
-        // A NaN or infinite bound has no literal to compare against,
-        // and a multiple of zero would divide by zero, so both are
-        // rejected here rather than rendered.
-        let unwritable = match &self.constraints {
+        // A NaN or infinite bound has no literal to compare against, and a
+        // multiple of zero would divide by zero, so both are rejected here.
+        match &self.constraints {
             NewtypeConstraints::Integer {
                 multiple_of: Some(0),
                 ..
-            } => Some(("integer", "the multiple is zero".to_string())),
+            } => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "integer",
+                    reason: "the multiple is zero".to_string(),
+                });
+            }
 
             NewtypeConstraints::Float {
                 min,
@@ -1483,33 +1488,35 @@ impl<Id> NewtypeStruct<Id> {
                 exclusive_max,
                 multiple_of,
             } => {
-                let infinite = [min, max, exclusive_min, exclusive_max, multiple_of]
+                if let Some(non_finite) = [min, max, exclusive_min, exclusive_max, multiple_of]
                     .into_iter()
                     .flatten()
                     .find(|bound| !bound.is_finite())
-                    .map(|bound| format!("the bound {bound} has no literal form"));
-                // Every bound is finite by here, so the multiple
-                // compares as a number rather than as a NaN.
-                match (infinite, multiple_of) {
-                    (Some(reason), _) => Some(("float", reason)),
-                    (None, Some(multiple)) if *multiple <= 0.0 => {
-                        Some(("float", format!("the multiple {multiple} is not positive")))
+                {
+                    return Err(Error::InvalidConstraints {
+                        name: self.common.built_name().to_string(),
+                        kind: "float",
+                        reason: format!("the bound {non_finite} has no literal form"),
+                    });
+                }
+
+                // We know this is finite.
+                match multiple_of {
+                    Some(multiple) if *multiple <= 0.0 => {
+                        return Err(Error::InvalidConstraints {
+                            name: self.common.built_name().to_string(),
+                            kind: "float",
+                            reason: format!("the multiple {multiple} is not positive"),
+                        });
                     }
-                    _ => None,
+                    _ => {}
                 }
             }
 
-            _ => None,
-        };
-
-        match unwritable {
-            Some((kind, reason)) => Err(Error::InvalidConstraints {
-                name: self.common.built_name().to_string(),
-                kind,
-                reason,
-            }),
-            None => Ok(()),
+            _ => {}
         }
+
+        Ok(())
     }
 
     /// Check every value on an allow or deny list against the inner
@@ -1543,11 +1550,11 @@ impl<Id> NewtypeStruct<Id> {
 
     /// Check the constraints against the type the newtype wraps.
     ///
-    /// A length constraint calls `len()`, so the inner type has to be
-    /// a sequence. An integer or float constraint compares the wrapped
-    /// value against literals, so the inner type has to be an integer
-    /// or a float and every bound has to fit it: a maximum of 300 over
-    /// a `u8` renders `300_u8`, which the consumer's build refuses.
+    /// A length constraint calls `len()`, so the inner type has to be a
+    /// sequence. An integer or float constraint compares the wrapped value
+    /// against literals, so the inner type has to be an integer or a float and
+    /// every bound has to fit it: a maximum of 300 for a `u8` would render as
+    /// `300_u8` which is invalid.
     pub(crate) fn check_constraints(&self, types: &BTreeMap<Id, Type<Id>>) -> Result<(), Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -1620,9 +1627,8 @@ impl<Id> NewtypeStruct<Id> {
                 exclusive_max,
                 multiple_of,
             } => match inner {
-                // A bound renders as a literal suffixed with the inner
-                // type, so `1e300_f32` is a literal the consumer's
-                // build refuses.
+                // A bound renders as a literal suffixed with the inner type,
+                // so `1e300_f32` would be invalid.
                 Type::Float(ftype) => [min, max, exclusive_min, exclusive_max, multiple_of]
                     .into_iter()
                     .flatten()
@@ -1799,37 +1805,27 @@ pub enum NewtypeConstraints {
 
     /// Bounds on an integer.
     ///
-    /// The inner type must be a [`Type::Integer`]: the checks compare
-    /// the wrapped value against literals of it, and a `NonZero` is
-    /// compared through its `get()`. Both bounds are inclusive; a
-    /// consumer with an exclusive bound states the adjacent inclusive
-    /// one.
+    /// The inner type must be a [`Type::Integer`]. Both bounds are inclusive;
+    /// a consumer with an exclusive bound states the adjacent inclusive one.
     ///
-    /// Each field is one JSON Schema keyword, and the `JsonSchema`
-    /// impl reports it as that keyword. A bound that sits at the inner
-    /// type's own limit is still reported, but renders no check: a
-    /// minimum of 0 on a `u8` admits every value the type holds, and
-    /// `value < 0_u8` draws rustc's `unused_comparisons` warning in
-    /// the consumer's build.
+    /// A bound that matches the inner type's intrinsic bounds appears in the
+    /// generated `JsonSchema` impl (if applicable), but useless runtime checks
+    /// aren't emitted in code.
     Integer {
         /// Inclusive lower bound, JSON Schema's `minimum`.
         min: Option<i128>,
         /// Inclusive upper bound, JSON Schema's `maximum`.
         max: Option<i128>,
-        /// The value must divide evenly by this, JSON Schema's
-        /// `multipleOf`. Zero renders `value % 0` and is refused.
+        /// The value must divide evenly by this, JSON Schema's `multipleOf`.
         multiple_of: Option<u128>,
     },
 
     /// Bounds on a floating-point number.
     ///
-    /// The inner type must be a [`Type::Float`]: the checks compare
-    /// the wrapped value against literals of it. A NaN compares false
-    /// against every literal, so the checks refuse it first and a
-    /// value of the newtype is never a NaN.
+    /// The inner type must be a [`Type::Float`]; Nan values are not permitted.
     ///
-    /// Each field is one JSON Schema keyword, and the `JsonSchema`
-    /// impl reports it as that keyword.
+    /// Each field corresponds to a JSON Schema keyword; the `JsonSchema`
+    /// impl reports it as that keyword (if applicable).
     Float {
         /// Inclusive lower bound, JSON Schema's `minimum`.
         min: Option<f64>,
@@ -1839,8 +1835,8 @@ pub enum NewtypeConstraints {
         exclusive_min: Option<f64>,
         /// Exclusive upper bound, JSON Schema's `exclusiveMaximum`.
         exclusive_max: Option<f64>,
-        /// The value must divide evenly by this, JSON Schema's
-        /// `multipleOf`. It must be positive.
+        /// The value must divide evenly by this, JSON Schema's `multipleOf`;
+        /// must be positive.
         multiple_of: Option<f64>,
     },
 
@@ -1923,12 +1919,7 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
             let (subject, width) = integer_subject(itype);
             let limits = integer_limits(&width);
 
-            // A minimum of 0 on a `u8` admits every value the type
-            // holds, and `value < 0_u8` draws rustc's
-            // `unused_comparisons` warning in the consumer's build, so
-            // a bound at the inner type's own limit renders no
-            // comparison. The reported schema still carries the
-            // keyword.
+            // Avoid `unused_comparisons` warnings.
             let at_limit = |bound: i128, edge: fn((i128, i128)) -> i128| {
                 limits.is_some_and(|limits| bound == edge(limits))
             };
@@ -1969,7 +1960,7 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
             [min_check, max_check, multiple_check]
                 .into_iter()
                 .flatten()
-                .collect::<Vec<_>>()
+                .collect()
         }
 
         (
@@ -1982,9 +1973,8 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
             },
             Type::Float(ftype),
         ) => {
-            // A NaN compares false against every literal, so each
-            // bound below would admit one. This check refuses it
-            // first.
+            // A NaN compares false against every literal, so each bound below
+            // would admit one. This check refuses it first.
             let nan_check = quote! {
                 if value.is_nan() {
                     return Err("not a number".into());
@@ -2047,7 +2037,7 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
             ]
             .into_iter()
             .flatten()
-            .collect::<Vec<_>>()
+            .collect()
         }
 
         _ => unreachable!("finalization refuses a numeric constraint over any other inner type"),
@@ -2100,7 +2090,7 @@ fn numeric_keywords(constraints: &NewtypeConstraints) -> Vec<TokenStream> {
                     ::std::option::Option::Some(#value);
             })
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
@@ -2552,11 +2542,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // A value that exists has passed the length checks, so
-                // Display prints the inner value and FromStr parses one
-                // and then checks it. `Vec`, `BTreeSet`, and `[T; N]`
-                // implement neither, so these reach only an inner type
-                // that declares them itself.
                 let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
                     quote! {
                         impl ::std::fmt::Display for #name_ident {
@@ -2605,10 +2590,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // The reported schema is the inner type's with the
-                // length keywords set. schemars 0.8 holds an item count
-                // as a `u32`, so a bound past that has no reported
-                // form.
+                // The reported schema is the inner type's with the length
+                // keywords set. schemars 0.8 holds an item count as a `u32`,
+                // so a bound past that has no reported form.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
                     let report = [(min, quote! { min_items }), (max, quote! { max_items })]
                         .into_iter()
