@@ -1809,7 +1809,8 @@ pub enum NewtypeConstraints {
     ///
     /// A bound that matches the inner type's intrinsic bounds appears in the
     /// generated `JsonSchema` impl (if applicable), but useless runtime checks
-    /// aren't emitted in code.
+    /// aren't emitted in code. A constraint made only of such bounds renders
+    /// as an unconstrained newtype.
     Integer {
         /// Inclusive lower bound, JSON Schema's `minimum`.
         min: Option<i128>,
@@ -2221,6 +2222,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let name_ident = format_ident!("{name}");
         let inner_ident = typespace.render_ident(inner);
+        let inner_type = typespace
+            .types
+            .get(inner)
+            .expect("every reference resolves before rendering");
+
+        // An integer constraint whose bounds all match the inner type's own
+        // limits checks nothing, so it renders as an unconstrained newtype.
+        let constraints = match constraints {
+            NewtypeConstraints::Integer { .. }
+                if numeric_checks(constraints, inner_type).is_empty() =>
+            {
+                &NewtypeConstraints::None
+            }
+            other => other,
+        };
 
         match constraints {
             NewtypeConstraints::None => {
@@ -2652,10 +2668,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             NewtypeConstraints::Integer { .. } | NewtypeConstraints::Float { .. } => {
                 typespace.add_error_mod(out);
 
-                let inner_type = typespace
-                    .types
-                    .get(inner)
-                    .expect("every reference resolves before rendering");
                 let checks = numeric_checks(constraints, inner_type);
 
                 // A value that exists has passed the checks, so Display

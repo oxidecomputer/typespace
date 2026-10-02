@@ -5133,7 +5133,8 @@ fn test_render_constrained_newtype_array() {
 // Integer constraints over the inner types they reach: a plain unsigned
 // integer, a signed one with a negative bound, a `NonZero` compared through
 // `get()`, and bounds that sit at the type's own limit (0 for `u8`, 1 for an
-// unsigned `NonZero`) and so render no comparison.
+// unsigned `NonZero`) and so render no comparison. A constraint made only of
+// such bounds renders as an unconstrained newtype.
 #[test]
 fn test_render_constrained_newtype_integer() {
     // Every trait Settings::maximal() asks for except Default:
@@ -5217,7 +5218,8 @@ fn test_render_constrained_newtype_integer() {
         )
         .unwrap();
 
-    // A minimum of 1 is `NonZeroU32`'s own minimum; a minimum of 2 is not.
+    // A minimum of 1 is `NonZeroU32`'s own minimum, so AtLeastOne renders as
+    // an unconstrained newtype; a minimum of 2 is not.
     builder
         .insert(
             "at_least_one".to_string(),
@@ -5266,11 +5268,17 @@ fn test_render_constrained_newtype_integer() {
     let ts = builder.finalize(no_cycles).unwrap();
     let out = ts.to_codespace().into_stream();
 
-    // AtLeastOne's minimum renders no comparison, so the literal `1_u32`
-    // appears nowhere; AtLeastTwo's does.
+    // AtLeastOne's minimum renders no comparison and no hand-written impls,
+    // so the literal `1_u32` appears nowhere; AtLeastTwo's does.
     let source = out.to_string();
     assert!(!source.contains("1_u32"), "{source}");
     assert!(source.contains("2_u32"), "{source}");
+    assert!(
+        source.contains(
+            "impl :: std :: convert :: From < :: std :: num :: NonZeroU32 > for AtLeastOne"
+        ),
+        "{source}"
+    );
 
     #[check_and_include("tests/output/test_render_constrained_newtype_integer.rs", out)]
     fn inner() {
@@ -5290,7 +5298,10 @@ fn test_render_constrained_newtype_integer() {
         Even::try_from(std::num::NonZeroU32::new(4).unwrap()).unwrap();
         Even::try_from(std::num::NonZeroU32::new(5).unwrap()).expect_err("not a multiple of two");
 
-        AtLeastOne::try_from(std::num::NonZeroU32::new(1).unwrap()).unwrap();
+        assert_eq!(
+            AtLeastOne::from(std::num::NonZeroU32::new(1).unwrap()).get(),
+            1
+        );
         AtLeastTwo::try_from(std::num::NonZeroU32::new(2).unwrap()).unwrap();
         AtLeastTwo::try_from(std::num::NonZeroU32::new(1).unwrap()).expect_err("less than two");
 
