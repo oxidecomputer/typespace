@@ -2,6 +2,8 @@
 
 ## Next
 
+* Allow a foreign derive to be a bare (unscoped) name (#18)
+
 ## [0.0.1-alpha.2] - 2026-09-28
 
 * `Settings::with_derive` takes a `ForeignTrait`; a derive that names a
