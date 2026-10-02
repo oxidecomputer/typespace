@@ -1,5 +1,130 @@
 #[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
+pub struct AtLeastOne(::std::num::NonZeroU32);
+impl ::std::ops::Deref for AtLeastOne {
+    type Target = ::std::num::NonZeroU32;
+    fn deref(&self) -> &::std::num::NonZeroU32 {
+        &self.0
+    }
+}
+impl ::std::convert::From<AtLeastOne> for ::std::num::NonZeroU32 {
+    fn from(value: AtLeastOne) -> Self {
+        value.0
+    }
+}
+impl ::std::fmt::Display for AtLeastOne {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl ::std::str::FromStr for AtLeastOne {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        let value = <::std::num::NonZeroU32 as ::std::str::FromStr>::from_str(value)
+            .map_err(|_| "could not be parsed as the inner type")?;
+        ::std::convert::TryFrom::try_from(value)
+    }
+}
+impl ::std::convert::TryFrom<::std::num::NonZeroU32> for AtLeastOne {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::num::NonZeroU32,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        Ok(Self(value))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for AtLeastOne {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        Self::try_from(<::std::num::NonZeroU32>::deserialize(deserializer)?)
+            .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
+    }
+}
+impl ::schemars::JsonSchema for AtLeastOne {
+    fn schema_name() -> ::std::string::String {
+        "AtLeastOne".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <::std::num::NonZeroU32 as ::schemars::JsonSchema>::json_schema(
+                g,
+            )
+            .into_object();
+        schema.number().minimum = ::std::option::Option::Some(1f64);
+        schema.into()
+    }
+}
+#[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct AtLeastTwo(::std::num::NonZeroU32);
+impl ::std::ops::Deref for AtLeastTwo {
+    type Target = ::std::num::NonZeroU32;
+    fn deref(&self) -> &::std::num::NonZeroU32 {
+        &self.0
+    }
+}
+impl ::std::convert::From<AtLeastTwo> for ::std::num::NonZeroU32 {
+    fn from(value: AtLeastTwo) -> Self {
+        value.0
+    }
+}
+impl ::std::fmt::Display for AtLeastTwo {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl ::std::str::FromStr for AtLeastTwo {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        let value = <::std::num::NonZeroU32 as ::std::str::FromStr>::from_str(value)
+            .map_err(|_| "could not be parsed as the inner type")?;
+        ::std::convert::TryFrom::try_from(value)
+    }
+}
+impl ::std::convert::TryFrom<::std::num::NonZeroU32> for AtLeastTwo {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::num::NonZeroU32,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        if value.get() < 2_u32 {
+            return Err("less than 2".into());
+        }
+        Ok(Self(value))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for AtLeastTwo {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        Self::try_from(<::std::num::NonZeroU32>::deserialize(deserializer)?)
+            .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
+    }
+}
+impl ::schemars::JsonSchema for AtLeastTwo {
+    fn schema_name() -> ::std::string::String {
+        "AtLeastTwo".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <::std::num::NonZeroU32 as ::schemars::JsonSchema>::json_schema(
+                g,
+            )
+            .into_object();
+        schema.number().minimum = ::std::option::Option::Some(2f64);
+        schema.into()
+    }
+}
+#[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
 pub struct Count(u32);
 impl ::std::ops::Deref for Count {
     type Target = u32;

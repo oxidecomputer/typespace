@@ -5130,10 +5130,10 @@ fn test_render_constrained_newtype_array() {
     }
 }
 
-// Integer constraints over the inner types they reach: a plain
-// unsigned integer, a signed one with a negative bound, a `NonZero`
-// compared through `get()`, and one whose minimum sits at the type's
-// own limit and so renders no comparison.
+// Integer constraints over the inner types they reach: a plain unsigned
+// integer, a signed one with a negative bound, a `NonZero` compared through
+// `get()`, and bounds that sit at the type's own limit (0 for `u8`, 1 for an
+// unsigned `NonZero`) and so render no comparison.
 #[test]
 fn test_render_constrained_newtype_integer() {
     // Every trait Settings::maximal() asks for except Default:
@@ -5217,6 +5217,36 @@ fn test_render_constrained_newtype_integer() {
         )
         .unwrap();
 
+    // A minimum of 1 is `NonZeroU32`'s own minimum; a minimum of 2 is not.
+    builder
+        .insert(
+            "at_least_one".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("nzu32".to_string())
+                    .name("AtLeastOne")
+                    .constraints(NewtypeConstraints::Integer {
+                        min: Some(1),
+                        max: None,
+                        multiple_of: None,
+                    }),
+            ),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "at_least_two".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("nzu32".to_string())
+                    .name("AtLeastTwo")
+                    .constraints(NewtypeConstraints::Integer {
+                        min: Some(2),
+                        max: None,
+                        multiple_of: None,
+                    }),
+            ),
+        )
+        .unwrap();
+
     // The minimum is `u8`'s own minimum.
     builder
         .insert(
@@ -5236,6 +5266,12 @@ fn test_render_constrained_newtype_integer() {
     let ts = builder.finalize(no_cycles).unwrap();
     let out = ts.to_codespace().into_stream();
 
+    // AtLeastOne's minimum renders no comparison, so the literal `1_u32`
+    // appears nowhere; AtLeastTwo's does.
+    let source = out.to_string();
+    assert!(!source.contains("1_u32"), "{source}");
+    assert!(source.contains("2_u32"), "{source}");
+
     #[check_and_include("tests/output/test_render_constrained_newtype_integer.rs", out)]
     fn inner() {
         use import::*;
@@ -5253,6 +5289,10 @@ fn test_render_constrained_newtype_integer() {
         // A NonZero is compared through its `get()`.
         Even::try_from(std::num::NonZeroU32::new(4).unwrap()).unwrap();
         Even::try_from(std::num::NonZeroU32::new(5).unwrap()).expect_err("not a multiple of two");
+
+        AtLeastOne::try_from(std::num::NonZeroU32::new(1).unwrap()).unwrap();
+        AtLeastTwo::try_from(std::num::NonZeroU32::new(2).unwrap()).unwrap();
+        AtLeastTwo::try_from(std::num::NonZeroU32::new(1).unwrap()).expect_err("less than two");
 
         // `u8` holds nothing below zero, so the minimum renders no
         // check of its own; the maximum does.

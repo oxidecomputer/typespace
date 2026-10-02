@@ -1586,8 +1586,7 @@ impl<Id> NewtypeStruct<Id> {
                 // A `NonZero` is compared through `get()`, so a bound
                 // has to fit the primitive it wraps.
                 Type::Integer(itype) => {
-                    let (width, _) = integer_width(itype);
-                    match integer_limits(&width) {
+                    match integer_limits(itype) {
                         None => Ok(()),
                         Some((low, high)) => {
                             // The multiple is unsigned, and every upper
@@ -1861,15 +1860,13 @@ pub enum NewtypeConstraints {
     JsonSchema(JsonValue),
 }
 
-/// The closed range of values an integer width holds, for the widths
-/// whose limits are the same everywhere, and `None` for the rest.
+/// The range of values an integer type holds, or `None` when it isn't fixed.
 ///
-/// `usize` and `isize` answer `None` because they are as wide as the
-/// consumer's target, and `u128` and `i128` answer `None` because
-/// their ranges reach past the `i128` a bound is stated as. A `None`
-/// answer checks no bound and elides no comparison.
-fn integer_limits(width: &str) -> Option<(i128, i128)> {
-    match width {
+/// `usize` and `isize` depend on the target, and `u128` and `i128` reach past
+/// the `i128` a bound is stated as. An unsigned `NonZero` starts at 1.
+fn integer_limits(itype: &str) -> Option<(i128, i128)> {
+    let (width, nonzero) = integer_width(itype);
+    let limits = match width.as_str() {
         "u8" => Some((0, u8::MAX as i128)),
         "u16" => Some((0, u16::MAX as i128)),
         "u32" => Some((0, u32::MAX as i128)),
@@ -1879,6 +1876,10 @@ fn integer_limits(width: &str) -> Option<(i128, i128)> {
         "i32" => Some((i32::MIN as i128, i32::MAX as i128)),
         "i64" => Some((i64::MIN as i128, i64::MAX as i128)),
         _ => None,
+    };
+    match limits {
+        Some((0, high)) if nonzero => Some((1, high)),
+        other => other,
     }
 }
 
@@ -1906,7 +1907,7 @@ fn suffixed_literal(value: impl std::fmt::Display, rust_type: &str) -> Literal {
 ///
 /// Each one returns a `ConversionError` naming the bound the value
 /// failed.
-fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec<TokenStream> {
+fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> TokenStream {
     match (constraints, inner) {
         (
             NewtypeConstraints::Integer {
@@ -1917,7 +1918,7 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
             Type::Integer(itype),
         ) => {
             let (subject, width) = integer_subject(itype);
-            let limits = integer_limits(&width);
+            let limits = integer_limits(itype);
 
             // Avoid `unused_comparisons` warnings.
             let at_limit = |bound: i128, edge: fn((i128, i128)) -> i128| {
@@ -2049,7 +2050,7 @@ fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec
 ///
 /// schemars 0.8 holds every numeric keyword as an `f64`, so an integer
 /// bound past its 53 bit mantissa reports as the nearest `f64`.
-fn numeric_keywords(constraints: &NewtypeConstraints) -> Vec<TokenStream> {
+fn numeric_keywords(constraints: &NewtypeConstraints) -> TokenStream {
     let bounds = match constraints {
         NewtypeConstraints::Integer {
             min,
@@ -2726,7 +2727,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                                     <#inner_ident as ::schemars::JsonSchema>
                                         ::json_schema(g)
                                         .into_object();
-                                #( #report )*
+                                #report
                                 schema.into()
                             }
                         }
@@ -2745,7 +2746,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             value: #inner_ident
                         ) -> ::std::result::Result<Self, self::error::ConversionError>
                         {
-                            #( #checks )*
+                            #checks
                             Ok(Self(value))
                         }
                     }
