@@ -1,11 +1,13 @@
 // Copyright 2026 Oxide Computer Company
 
-use std::collections::BTreeSet;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
+use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, validate_ident};
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
@@ -1430,6 +1432,24 @@ impl<Id> NewtypeStruct<Id> {
                 max: None,
                 patterns,
             } if patterns.is_empty() => Some("string"),
+            NewtypeConstraints::Array {
+                min: None,
+                max: None,
+            }
+            | NewtypeConstraints::Array {
+                min: Some(0),
+                max: None,
+            } => Some("array"),
+            NewtypeConstraints::Integer {
+                min: None,
+                max: None,
+                multiple_of: None,
+            } => Some("integer"),
+            NewtypeConstraints::Float {
+                min: None,
+                max: None,
+                multiple_of: None,
+            } => Some("float"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
             NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
             NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Bool(true))) => {
@@ -1443,13 +1463,118 @@ impl<Id> NewtypeStruct<Id> {
             _ => None,
         };
 
-        match vacuous {
-            Some(kind) => Err(Error::VacuousConstraints {
+        if let Some(kind) = vacuous {
+            return Err(Error::VacuousConstraints {
                 name: self.common.built_name().to_string(),
                 kind,
-            }),
-            None => Ok(()),
+            });
         }
+
+        // A NaN or infinite bound has no literal to compare against, and a
+        // multiple of zero would divide by zero, so both are rejected here.
+        match &self.constraints {
+            NewtypeConstraints::Array {
+                min: Some(min),
+                max: Some(max),
+            } if min > max => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "array",
+                    reason: format!("the minimum {min} is greater than the maximum {max}"),
+                });
+            }
+
+            NewtypeConstraints::Integer {
+                min: Some(min),
+                max: Some(max),
+                ..
+            } if min > max => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "integer",
+                    reason: format!("the minimum {min} is greater than the maximum {max}"),
+                });
+            }
+            NewtypeConstraints::Integer {
+                multiple_of: Some(0),
+                ..
+            } => {
+                return Err(Error::InvalidConstraints {
+                    name: self.common.built_name().to_string(),
+                    kind: "integer",
+                    reason: "the multiple is zero".to_string(),
+                });
+            }
+
+            NewtypeConstraints::Float {
+                min,
+                max,
+                multiple_of,
+            } => {
+                if let Some(non_finite) = [
+                    &min.map(FloatConstraint::as_f64),
+                    &max.map(FloatConstraint::as_f64),
+                    multiple_of,
+                ]
+                .into_iter()
+                .flatten()
+                .find(|bound| !bound.is_finite())
+                {
+                    return Err(Error::InvalidConstraints {
+                        name: self.common.built_name().to_string(),
+                        kind: "float",
+                        reason: format!("the bound {non_finite} has no literal form"),
+                    });
+                }
+
+                // Below, we know all bounds are finite.
+
+                if let Some(multiple) = multiple_of
+                    && *multiple <= 0.0
+                {
+                    return Err(Error::InvalidConstraints {
+                        name: self.common.built_name().to_string(),
+                        kind: "float",
+                        reason: format!("the multiple {multiple} is not positive"),
+                    });
+                }
+
+                if let (Some(min), Some(max)) = (min, max) {
+                    let is_empty_range = match min.as_f64().partial_cmp(&max.as_f64()) {
+                        Some(Ordering::Greater) => true,
+                        Some(Ordering::Equal) => {
+                            matches!(min, FloatConstraint::Exclusive(_))
+                                || matches!(max, FloatConstraint::Exclusive(_))
+                        }
+                        _ => false,
+                    };
+
+                    if is_empty_range {
+                        return Err(Error::InvalidConstraints {
+                            name: self.common.built_name().to_string(),
+                            kind: "float",
+                            reason: format!(
+                                "the range {}{}, {}{} is empty",
+                                match min {
+                                    FloatConstraint::Inclusive(_) => "[",
+                                    FloatConstraint::Exclusive(_) => "(",
+                                },
+                                min.as_f64(),
+                                max.as_f64(),
+                                match max {
+                                    FloatConstraint::Inclusive(_) => "]",
+                                    FloatConstraint::Exclusive(_) => ")",
+                                }
+                            ),
+                        });
+                    }
+                }
+            }
+
+            _ => {}
+        }
+
+        Ok(())
     }
 
     /// Check every value on an allow or deny list against the inner
@@ -1479,6 +1604,113 @@ impl<Id> NewtypeStruct<Id> {
                 ));
                 Ok(natives)
             })
+    }
+
+    /// Check the constraints against the type the newtype wraps.
+    ///
+    /// A length constraint calls `len()`, so the inner type has to be a
+    /// sequence. An integer or float constraint compares the wrapped value
+    /// against literals, so the inner type has to be an integer or a float and
+    /// every bound has to fit it: a maximum of 300 for a `u8` would render as
+    /// `300_u8` which is invalid.
+    pub(crate) fn check_constraints(&self, types: &BTreeMap<Id, Type<Id>>) -> Result<(), Error<Id>>
+    where
+        Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+    {
+        let invalid = |kind: &'static str, reason: String| Error::InvalidConstraints {
+            name: self.common.built_name().to_string(),
+            kind,
+            reason,
+        };
+
+        let inner = types
+            .get(&self.inner)
+            .expect("every reference resolves before this runs");
+
+        match &self.constraints {
+            NewtypeConstraints::Array { .. } => match inner {
+                Type::Vec(_) | Type::Set(_) | Type::Array(..) => Ok(()),
+                _ => Err(invalid(
+                    "array",
+                    "the inner type is not a sequence and has no `len()`".to_string(),
+                )),
+            },
+
+            NewtypeConstraints::Integer {
+                min,
+                max,
+                multiple_of,
+            } => match inner {
+                // A `NonZero` is compared through `get()`, so a bound
+                // has to fit the primitive it wraps.
+                Type::Integer(itype) => {
+                    match integer_limits(itype) {
+                        None => Ok(()),
+                        Some((low, high)) => {
+                            // The multiple is unsigned, and every upper
+                            // limit `integer_limits` names is positive, so
+                            // only that limit can refuse it.
+                            let out_of_range = [*min, *max]
+                                .into_iter()
+                                .flatten()
+                                .find(|value| *value < low || *value > high)
+                                .map(|value| value.to_string())
+                                .or_else(|| {
+                                    multiple_of
+                                        .filter(|multiple| *multiple > high as u128)
+                                        .map(|multiple| multiple.to_string())
+                                });
+                            match out_of_range {
+                                Some(value) => Err(invalid(
+                                    "integer",
+                                    format!("the bound {value} is out of range for {itype}"),
+                                )),
+                                None => Ok(()),
+                            }
+                        }
+                    }
+                }
+
+                _ => Err(invalid(
+                    "integer",
+                    "the inner type is not an integer type".to_string(),
+                )),
+            },
+
+            NewtypeConstraints::Float {
+                min,
+                max,
+                multiple_of,
+            } => {
+                match inner {
+                    // A bound renders as a literal suffixed with the inner type,
+                    // so `1e300_f32` would be invalid.
+                    Type::Float(ftype) => [
+                        &min.map(FloatConstraint::as_f64),
+                        &max.map(FloatConstraint::as_f64),
+                        multiple_of,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(|bound| {
+                        match (ftype.as_str(), *bound as f32) {
+                            ("f32", narrowed) if narrowed.is_infinite() => Err(invalid(
+                                "float",
+                                format!("the bound {bound} is out of range for {ftype}"),
+                            )),
+                            _ => Ok(()),
+                        }
+                    }),
+
+                    _ => Err(invalid(
+                        "float",
+                        "the inner type is not a floating-point type".to_string(),
+                    )),
+                }
+            }
+
+            _ => Ok(()),
+        }
     }
 
     /// The newtype's name, if one has been set.
@@ -1602,10 +1834,25 @@ pub(crate) fn schemars_unrepresentable(schema: &serde_json::Value) -> Option<Str
     in_object(&root)
 }
 
-// TODO 3/7/2026
-// I'm ambivalent as to whether the constrained form of a newtype should be
-// its own, fundamentally distinct entity. However for now I'm going to just
-// shove it into the existing newtype representation.
+/// Constraint for floating-point numbers.
+#[derive(Debug, Clone, Copy)]
+pub enum FloatConstraint {
+    /// Includes the given value.
+    Inclusive(f64),
+    /// Excludes the given value.
+    Exclusive(f64),
+}
+
+impl FloatConstraint {
+    fn as_f64(self) -> f64 {
+        match self {
+            FloatConstraint::Inclusive(f) => f,
+            FloatConstraint::Exclusive(f) => f,
+        }
+    }
+}
+
+/// Constraints applied to a [`NewtypeStruct`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum NewtypeConstraints {
@@ -1634,6 +1881,40 @@ pub enum NewtypeConstraints {
         // contains: (),
     },
 
+    /// Bounds on an integer.
+    ///
+    /// The inner type must be a [`Type::Integer`]. Both bounds are inclusive;
+    /// a consumer with an exclusive bound states the adjacent inclusive one.
+    ///
+    /// A bound that matches the inner type's intrinsic bounds appears in the
+    /// generated `JsonSchema` impl (if applicable), but useless runtime checks
+    /// aren't emitted in code. A constraint made only of such bounds renders
+    /// as an unconstrained newtype.
+    Integer {
+        /// Inclusive lower bound, JSON Schema's `minimum`.
+        min: Option<i128>,
+        /// Inclusive upper bound, JSON Schema's `maximum`.
+        max: Option<i128>,
+        /// The value must divide evenly by this, JSON Schema's `multipleOf`.
+        multiple_of: Option<u128>,
+    },
+
+    /// Bounds on a floating-point number.
+    ///
+    /// The inner type must be a [`Type::Float`]; NaN values are not permitted.
+    ///
+    /// Each field corresponds to a JSON Schema keyword; the `JsonSchema`
+    /// impl reports it as that keyword (if applicable).
+    Float {
+        /// Lower bound, JSON Schema's `minimum` or `exclusiveMinimum`.
+        min: Option<FloatConstraint>,
+        /// Upper bound, JSON Schema's `maximum` or `exclusiveMaximum`.
+        max: Option<FloatConstraint>,
+        /// The value must divide evenly by this, JSON Schema's `multipleOf`;
+        /// must be positive.
+        multiple_of: Option<f64>,
+    },
+
     /// Fallback constraint
     ///
     /// Verify data against the given JSON schema (using the crate `jsonschema`
@@ -1653,6 +1934,238 @@ pub enum NewtypeConstraints {
     /// and a `$schema` only if it names draft-07. Anything else refuses the
     /// trait with [`OffenderReason::SchemaKeyword`](crate::error::OffenderReason::SchemaKeyword).
     JsonSchema(JsonValue),
+}
+
+/// The range of values an integer type holds, or `None` when it isn't fixed.
+///
+/// `usize` and `isize` depend on the target, and `u128` and `i128` reach past
+/// the `i128` a bound is stated as. An unsigned `NonZero` starts at 1.
+fn integer_limits(itype: &str) -> Option<(i128, i128)> {
+    let (width, nonzero) = integer_width(itype);
+    let limits = match width.as_str() {
+        "u8" => Some((0, u8::MAX as i128)),
+        "u16" => Some((0, u16::MAX as i128)),
+        "u32" => Some((0, u32::MAX as i128)),
+        "u64" => Some((0, u64::MAX as i128)),
+        "i8" => Some((i8::MIN as i128, i8::MAX as i128)),
+        "i16" => Some((i16::MIN as i128, i16::MAX as i128)),
+        "i32" => Some((i32::MIN as i128, i32::MAX as i128)),
+        "i64" => Some((i64::MIN as i128, i64::MAX as i128)),
+        _ => None,
+    };
+    match limits {
+        Some((0, high)) if nonzero => Some((1, high)),
+        other => other,
+    }
+}
+
+/// How an integer constraint names the value it checks, and the width
+/// its literals carry.
+///
+/// A `NonZero` is compared through `get()`, against literals of the
+/// primitive it wraps; every other integer is compared directly,
+/// against literals of its own type.
+fn integer_subject(itype: &str) -> (TokenStream, String) {
+    match integer_width(itype) {
+        (width, true) => (quote! { value.get() }, width),
+        (width, false) => (quote! { value }, width),
+    }
+}
+
+/// A bound as a literal suffixed with the type it is compared against:
+/// the inner type, or the primitive a `NonZero` wraps.
+fn suffixed_literal(value: impl std::fmt::Display, rust_type: &str) -> Literal {
+    Literal::from_str(&format!("{value}_{rust_type}")).expect("a checked bound has a literal form")
+}
+
+/// The checks an integer or float constraint renders in `try_from`,
+/// in the order they run.
+///
+/// Each one returns a `ConversionError` naming the bound the value
+/// failed.
+fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> TokenStream {
+    match (constraints, inner) {
+        (
+            NewtypeConstraints::Integer {
+                min,
+                max,
+                multiple_of,
+            },
+            Type::Integer(itype),
+        ) => {
+            let (subject, width) = integer_subject(itype);
+            let limits = integer_limits(itype);
+
+            // Avoid `unused_comparisons` warnings.
+            let at_limit = |bound: i128, edge: fn((i128, i128)) -> i128| {
+                limits.is_some_and(|limits| bound == edge(limits))
+            };
+
+            let min_check = min
+                .filter(|bound| !at_limit(*bound, |(low, _)| low))
+                .map(|bound| {
+                    let literal = suffixed_literal(bound, &width);
+                    let err = format!("less than {bound}");
+                    quote! {
+                        if #subject < #literal {
+                            return Err(#err.into());
+                        }
+                    }
+                });
+            let max_check = max
+                .filter(|bound| !at_limit(*bound, |(_, high)| high))
+                .map(|bound| {
+                    let literal = suffixed_literal(bound, &width);
+                    let err = format!("greater than {bound}");
+                    quote! {
+                        if #subject > #literal {
+                            return Err(#err.into());
+                        }
+                    }
+                });
+            let multiple_check = multiple_of.map(|multiple| {
+                let literal = suffixed_literal(multiple, &width);
+                let zero = suffixed_literal(0, &width);
+                let err = format!("not a multiple of {multiple}");
+                quote! {
+                    if #subject % #literal != #zero {
+                        return Err(#err.into());
+                    }
+                }
+            });
+
+            [min_check, max_check, multiple_check]
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+
+        (
+            NewtypeConstraints::Float {
+                min,
+                max,
+                multiple_of,
+            },
+            Type::Float(ftype),
+        ) => {
+            // A NaN compares false against every literal, so each bound below
+            // would admit one. This check refuses it first.
+            let nan_check = quote! {
+                if value.is_nan() {
+                    return Err("not a number".into());
+                }
+            };
+            let min_check = min.map(|bound| {
+                let (bound, comparison, err) = match bound {
+                    FloatConstraint::Inclusive(bound) => {
+                        (bound, quote! { < }, format!("less than {bound}"))
+                    }
+                    FloatConstraint::Exclusive(bound) => {
+                        (bound, quote! { <= }, format!("not greater than {bound}"))
+                    }
+                };
+                let literal = suffixed_literal(bound, ftype);
+                quote! {
+                    if value #comparison #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let max_check = max.map(|bound| {
+                let (bound, comparison, err) = match bound {
+                    FloatConstraint::Inclusive(bound) => {
+                        (bound, quote! { > }, format!("greater than {bound}"))
+                    }
+                    FloatConstraint::Exclusive(bound) => {
+                        (bound, quote! { >= }, format!("not less than {bound}"))
+                    }
+                };
+                let literal = suffixed_literal(bound, ftype);
+                quote! {
+                    if value #comparison #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            // A remainder test on binary floats fails for multiples such as
+            // 0.1, where 0.3 % 0.1 is not zero, so the check divides and asks
+            // whether the quotient is close enough to an integer. The value,
+            // the multiple, and the division each round by up to half of
+            // EPSILON relative to their size, so a true multiple can land up
+            // to about 1.5 EPSILON away; 4 leaves margin for a value that has
+            // been through arithmetic before it got here. Scaling by the
+            // quotient keeps that margin relative for large quotients, and
+            // max(1.0) keeps it from vanishing for small ones.
+            let multiple_check = multiple_of.map(|multiple| {
+                let literal = suffixed_literal(multiple, ftype);
+                let float_type = format_ident!("{ftype}");
+                let err = format!("not a multiple of {multiple}");
+                quote! {
+                    let quotient = value / #literal;
+                    if (quotient - quotient.round()).abs()
+                        > quotient.abs().max(1.0) * (4.0 * #float_type::EPSILON)
+                    {
+                        return Err(#err.into());
+                    }
+                }
+            });
+
+            [Some(nan_check), min_check, max_check, multiple_check]
+                .into_iter()
+                .flatten()
+                .collect()
+        }
+
+        _ => unreachable!("finalization refuses a numeric constraint over any other inner type"),
+    }
+}
+
+/// The keyword assignments an integer or float constraint reports in its
+/// `JsonSchema` impl, one per bound it states.
+///
+/// schemars 0.8 holds every numeric keyword as an `f64`, so an integer bound
+/// past its 53 bit mantissa reports as the nearest `f64`. Note that this can
+/// be a real problem for schemas that want to save u64::MAX!
+fn numeric_keywords(constraints: &NewtypeConstraints) -> TokenStream {
+    let bounds = match constraints {
+        NewtypeConstraints::Integer {
+            min,
+            max,
+            multiple_of,
+        } => vec![
+            min.map(|value| (value as f64, quote! { minimum })),
+            max.map(|value| (value as f64, quote! { maximum })),
+            multiple_of.map(|value| (value as f64, quote! { multiple_of })),
+        ],
+
+        NewtypeConstraints::Float {
+            min,
+            max,
+            multiple_of,
+        } => vec![
+            min.map(|bound| match bound {
+                FloatConstraint::Inclusive(value) => (value, quote! { minimum }),
+                FloatConstraint::Exclusive(value) => (value, quote! { exclusive_minimum }),
+            }),
+            max.map(|bound| match bound {
+                FloatConstraint::Inclusive(value) => (value, quote! { maximum }),
+                FloatConstraint::Exclusive(value) => (value, quote! { exclusive_maximum }),
+            }),
+            multiple_of.map(|value| (value, quote! { multiple_of })),
+        ],
+        _ => unreachable!("only the numeric constraints report numeric keywords"),
+    };
+
+    bounds
+        .into_iter()
+        .flatten()
+        .map(|(value, keyword)| {
+            quote! {
+                schema.number().#keyword =
+                    ::std::option::Option::Some(#value);
+            }
+        })
+        .collect()
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
@@ -1782,6 +2295,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
         let name_ident = format_ident!("{name}");
         let inner_ident = typespace.render_ident(inner);
+        let inner_type = typespace
+            .types
+            .get(inner)
+            .expect("every reference resolves before rendering");
+
+        // An integer constraint whose bounds all match the inner type's own
+        // limits checks nothing, so it renders as an unconstrained newtype.
+        let constraints = match constraints {
+            NewtypeConstraints::Integer { .. }
+                if numeric_checks(constraints, inner_type).is_empty() =>
+            {
+                &NewtypeConstraints::None
+            }
+            other => other,
+        };
 
         match constraints {
             NewtypeConstraints::None => {
@@ -2084,7 +2612,256 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     #deserialize_impl
                 }
             }
-            NewtypeConstraints::Array { .. } => todo!(),
+            NewtypeConstraints::Array { min, max } => {
+                typespace.add_error_mod(out);
+
+                let max_check = max.map(|v| {
+                    if v == 0 {
+                        quote! {
+                            if !value.is_empty() {
+                                return Err("must be empty".into());
+                            }
+                        }
+                    } else {
+                        let err = format!("more than {} items", v);
+                        quote! {
+                            if value.len() > #v {
+                                return Err(#err.into());
+                            }
+                        }
+                    }
+                });
+                let min_check = min.map(|v| match v {
+                    // A min of 0 is not a useful check, but we allow it when
+                    // a max is also specified.
+                    0 => {
+                        assert!(max.is_some());
+                        quote! {}
+                    }
+
+                    1 => quote! {
+                        if value.is_empty() {
+                            return Err("at least one item required".into());
+                        }
+                    },
+                    _ => {
+                        let err = format!("fewer than {} items", v);
+                        quote! {
+                            if value.len() < #v {
+                                return Err(#err.into());
+                            }
+                        }
+                    }
+                });
+
+                let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str)
+                                -> ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                let value = <#inner_ident as ::std::str::FromStr>::from_str(value)
+                                    .map_err(|_| "could not be parsed as the inner type")?;
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+                    }
+                });
+
+                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    quote! {
+                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                            fn deserialize<D>(
+                                deserializer: D,
+                            ) -> ::std::result::Result<Self, D::Error>
+                            where
+                                D: ::serde::Deserializer<'de>,
+                            {
+                                Self::try_from(
+                                    <#inner_ident>::deserialize(deserializer)?,
+                                )
+                                .map_err(|e| {
+                                    <D::Error as ::serde::de::Error>::custom(
+                                        e.to_string(),
+                                    )
+                                })
+                            }
+                        }
+                    }
+                });
+
+                // The reported schema is the inner type's with the length
+                // keywords set. schemars 0.8 holds an item count as a `u32`,
+                // so a bound past that has no reported form.
+                let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let report = [(min, quote! { min_items }), (max, quote! { max_items })]
+                        .into_iter()
+                        .filter_map(|(bound, keyword)| {
+                            let count = u32::try_from((*bound)?).ok()?;
+                            Some(quote! {
+                                schema.array().#keyword =
+                                    ::std::option::Option::Some(#count);
+                            })
+                        })
+                        .collect::<Vec<_>>();
+
+                    quote! {
+                        impl ::schemars::JsonSchema for #name_ident {
+                            fn schema_name() -> ::std::string::String {
+                                #name.to_string()
+                            }
+
+                            fn json_schema(
+                                g: &mut ::schemars::r#gen::SchemaGenerator
+                            ) -> ::schemars::schema::Schema {
+                                let mut schema =
+                                    <#inner_ident as ::schemars::JsonSchema>
+                                        ::json_schema(g)
+                                        .into_object();
+                                #( #report )*
+                                schema.into()
+                            }
+                        }
+                    }
+                });
+
+                quote! {
+                    #display_impl
+                    #from_str_impl
+
+                    // This is effectively the constructor for this type.
+                    impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
+                        type Error = self::error::ConversionError;
+
+                        fn try_from(
+                            value: #inner_ident
+                        ) -> ::std::result::Result<Self, self::error::ConversionError>
+                        {
+                            #max_check
+                            #min_check
+                            Ok(Self(value))
+                        }
+                    }
+
+                    #deserialize_impl
+                    #json_schema_impl
+                }
+            }
+
+            NewtypeConstraints::Integer { .. } | NewtypeConstraints::Float { .. } => {
+                typespace.add_error_mod(out);
+
+                let checks = numeric_checks(constraints, inner_type);
+
+                // A value that exists has passed the checks, so Display
+                // prints the inner value. FromStr parses an inner value
+                // and then checks it, so both failures are a
+                // `ConversionError`; the inner type's `FromStr::Err`
+                // carries no bounds of its own, so a parse failure
+                // becomes a fixed message.
+                let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str)
+                                -> ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                let value = <#inner_ident as ::std::str::FromStr>::from_str(value)
+                                    .map_err(|_| "could not be parsed as the inner type")?;
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+                    }
+                });
+
+                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    quote! {
+                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                            fn deserialize<D>(
+                                deserializer: D,
+                            ) -> ::std::result::Result<Self, D::Error>
+                            where
+                                D: ::serde::Deserializer<'de>,
+                            {
+                                Self::try_from(
+                                    <#inner_ident>::deserialize(deserializer)?,
+                                )
+                                .map_err(|e| {
+                                    <D::Error as ::serde::de::Error>::custom(
+                                        e.to_string(),
+                                    )
+                                })
+                            }
+                        }
+                    }
+                });
+
+                let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let report = numeric_keywords(constraints);
+                    quote! {
+                        impl ::schemars::JsonSchema for #name_ident {
+                            fn schema_name() -> ::std::string::String {
+                                #name.to_string()
+                            }
+
+                            fn json_schema(
+                                g: &mut ::schemars::r#gen::SchemaGenerator
+                            ) -> ::schemars::schema::Schema {
+                                let mut schema =
+                                    <#inner_ident as ::schemars::JsonSchema>
+                                        ::json_schema(g)
+                                        .into_object();
+                                #report
+                                schema.into()
+                            }
+                        }
+                    }
+                });
+
+                quote! {
+                    #display_impl
+                    #from_str_impl
+
+                    // This is effectively the constructor for this type.
+                    impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
+                        type Error = self::error::ConversionError;
+
+                        fn try_from(
+                            value: #inner_ident
+                        ) -> ::std::result::Result<Self, self::error::ConversionError>
+                        {
+                            #checks
+                            Ok(Self(value))
+                        }
+                    }
+
+                    #deserialize_impl
+                    #json_schema_impl
+                }
+            }
 
             // The fallback constraint. This is used for schemas that can't be
             // cleanly described by structural types. Those constraints are

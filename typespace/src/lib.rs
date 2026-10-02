@@ -834,6 +834,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Add rules here rather than as new `check_*` methods.
     fn check_type_structure(&self) -> Result<(), Error<Id>> {
         for typ in self.types.values() {
+            // A newtype's constraints render as checks on the wrapped value: a
+            // length against a sequence, a bound against a number. The inner
+            // type has to match.
+            if let Type::NewtypeStruct(newtype) = typ {
+                newtype.check_constraints(&self.types)?;
+            }
+
             // A struct-style variant's fields are properties like a
             // struct's and its serialized form is an object under every
             // tagging, so both rules reach through it; the enum's own

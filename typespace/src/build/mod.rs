@@ -596,3 +596,22 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<Id> {
         }
     }
 }
+
+/// Prefix shared by the `::std::num::NonZero*` type paths.
+///
+/// A Type::Integer names a Rust integer type by its path: a built-in width
+/// such as `u32`, or a `NonZeroU*` type such as `::std::num::NonZeroU32`.
+pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
+
+/// The width that an integer type holds, and whether it is a NonZero.
+///
+/// The width comes back in lower case, so `::std::num::NonZeroU32` returns
+/// `("u32", true)` and `u32` returns `("u32", false)`. A path that is neither
+/// returns itself and `false`; the callers that care about the width look it
+/// up and treat an unknown one as unbounded.
+pub(crate) fn integer_width(itype: &str) -> (String, bool) {
+    match itype.strip_prefix(STD_NUM_NONZERO_PREFIX) {
+        Some(width) => (width.to_ascii_lowercase(), true),
+        None => (itype.to_string(), false),
+    }
+}

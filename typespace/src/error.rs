@@ -410,6 +410,25 @@ where
         kind: &'static str,
     },
 
+    /// A newtype struct's constraints cannot be checked as stated.
+    ///
+    /// A length constraint calls `len()` and so needs a sequence to wrap; an
+    /// integer or float constraint compares the wrapped value against literals
+    /// of the inner type. A length constraint over a `String`, an integer
+    /// constraint over an `f64`, a maximum of 300 over a `u8`, and a multiple
+    /// of zero each land here.
+    #[error(
+        "the newtype struct `{name}` states {kind} constraints that cannot be checked: {reason}"
+    )]
+    InvalidConstraints {
+        /// The name of the newtype struct.
+        name: String,
+        /// Which kind of constraint is at fault.
+        kind: &'static str,
+        /// Why it cannot be checked.
+        reason: String,
+    },
+
     /// A default value is not valid for the type it is attached to.
     #[error("the value `{value}` does not fit the type `{id}`: {reason}")]
     InvalidDefault {
