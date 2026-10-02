@@ -13,16 +13,13 @@ use quote::{format_ident, quote};
 
 use crate::{
     Obligation, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
-    build::{self, StructProperty, StructPropertySerde, StructPropertyState, Type, VariantDetails},
+    build::{
+        self, STD_NUM_NONZERO_PREFIX, StructProperty, StructPropertySerde, StructPropertyState,
+        Type, VariantDetails, integer_width,
+    },
     error::{Error, PathStep, Relation},
     settings::{GeneratedCrate, OptionalNullable, Settings, Std},
 };
-
-/// Prefix shared by the `::std::num::NonZero*` type paths.
-///
-/// A default value for one of these is built through `new()` rather
-/// than written as a literal, since there is no literal form for them.
-pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 
 /// The values an integer type accepts: the closed range it holds, and
 /// whether zero is among them.
@@ -33,10 +30,7 @@ pub(crate) const STD_NUM_NONZERO_PREFIX: &str = "::std::num::NonZero";
 /// which is the permissive reading for a consumer building elsewhere.
 /// An integer type this does not name goes unchecked.
 fn integer_domain(itype: &str) -> Option<(i128, i128, bool)> {
-    let (width, nonzero) = match itype.strip_prefix(STD_NUM_NONZERO_PREFIX) {
-        Some(width) => (width.to_ascii_lowercase(), true),
-        None => (itype.to_string(), false),
-    };
+    let (width, nonzero) = integer_width(itype);
 
     let (min, max) = match width.as_str() {
         "u8" => (0, u8::MAX as i128),

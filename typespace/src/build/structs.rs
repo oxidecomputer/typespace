@@ -6,8 +6,7 @@ use std::str::FromStr;
 use proc_macro2::{Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, validate_ident};
-use crate::default::STD_NUM_NONZERO_PREFIX;
+use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, validate_ident};
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
@@ -1436,13 +1435,18 @@ impl<Id> NewtypeStruct<Id> {
                 min: None,
                 max: None,
             } => Some("array"),
-            NewtypeConstraints::Number {
+            NewtypeConstraints::Integer {
+                min: None,
+                max: None,
+                multiple_of: None,
+            } => Some("integer"),
+            NewtypeConstraints::Float {
                 min: None,
                 max: None,
                 exclusive_min: None,
                 exclusive_max: None,
                 multiple_of: None,
-            } => Some("number"),
+            } => Some("float"),
             NewtypeConstraints::AllowList(values) if values.is_empty() => Some("allow list"),
             NewtypeConstraints::DenyList(values) if values.is_empty() => Some("deny list"),
             NewtypeConstraints::JsonSchema(JsonValue(serde_json::Value::Bool(true))) => {
@@ -1463,38 +1467,45 @@ impl<Id> NewtypeStruct<Id> {
             });
         }
 
-        // Every bound renders as a literal, and the multiple divides
-        // the value under test, so a bound with no literal form and a
-        // multiple that is not positive each leave a check that cannot
-        // be written.
-        let numeric = match &self.constraints {
-            NewtypeConstraints::Number {
+        // A NaN or infinite bound has no literal to compare against,
+        // and a multiple of zero would divide by zero, so both are
+        // rejected here rather than rendered.
+        let unwritable = match &self.constraints {
+            NewtypeConstraints::Integer {
+                multiple_of: Some(0),
+                ..
+            } => Some(("integer", "the multiple is zero".to_string())),
+
+            NewtypeConstraints::Float {
                 min,
                 max,
                 exclusive_min,
                 exclusive_max,
                 multiple_of,
             } => {
-                let unwritable = [min, max, exclusive_min, exclusive_max, multiple_of]
+                let infinite = [min, max, exclusive_min, exclusive_max, multiple_of]
                     .into_iter()
                     .flatten()
                     .find(|bound| !bound.is_finite())
                     .map(|bound| format!("the bound {bound} has no literal form"));
-                match (unwritable, multiple_of) {
-                    (Some(reason), _) => Some(reason),
-                    (None, Some(multiple)) if !multiple.is_positive() => {
-                        Some(format!("the multiple {multiple} is not positive"))
+                // Every bound is finite by here, so the multiple
+                // compares as a number rather than as a NaN.
+                match (infinite, multiple_of) {
+                    (Some(reason), _) => Some(("float", reason)),
+                    (None, Some(multiple)) if *multiple <= 0.0 => {
+                        Some(("float", format!("the multiple {multiple} is not positive")))
                     }
                     _ => None,
                 }
             }
+
             _ => None,
         };
 
-        match numeric {
-            Some(reason) => Err(Error::InvalidConstraints {
+        match unwritable {
+            Some((kind, reason)) => Err(Error::InvalidConstraints {
                 name: self.common.built_name().to_string(),
-                kind: "number",
+                kind,
                 reason,
             }),
             None => Ok(()),
@@ -1530,14 +1541,13 @@ impl<Id> NewtypeStruct<Id> {
             })
     }
 
-    /// Check that the constraints can be written against the type the
-    /// newtype wraps.
+    /// Check the constraints against the type the newtype wraps.
     ///
-    /// A length constraint calls `len()` on the wrapped value and a
-    /// numeric constraint compares it against literals, so each admits
-    /// only the inner types those are written for. An inner type that
-    /// takes neither, or a bound outside the range the inner type
-    /// holds, would render code the consumer's build refuses.
+    /// A length constraint calls `len()`, so the inner type has to be
+    /// a sequence. An integer or float constraint compares the wrapped
+    /// value against literals, so the inner type has to be an integer
+    /// or a float and every bound has to fit it: a maximum of 300 over
+    /// a `u8` renders `300_u8`, which the consumer's build refuses.
     pub(crate) fn check_constraints(&self, types: &BTreeMap<Id, Type<Id>>) -> Result<(), Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -1561,59 +1571,74 @@ impl<Id> NewtypeStruct<Id> {
                 )),
             },
 
-            NewtypeConstraints::Number {
+            NewtypeConstraints::Integer {
+                min,
+                max,
+                multiple_of,
+            } => match inner {
+                // A `NonZero` is compared through `get()`, so a bound
+                // has to fit the primitive it wraps.
+                Type::Integer(itype) => {
+                    let (width, _) = integer_width(itype);
+                    match integer_limits(&width) {
+                        None => Ok(()),
+                        Some((low, high)) => {
+                            // The multiple is unsigned, and every upper
+                            // limit `integer_limits` names is positive, so
+                            // only that limit can refuse it.
+                            let out_of_range = [*min, *max]
+                                .into_iter()
+                                .flatten()
+                                .find(|value| *value < low || *value > high)
+                                .map(|value| value.to_string())
+                                .or_else(|| {
+                                    multiple_of
+                                        .filter(|multiple| *multiple > high as u128)
+                                        .map(|multiple| multiple.to_string())
+                                });
+                            match out_of_range {
+                                Some(value) => Err(invalid(
+                                    "integer",
+                                    format!("the bound {value} is out of range for {itype}"),
+                                )),
+                                None => Ok(()),
+                            }
+                        }
+                    }
+                }
+
+                _ => Err(invalid(
+                    "integer",
+                    "the inner type is not an integer type".to_string(),
+                )),
+            },
+
+            NewtypeConstraints::Float {
                 min,
                 max,
                 exclusive_min,
                 exclusive_max,
                 multiple_of,
-            } => {
-                let bounds = || {
-                    [min, max, exclusive_min, exclusive_max, multiple_of]
-                        .into_iter()
-                        .flatten()
-                };
-                match inner {
-                    Type::Integer(itype) => {
-                        // A `NonZero` is compared through `get()`, so
-                        // the range a bound has to fit is the wrapped
-                        // primitive's.
-                        let (_, rust_type) = numeric_subject(inner);
-                        bounds().try_for_each(|bound| match bound.as_i128() {
-                            None => Err(invalid(
-                                "number",
-                                format!("the bound {bound} is not a whole number"),
-                            )),
-                            Some(value) => match integer_limits(&rust_type) {
-                                Some((low, high)) if value < low || value > high => Err(invalid(
-                                    "number",
-                                    format!("the bound {bound} is out of range for {itype}"),
-                                )),
-                                _ => Ok(()),
-                            },
-                        })
-                    }
+            } => match inner {
+                // A bound renders as a literal suffixed with the inner
+                // type, so `1e300_f32` is a literal the consumer's
+                // build refuses.
+                Type::Float(ftype) => [min, max, exclusive_min, exclusive_max, multiple_of]
+                    .into_iter()
+                    .flatten()
+                    .try_for_each(|bound| match (ftype.as_str(), *bound as f32) {
+                        ("f32", narrowed) if narrowed.is_infinite() => Err(invalid(
+                            "float",
+                            format!("the bound {bound} is out of range for {ftype}"),
+                        )),
+                        _ => Ok(()),
+                    }),
 
-                    // A bound renders as a literal with the type as its
-                    // suffix, so one past the end of an `f32` becomes a
-                    // literal the consumer's build refuses.
-                    Type::Float(ftype) => {
-                        bounds().try_for_each(|bound| match (ftype.as_str(), bound.as_f64()) {
-                            ("f32", value) if (value as f32).is_infinite() => Err(invalid(
-                                "number",
-                                format!("the bound {bound} is out of range for {ftype}"),
-                            )),
-                            _ => Ok(()),
-                        })
-                    }
-
-                    _ => Err(invalid(
-                        "number",
-                        "the inner type is neither an integer nor a floating-point type"
-                            .to_string(),
-                    )),
-                }
-            }
+                _ => Err(invalid(
+                    "float",
+                    "the inner type is not a floating-point type".to_string(),
+                )),
+            },
 
             _ => Ok(()),
         }
@@ -1772,30 +1797,51 @@ pub enum NewtypeConstraints {
         // contains: (),
     },
 
-    /// Bounds on a number.
+    /// Bounds on an integer.
     ///
-    /// The inner type must be an integer or floating-point type; the
-    /// checks compare the wrapped value against literals of it. A
-    /// `NonZero` integer is compared through its `get()`.
+    /// The inner type must be a [`Type::Integer`]: the checks compare
+    /// the wrapped value against literals of it, and a `NonZero` is
+    /// compared through its `get()`. Both bounds are inclusive; a
+    /// consumer with an exclusive bound states the adjacent inclusive
+    /// one.
     ///
     /// Each field is one JSON Schema keyword, and the `JsonSchema`
-    /// impl reports it as that keyword. An inclusive bound that sits
-    /// at the inner type's own limit is still reported, but renders no
-    /// check: every value the type holds passes it, and the comparison
-    /// would draw a `unused_comparisons` warning in the consumer's
-    /// build.
-    Number {
+    /// impl reports it as that keyword. A bound that sits at the inner
+    /// type's own limit is still reported, but renders no check: a
+    /// minimum of 0 on a `u8` admits every value the type holds, and
+    /// `value < 0_u8` draws rustc's `unused_comparisons` warning in
+    /// the consumer's build.
+    Integer {
         /// Inclusive lower bound, JSON Schema's `minimum`.
-        min: Option<NumericBound>,
+        min: Option<i128>,
         /// Inclusive upper bound, JSON Schema's `maximum`.
-        max: Option<NumericBound>,
+        max: Option<i128>,
+        /// The value must divide evenly by this, JSON Schema's
+        /// `multipleOf`. Zero renders `value % 0` and is refused.
+        multiple_of: Option<u128>,
+    },
+
+    /// Bounds on a floating-point number.
+    ///
+    /// The inner type must be a [`Type::Float`]: the checks compare
+    /// the wrapped value against literals of it. A NaN compares false
+    /// against every literal, so the checks refuse it first and a
+    /// value of the newtype is never a NaN.
+    ///
+    /// Each field is one JSON Schema keyword, and the `JsonSchema`
+    /// impl reports it as that keyword.
+    Float {
+        /// Inclusive lower bound, JSON Schema's `minimum`.
+        min: Option<f64>,
+        /// Inclusive upper bound, JSON Schema's `maximum`.
+        max: Option<f64>,
         /// Exclusive lower bound, JSON Schema's `exclusiveMinimum`.
-        exclusive_min: Option<NumericBound>,
+        exclusive_min: Option<f64>,
         /// Exclusive upper bound, JSON Schema's `exclusiveMaximum`.
-        exclusive_max: Option<NumericBound>,
+        exclusive_max: Option<f64>,
         /// The value must divide evenly by this, JSON Schema's
         /// `multipleOf`. It must be positive.
-        multiple_of: Option<NumericBound>,
+        multiple_of: Option<f64>,
     },
 
     /// Fallback constraint
@@ -1819,103 +1865,15 @@ pub enum NewtypeConstraints {
     JsonSchema(JsonValue),
 }
 
-/// One bound in a [`NewtypeConstraints::Number`] constraint.
+/// The closed range of values an integer width holds, for the widths
+/// whose limits are the same everywhere, and `None` for the rest.
 ///
-/// An integer bound is held as an `i128` and a floating-point bound as
-/// an `f64`. Between them they hold every value the inner types can
-/// take: an `i128` holds `i8` through `u64` exactly, where an `f64`
-/// rounds integers past its 53 bit mantissa, and an `f64` holds `f32`
-/// and `f64`. A JSON number would reach as far, since serde_json holds
-/// one as an `i64`, a `u64`, or an `f64`, but a field typed that way
-/// would also accept strings and objects that only finalization could
-/// refuse.
-///
-/// A bound's kind need not match the inner type's. An integer bound on
-/// a floating-point inner type renders as a float literal, and a
-/// floating-point bound with no fractional part is an integer bound on
-/// an integer inner type, which is how a consumer reading schemars 0.8
-/// (whose numeric keywords are all `f64`) states one. Finalization
-/// refuses a bound the inner type cannot hold.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[non_exhaustive]
-pub enum NumericBound {
-    /// A bound stated as an integer.
-    Integer(i128),
-    /// A bound stated as a floating-point number.
-    Float(f64),
-}
-
-impl NumericBound {
-    /// The bound as an `f64`, which is how a reported schema carries
-    /// it: schemars 0.8 holds every numeric keyword as an `f64`, so an
-    /// integer bound past its mantissa reports as the nearest `f64`.
-    pub fn as_f64(&self) -> f64 {
-        match self {
-            NumericBound::Integer(value) => *value as f64,
-            NumericBound::Float(value) => *value,
-        }
-    }
-
-    /// The bound as an `i128`, or `None` for one that is not a whole
-    /// number or does not fit.
-    fn as_i128(&self) -> Option<i128> {
-        match self {
-            NumericBound::Integer(value) => Some(*value),
-            NumericBound::Float(value) => {
-                (value.fract() == 0.0 && *value >= i128::MIN as f64 && *value <= i128::MAX as f64)
-                    .then_some(*value as i128)
-            }
-        }
-    }
-
-    /// Whether the bound has a literal form: every integer does, and a
-    /// float does unless it is an infinity or a NaN.
-    fn is_finite(&self) -> bool {
-        match self {
-            NumericBound::Integer(_) => true,
-            NumericBound::Float(value) => value.is_finite(),
-        }
-    }
-
-    /// Whether the bound is greater than zero.
-    fn is_positive(&self) -> bool {
-        match self {
-            NumericBound::Integer(value) => *value > 0,
-            NumericBound::Float(value) => *value > 0.0,
-        }
-    }
-
-    /// Render the bound as a literal of `rust_type`.
-    ///
-    /// The type is the one the comparison is written against: the
-    /// inner type itself, or the primitive a `NonZero` wraps.
-    fn literal(&self, rust_type: &str) -> Literal {
-        let text = match self {
-            NumericBound::Integer(value) => format!("{value}_{rust_type}"),
-            NumericBound::Float(value) => format!("{value}_{rust_type}"),
-        };
-        Literal::from_str(&text).expect("a validated bound has a literal form")
-    }
-}
-
-impl std::fmt::Display for NumericBound {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NumericBound::Integer(value) => value.fmt(f),
-            NumericBound::Float(value) => value.fmt(f),
-        }
-    }
-}
-
-/// The closed range of values an integer type holds, for the types
-/// whose limits are known exactly, and `None` for the rest.
-///
-/// `u128`, `i128`, `usize`, and `isize` answer `None`: the first two
-/// hold values no [`NumericBound`] can state, and the last two are as
-/// wide as the consumer's target. An unknown answer keeps a bound and
-/// the check it renders, which is the conservative reading.
-fn integer_limits(rust_type: &str) -> Option<(i128, i128)> {
-    match rust_type {
+/// `usize` and `isize` answer `None` because they are as wide as the
+/// consumer's target, and `u128` and `i128` answer `None` because
+/// their ranges reach past the `i128` a bound is stated as. A `None`
+/// answer checks no bound and elides no comparison.
+fn integer_limits(width: &str) -> Option<(i128, i128)> {
+    match width {
         "u8" => Some((0, u8::MAX as i128)),
         "u16" => Some((0, u16::MAX as i128)),
         "u32" => Some((0, u32::MAX as i128)),
@@ -1928,21 +1886,221 @@ fn integer_limits(rust_type: &str) -> Option<(i128, i128)> {
     }
 }
 
-/// How a numeric constraint names the value it checks, and the type
+/// How an integer constraint names the value it checks, and the width
 /// its literals carry.
 ///
-/// A `NonZero` integer is compared through `get()`, against literals
-/// of the primitive it wraps; every other integer and every float is
-/// compared directly, against literals of its own type.
-fn numeric_subject<Id>(inner: &Type<Id>) -> (TokenStream, String) {
-    match inner {
-        Type::Integer(itype) => match itype.strip_prefix(STD_NUM_NONZERO_PREFIX) {
-            Some(width) => (quote! { value.get() }, width.to_ascii_lowercase()),
-            None => (quote! { value }, itype.clone()),
-        },
-        Type::Float(ftype) => (quote! { value }, ftype.clone()),
-        _ => unreachable!("finalization refuses a numeric constraint on any other inner type"),
+/// A `NonZero` is compared through `get()`, against literals of the
+/// primitive it wraps; every other integer is compared directly,
+/// against literals of its own type.
+fn integer_subject(itype: &str) -> (TokenStream, String) {
+    match integer_width(itype) {
+        (width, true) => (quote! { value.get() }, width),
+        (width, false) => (quote! { value }, width),
     }
+}
+
+/// A bound as a literal suffixed with the type it is compared against:
+/// the inner type, or the primitive a `NonZero` wraps.
+fn suffixed_literal(value: impl std::fmt::Display, rust_type: &str) -> Literal {
+    Literal::from_str(&format!("{value}_{rust_type}")).expect("a checked bound has a literal form")
+}
+
+/// The checks an integer or float constraint renders in `try_from`,
+/// in the order they run.
+///
+/// Each one returns a `ConversionError` naming the bound the value
+/// failed.
+fn numeric_checks<Id>(constraints: &NewtypeConstraints, inner: &Type<Id>) -> Vec<TokenStream> {
+    match (constraints, inner) {
+        (
+            NewtypeConstraints::Integer {
+                min,
+                max,
+                multiple_of,
+            },
+            Type::Integer(itype),
+        ) => {
+            let (subject, width) = integer_subject(itype);
+            let limits = integer_limits(&width);
+
+            // A minimum of 0 on a `u8` admits every value the type
+            // holds, and `value < 0_u8` draws rustc's
+            // `unused_comparisons` warning in the consumer's build, so
+            // a bound at the inner type's own limit renders no
+            // comparison. The reported schema still carries the
+            // keyword.
+            let at_limit = |bound: i128, edge: fn((i128, i128)) -> i128| {
+                limits.is_some_and(|limits| bound == edge(limits))
+            };
+
+            let min_check = min
+                .filter(|bound| !at_limit(*bound, |(low, _)| low))
+                .map(|bound| {
+                    let literal = suffixed_literal(bound, &width);
+                    let err = format!("less than {bound}");
+                    quote! {
+                        if #subject < #literal {
+                            return Err(#err.into());
+                        }
+                    }
+                });
+            let max_check = max
+                .filter(|bound| !at_limit(*bound, |(_, high)| high))
+                .map(|bound| {
+                    let literal = suffixed_literal(bound, &width);
+                    let err = format!("greater than {bound}");
+                    quote! {
+                        if #subject > #literal {
+                            return Err(#err.into());
+                        }
+                    }
+                });
+            let multiple_check = multiple_of.map(|multiple| {
+                let literal = suffixed_literal(multiple, &width);
+                let zero = suffixed_literal(0, &width);
+                let err = format!("not a multiple of {multiple}");
+                quote! {
+                    if #subject % #literal != #zero {
+                        return Err(#err.into());
+                    }
+                }
+            });
+
+            [min_check, max_check, multiple_check]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+        }
+
+        (
+            NewtypeConstraints::Float {
+                min,
+                max,
+                exclusive_min,
+                exclusive_max,
+                multiple_of,
+            },
+            Type::Float(ftype),
+        ) => {
+            // A NaN compares false against every literal, so each
+            // bound below would admit one. This check refuses it
+            // first.
+            let nan_check = quote! {
+                if value.is_nan() {
+                    return Err("not a number".into());
+                }
+            };
+            let min_check = min.map(|bound| {
+                let literal = suffixed_literal(bound, ftype);
+                let err = format!("less than {bound}");
+                quote! {
+                    if value < #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let max_check = max.map(|bound| {
+                let literal = suffixed_literal(bound, ftype);
+                let err = format!("greater than {bound}");
+                quote! {
+                    if value > #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let exclusive_min_check = exclusive_min.map(|bound| {
+                let literal = suffixed_literal(bound, ftype);
+                let err = format!("not greater than {bound}");
+                quote! {
+                    if value <= #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let exclusive_max_check = exclusive_max.map(|bound| {
+                let literal = suffixed_literal(bound, ftype);
+                let err = format!("not less than {bound}");
+                quote! {
+                    if value >= #literal {
+                        return Err(#err.into());
+                    }
+                }
+            });
+            let multiple_check = multiple_of.map(|multiple| {
+                let literal = suffixed_literal(multiple, ftype);
+                let zero = suffixed_literal(0, ftype);
+                let err = format!("not a multiple of {multiple}");
+                quote! {
+                    if value % #literal != #zero {
+                        return Err(#err.into());
+                    }
+                }
+            });
+
+            [
+                Some(nan_check),
+                min_check,
+                max_check,
+                exclusive_min_check,
+                exclusive_max_check,
+                multiple_check,
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+        }
+
+        _ => unreachable!("finalization refuses a numeric constraint over any other inner type"),
+    }
+}
+
+/// The keyword assignments an integer or float constraint reports in
+/// its `JsonSchema` impl, one per bound it states.
+///
+/// schemars 0.8 holds every numeric keyword as an `f64`, so an integer
+/// bound past its 53 bit mantissa reports as the nearest `f64`.
+fn numeric_keywords(constraints: &NewtypeConstraints) -> Vec<TokenStream> {
+    let bounds = match constraints {
+        NewtypeConstraints::Integer {
+            min,
+            max,
+            multiple_of,
+        } => vec![
+            (min.map(|bound| bound as f64), quote! { minimum }),
+            (max.map(|bound| bound as f64), quote! { maximum }),
+            (
+                multiple_of.map(|multiple| multiple as f64),
+                quote! { multiple_of },
+            ),
+        ],
+
+        NewtypeConstraints::Float {
+            min,
+            max,
+            exclusive_min,
+            exclusive_max,
+            multiple_of,
+        } => vec![
+            (*min, quote! { minimum }),
+            (*max, quote! { maximum }),
+            (*exclusive_min, quote! { exclusive_minimum }),
+            (*exclusive_max, quote! { exclusive_maximum }),
+            (*multiple_of, quote! { multiple_of }),
+        ],
+
+        _ => unreachable!("only the numeric constraints report numeric keywords"),
+    };
+
+    bounds
+        .into_iter()
+        .filter_map(|(bound, keyword)| {
+            let value = bound?;
+            Some(quote! {
+                schema.number().#keyword =
+                    ::std::option::Option::Some(#value);
+            })
+        })
+        .collect::<Vec<_>>()
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
@@ -2394,11 +2552,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // A value that exists has already been checked, so the
-                // two textual traits are the inner value's, as they are
-                // for an unconstrained newtype. The sequences carry
-                // neither, so these reach only an inner type that
-                // declares them itself.
+                // A value that exists has passed the length checks, so
+                // Display prints the inner value and FromStr parses one
+                // and then checks it. `Vec`, `BTreeSet`, and `[T; N]`
+                // implement neither, so these reach only an inner type
+                // that declares them itself.
                 let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
                     quote! {
                         impl ::std::fmt::Display for #name_ident {
@@ -2506,92 +2664,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 }
             }
 
-            NewtypeConstraints::Number {
-                min,
-                max,
-                exclusive_min,
-                exclusive_max,
-                multiple_of,
-            } => {
+            NewtypeConstraints::Integer { .. } | NewtypeConstraints::Float { .. } => {
                 typespace.add_error_mod(out);
 
                 let inner_type = typespace
                     .types
                     .get(inner)
                     .expect("every reference resolves before rendering");
-                let (subject, rust_type) = numeric_subject(inner_type);
-                let limits = integer_limits(&rust_type);
+                let checks = numeric_checks(constraints, inner_type);
 
-                // An inclusive bound sitting at the inner type's own
-                // limit admits every value the type holds. Rendering
-                // the comparison anyway draws rustc's
-                // `unused_comparisons` warning in the consumer's build,
-                // so it renders nothing; the reported schema still
-                // carries the keyword.
-                let at_limit = |bound: &NumericBound, edge: fn((i128, i128)) -> i128| {
-                    matches!(
-                        (limits, bound.as_i128()),
-                        (Some(limits), Some(value)) if value == edge(limits)
-                    )
-                };
-
-                let min_check = min
-                    .filter(|bound| !at_limit(bound, |(low, _)| low))
-                    .map(|bound| {
-                        let literal = bound.literal(&rust_type);
-                        let err = format!("less than {bound}");
-                        quote! {
-                            if #subject < #literal {
-                                return Err(#err.into());
-                            }
-                        }
-                    });
-                let max_check =
-                    max.filter(|bound| !at_limit(bound, |(_, high)| high))
-                        .map(|bound| {
-                            let literal = bound.literal(&rust_type);
-                            let err = format!("greater than {bound}");
-                            quote! {
-                                if #subject > #literal {
-                                    return Err(#err.into());
-                                }
-                            }
-                        });
-                let exclusive_min_check = exclusive_min.map(|bound| {
-                    let literal = bound.literal(&rust_type);
-                    let err = format!("not greater than {bound}");
-                    quote! {
-                        if #subject <= #literal {
-                            return Err(#err.into());
-                        }
-                    }
-                });
-                let exclusive_max_check = exclusive_max.map(|bound| {
-                    let literal = bound.literal(&rust_type);
-                    let err = format!("not less than {bound}");
-                    quote! {
-                        if #subject >= #literal {
-                            return Err(#err.into());
-                        }
-                    }
-                });
-                let multiple_check = multiple_of.map(|bound| {
-                    let literal = bound.literal(&rust_type);
-                    let zero = NumericBound::Integer(0).literal(&rust_type);
-                    let err = format!("not a multiple of {bound}");
-                    quote! {
-                        if #subject % #literal != #zero {
-                            return Err(#err.into());
-                        }
-                    }
-                });
-
-                // A value that exists has already been checked, so
-                // Display is the inner value's. Parsing produces an
-                // inner value, which the constraint then checks, so
-                // both failures land in `ConversionError`; the inner
-                // type's own parse error carries no `Display` bound, so
-                // its message cannot be forwarded.
+                // A value that exists has passed the checks, so Display
+                // prints the inner value. FromStr parses an inner value
+                // and then checks it, so both failures are a
+                // `ConversionError`; the inner type's `FromStr::Err`
+                // carries no bounds of its own, so a parse failure
+                // becomes a fixed message.
                 let display_impl = traits.remove(TypespaceTrait::Display).then(|| {
                     quote! {
                         impl ::std::fmt::Display for #name_ident {
@@ -2640,27 +2727,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // The reported schema is the inner type's with each
-                // bound set as its own keyword. schemars 0.8 holds them
-                // all as `f64`, which is what `as_f64` documents.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
-                    let report = [
-                        (min, quote! { minimum }),
-                        (max, quote! { maximum }),
-                        (exclusive_min, quote! { exclusive_minimum }),
-                        (exclusive_max, quote! { exclusive_maximum }),
-                        (multiple_of, quote! { multiple_of }),
-                    ]
-                    .into_iter()
-                    .filter_map(|(bound, keyword)| {
-                        let value = (*bound)?.as_f64();
-                        Some(quote! {
-                            schema.number().#keyword =
-                                ::std::option::Option::Some(#value);
-                        })
-                    })
-                    .collect::<Vec<_>>();
-
+                    let report = numeric_keywords(constraints);
                     quote! {
                         impl ::schemars::JsonSchema for #name_ident {
                             fn schema_name() -> ::std::string::String {
@@ -2693,11 +2761,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             value: #inner_ident
                         ) -> ::std::result::Result<Self, self::error::ConversionError>
                         {
-                            #min_check
-                            #max_check
-                            #exclusive_min_check
-                            #exclusive_max_check
-                            #multiple_check
+                            #( #checks )*
                             Ok(Self(value))
                         }
                     }

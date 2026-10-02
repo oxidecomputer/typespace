@@ -133,6 +133,71 @@ impl ::schemars::JsonSchema for Even {
 }
 #[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[serde(transparent)]
+pub struct Offset(i32);
+impl ::std::ops::Deref for Offset {
+    type Target = i32;
+    fn deref(&self) -> &i32 {
+        &self.0
+    }
+}
+impl ::std::convert::From<Offset> for i32 {
+    fn from(value: Offset) -> Self {
+        value.0
+    }
+}
+impl ::std::fmt::Display for Offset {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl ::std::str::FromStr for Offset {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        let value = <i32 as ::std::str::FromStr>::from_str(value)
+            .map_err(|_| "could not be parsed as the inner type")?;
+        ::std::convert::TryFrom::try_from(value)
+    }
+}
+impl ::std::convert::TryFrom<i32> for Offset {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: i32,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        if value < -10_i32 {
+            return Err("less than -10".into());
+        }
+        if value > 10_i32 {
+            return Err("greater than 10".into());
+        }
+        Ok(Self(value))
+    }
+}
+impl<'de> ::serde::Deserialize<'de> for Offset {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+    where
+        D: ::serde::Deserializer<'de>,
+    {
+        Self::try_from(<i32>::deserialize(deserializer)?)
+            .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
+    }
+}
+impl ::schemars::JsonSchema for Offset {
+    fn schema_name() -> ::std::string::String {
+        "Offset".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <i32 as ::schemars::JsonSchema>::json_schema(g).into_object();
+        schema.number().minimum = ::std::option::Option::Some(-10f64);
+        schema.number().maximum = ::std::option::Option::Some(10f64);
+        schema.into()
+    }
+}
+#[derive(::serde::Serialize, Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[serde(transparent)]
 pub struct Percent(u8);
 impl ::std::ops::Deref for Percent {
     type Target = u8;
@@ -188,71 +253,6 @@ impl ::schemars::JsonSchema for Percent {
         let mut schema = <u8 as ::schemars::JsonSchema>::json_schema(g).into_object();
         schema.number().minimum = ::std::option::Option::Some(0f64);
         schema.number().maximum = ::std::option::Option::Some(100f64);
-        schema.into()
-    }
-}
-#[derive(::serde::Serialize, Clone, Copy, Debug, PartialEq, PartialOrd)]
-#[serde(transparent)]
-pub struct Ratio(f64);
-impl ::std::ops::Deref for Ratio {
-    type Target = f64;
-    fn deref(&self) -> &f64 {
-        &self.0
-    }
-}
-impl ::std::convert::From<Ratio> for f64 {
-    fn from(value: Ratio) -> Self {
-        value.0
-    }
-}
-impl ::std::fmt::Display for Ratio {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl ::std::str::FromStr for Ratio {
-    type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        let value = <f64 as ::std::str::FromStr>::from_str(value)
-            .map_err(|_| "could not be parsed as the inner type")?;
-        ::std::convert::TryFrom::try_from(value)
-    }
-}
-impl ::std::convert::TryFrom<f64> for Ratio {
-    type Error = self::error::ConversionError;
-    fn try_from(
-        value: f64,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        if value <= 0_f64 {
-            return Err("not greater than 0".into());
-        }
-        if value >= 1_f64 {
-            return Err("not less than 1".into());
-        }
-        Ok(Self(value))
-    }
-}
-impl<'de> ::serde::Deserialize<'de> for Ratio {
-    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-    where
-        D: ::serde::Deserializer<'de>,
-    {
-        Self::try_from(<f64>::deserialize(deserializer)?)
-            .map_err(|e| { <D::Error as ::serde::de::Error>::custom(e.to_string()) })
-    }
-}
-impl ::schemars::JsonSchema for Ratio {
-    fn schema_name() -> ::std::string::String {
-        "Ratio".to_string()
-    }
-    fn json_schema(
-        g: &mut ::schemars::r#gen::SchemaGenerator,
-    ) -> ::schemars::schema::Schema {
-        let mut schema = <f64 as ::schemars::JsonSchema>::json_schema(g).into_object();
-        schema.number().exclusive_minimum = ::std::option::Option::Some(0f64);
-        schema.number().exclusive_maximum = ::std::option::Option::Some(1f64);
         schema.into()
     }
 }

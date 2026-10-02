@@ -2,11 +2,14 @@
 
 ## Next
 
-* `NewtypeConstraints::Number` constrains a newtype over an integer or
-  floating-point type: an inclusive and an exclusive bound at each end and a
-  multiple-of, each optional, checked at construction and deserialization and
-  reported keyword by keyword in the `JsonSchema` impl. Bounds are
-  `NumericBound` values, an integer or a float
+* `NewtypeConstraints::Integer` constrains a newtype over an integer type,
+  including the `NonZero` types: an inclusive bound at each end (`i128`) and a
+  multiple-of (`u128`), each optional, checked at construction and
+  deserialization and reported keyword by keyword in the `JsonSchema` impl. A
+  consumer with an exclusive bound states the adjacent inclusive one
+* `NewtypeConstraints::Float` does the same for a newtype over `f32` or `f64`,
+  with an exclusive bound at each end as well and every bound an `f64`. A NaN
+  fails every check, so a value of such a newtype is never a NaN
 * `NewtypeConstraints::Array` renders: the length of the wrapped sequence is
   checked at construction and deserialization, and the `JsonSchema` impl
   reports `minItems` and `maxItems`
