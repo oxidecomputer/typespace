@@ -558,10 +558,15 @@ impl<Id> TypespaceBuilder<Id> {
     /// Record a crate the consumer's native types need.
     ///
     /// typespace reports the crates required by the code it generates; any
-    /// dependencies introcued by [`build::Native`] types are the consumer's to
+    /// dependencies introduced by [`build::Native`] types are the consumer's to
     /// specify. Every dependency recorded here is reported by
     /// [`Typespace::to_codespace`] alongside typespace's own, merged by crate
     /// name as [`codespace::Codespace::add_dependency`] merges them.
+    ///
+    /// The registrations must merge: `to_codespace` panics on two that
+    /// name different crates under one identifier or whose versions
+    /// have no intersection, and on a rename that takes the identifier
+    /// of a crate typespace emits.
     pub fn add_dependency(&mut self, dependency: codespace::Dependency) {
         self.dependencies.push(dependency);
     }
