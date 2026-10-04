@@ -71,12 +71,6 @@ impl<'a> Outputspace<'a> {
         self.settings.crate_paths.text(krate)
     }
 
-    /// Record crates referred to by code rendered elsewhere, such as a
-    /// default value the walk in `default.rs` produced.
-    pub(crate) fn record_crates(&mut self, crates: impl IntoIterator<Item = GeneratedCrate>) {
-        self.crates.extend(crates);
-    }
-
     /// Finish the output, yielding the codespace it accumulated, with the
     /// crates the code refers to registered as its dependencies: each
     /// under its registry name, or under the root of its override when

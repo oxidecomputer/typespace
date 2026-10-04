@@ -240,7 +240,7 @@ where
         scope: None,
         mode: Mode::Check,
     };
-    let mut state = WalkState::new();
+    let mut state = WalkState::new(None);
     imp.default_impl(&mut state, id, value)?;
     Ok(state.obligations)
 }
@@ -273,13 +273,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             scope: None,
             mode: Mode::Generate,
         };
-        let mut state = WalkState::new();
-        let tokens = imp
-            .default_impl(&mut state, id, value)
+        let mut state = WalkState::new(Some(out));
+        imp.default_impl(&mut state, id, value)
             .expect("an error should not be possible post-validation")
-            .expect("a value should be generated with Mode::Generate");
-        out.record_crates(state.crates);
-        tokens
+            .expect("a value should be generated with Mode::Generate")
     }
 
     pub(crate) fn generate_default_enum(
@@ -297,7 +294,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             scope: None,
             mode: Mode::Generate,
         };
-        let mut state = WalkState::new();
+        let mut state = WalkState::new(Some(out));
 
         let Some(Type::Enum(enum_info)) = types.get(id) else {
             unreachable!("this should only be called on an enum type")
@@ -307,7 +304,6 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             .default_impl_enum(&mut state, enum_info, value, id)
             .expect("an error should not be possible post-validation")
             .expect("a value should be generated with Mode::Generate");
-        out.record_crates(state.crates);
 
         match (enum_default, &settings.typify_compat) {
             ((_, Some(variant_name)), false) => EnumDefault::Variant(variant_name),
@@ -333,13 +329,10 @@ where
         scope: Some("super"),
         mode: Mode::Generate,
     };
-    let mut state = WalkState::new();
-    let tokens = imp
-        .default_impl(&mut state, id, value)
+    let mut state = WalkState::new(Some(out));
+    imp.default_impl(&mut state, id, value)
         .expect("an error should not be possible post-validation")
-        .expect("a value should be generated with Mode::Generate");
-    out.record_crates(state.crates);
-    tokens
+        .expect("a value should be generated with Mode::Generate")
 }
 
 pub(crate) enum EnumDefault {
@@ -364,7 +357,10 @@ struct DefaultImpl<'a, Id> {
 }
 
 /// Mutable state for a default-value walk.
-struct WalkState<Id> {
+struct WalkState<'o, 's, Id> {
+    /// Where the rendered value's crates are recorded; a check has no
+    /// output and records nothing.
+    out: Option<&'o mut Outputspace<'s>>,
     /// The (id, value) pairs visited so far while expanding a default
     /// value, used to detect and reject recursive expansion.
     expansion_set: Vec<(Id, serde_json::Value)>,
@@ -380,20 +376,15 @@ struct WalkState<Id> {
     /// that trait resolution may never grant, so these are handed to
     /// `feasibility` to evaluate rather than seeded as requirements.
     obligations: Vec<Obligation<Id>>,
-    /// The crates the rendered value refers to. Most values construct
-    /// their type directly; a value that lands on a native or a JSON
-    /// value deserializes through `serde_json`, and a custom
-    /// optional-nullable container is built through `json-serde`.
-    crates: BTreeSet<GeneratedCrate>,
 }
 
-impl<Id> WalkState<Id> {
-    fn new() -> Self {
+impl<'o, 's, Id> WalkState<'o, 's, Id> {
+    fn new(out: Option<&'o mut Outputspace<'s>>) -> Self {
         Self {
+            out,
             expansion_set: Vec::new(),
             path: Vec::new(),
             obligations: Vec::new(),
-            crates: BTreeSet::new(),
         }
     }
 }
@@ -414,14 +405,13 @@ where
         }
     }
 
-    /// The path a value refers to `krate` by, recorded on the walk.
-    ///
-    /// The walk has no [`Outputspace`] of its own (it also runs to
-    /// check), so the crates it names ride in its state until a
-    /// generate entry point hands them over.
-    fn crate_path(&self, state: &mut WalkState<Id>, krate: GeneratedCrate) -> TokenStream {
-        state.crates.insert(krate);
-        self.settings.crate_paths.tokens(krate)
+    /// The path a value refers to `krate` by, recorded on the output
+    /// when the walk has one.
+    fn crate_path(&self, state: &mut WalkState<'_, '_, Id>, krate: GeneratedCrate) -> TokenStream {
+        match state.out.as_deref_mut() {
+            Some(out) => out.crate_path(krate),
+            None => self.settings.crate_paths.tokens(krate),
+        }
     }
 
     /// Render `id`'s type, qualified for the walk's scope.
@@ -475,10 +465,10 @@ where
     /// the type whose default value this is.
     fn at<T>(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         from: &Id,
         relation: Relation,
-        f: impl FnOnce(&mut WalkState<Id>) -> T,
+        f: impl FnOnce(&mut WalkState<'_, '_, Id>) -> T,
     ) -> T {
         state.path.push(PathStep {
             type_id: from.clone(),
@@ -491,7 +481,7 @@ where
 
     fn default_impl(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
@@ -824,7 +814,7 @@ where
     /// component in turn.
     fn default_impl_tuple_items(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         items: &[Id],
         value: &serde_json::Value,
         id: &Id,
@@ -872,7 +862,7 @@ where
     /// property in turn.
     fn default_impl_struct_props(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         properties: &[StructProperty<Id>],
         deny_unknown_fields: bool,
         value: &serde_json::Value,
@@ -1149,7 +1139,7 @@ where
 
     fn default_impl_struct(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         struct_info: &build::Struct<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1175,7 +1165,7 @@ where
 
     fn default_impl_enum(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1201,7 +1191,7 @@ where
     /// all other variant types.
     fn default_impl_enum_external(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1318,7 +1308,7 @@ where
 
     fn default_impl_enum_internal(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         value: &serde_json::Value,
@@ -1411,7 +1401,7 @@ where
 
     fn default_impl_enum_adjacent(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         enum_info: &build::Enum<Id>,
         tag: &str,
         content: &str,
@@ -1504,7 +1494,7 @@ where
 
     fn default_impl_enum_untagged(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         enum_info: &build::Enum<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1587,7 +1577,7 @@ where
     // For one, tuple variants don't have a "rest"
     fn default_impl_tuple_struct(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         tuple_struct: &build::TupleStruct<Id>,
         value: &serde_json::Value,
         id: &Id,
@@ -1674,7 +1664,7 @@ where
 
     fn default_impl_custom_optional_nullable(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
@@ -1698,7 +1688,7 @@ where
     /// expand--or insufficiently narrow--the input value.
     fn expansion_guard_default_impl(
         &self,
-        state: &mut WalkState<Id>,
+        state: &mut WalkState<'_, '_, Id>,
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>>
