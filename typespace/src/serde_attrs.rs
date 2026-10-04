@@ -52,9 +52,8 @@ impl SerdeDerives {
         self.deserialize
     }
 
-    /// Whether an option list renders at all: serde reads it under
-    /// either serde derive and schemars reads it under `JsonSchema`.
-    pub(crate) fn renders(self) -> bool {
+    /// Whether any of the derives are set.
+    pub(crate) fn any(self) -> bool {
         self.serialize || self.deserialize || self.jsonschema
     }
 
@@ -84,9 +83,9 @@ impl SerdeAttrs {
     }
 
     /// The path an option refers to `krate` by, recorded as a dependency
-    /// only if the attribute renders.
+    /// only if the attribute renders at all.
     pub(crate) fn crate_path_text(&self, out: &mut Outputspace, krate: GeneratedCrate) -> String {
-        if self.derives.renders() {
+        if self.derives.any() {
             out.crate_path_text(krate)
         } else {
             out.settings().crate_paths.text(krate)
@@ -103,14 +102,15 @@ impl Extend<TokenStream> for SerdeAttrs {
 impl ToTokens for SerdeAttrs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { derives, options } = self;
-        if !options.is_empty() && derives.renders() {
-            if derives.serialize || derives.deserialize {
+        let serde = derives.serialize || derives.deserialize;
+        if !options.is_empty() {
+            if serde {
                 tokens.extend(quote! {
                     #[serde(
                         #( #options ),*
                     )]
                 });
-            } else {
+            } else if derives.jsonschema {
                 tokens.extend(quote! {
                     #[schemars(
                         #( #options ),*

@@ -8,9 +8,7 @@
 * Allow a foreign derive to be a bare (unscoped) name (#18)
 * The codespace from `Typespace::to_codespace` tracks the crates its code
   depends on (`Codespace::dependencies`), including those a consumer records
-  for its native types with `TypespaceBuilder::add_dependency`. `typespace`
-  re-exports `codespace`. `GeneratedCrate::Jsonschema` names the runtime
-  validator a JSON Schema constraint needs
+  for its native types with `TypespaceBuilder::add_dependency`
 
 ## [0.0.1-alpha.2] - 2026-09-28
 

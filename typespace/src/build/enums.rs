@@ -411,55 +411,57 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 (TokenStream::new(), None)
             };
 
-        let rendered_variants = variants.iter().map(|variant| {
-            let EnumVariant {
-                rust_name,
-                rename,
-                description,
-                details,
-            } = variant;
-            let variant_ident = format_ident!("{}", rust_name);
-            let mut variant_serde = serde_derives.attrs();
-            variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
-            let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rendered_variants = variants
+            .iter()
+            .map(|variant| {
+                let EnumVariant {
+                    rust_name,
+                    rename,
+                    description,
+                    details,
+                } = variant;
+                let variant_ident = format_ident!("{}", rust_name);
+                let mut variant_serde = serde_derives.attrs();
+                variant_serde.extend(rename.as_ref().map(|n| quote! { rename = #n }));
+                let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
 
-            let default_attr = (unit_default_value.as_ref() == Some(rust_name)).then(|| {
-                quote! { #[default] }
-            });
+                let default_attr = (unit_default_value.as_ref() == Some(rust_name)).then(|| {
+                    quote! { #[default] }
+                });
 
-            let data = match details {
-                VariantDetails::Unit => TokenStream::new(),
-                VariantDetails::Item(item) => {
-                    let item_ident = typespace.render_ident(item, out);
-                    quote! { (#item_ident) }
-                }
-                VariantDetails::Tuple(items) => {
-                    let item_idents = items.iter().map(|item| typespace.render_ident(item, out));
-                    quote! { ( #( #item_idents, )* ) }
-                }
-                VariantDetails::Struct(properties) => {
-                    let properties = properties.iter().map(|prop| {
-                        typespace.render_struct_property(
-                            prop,
-                            serde_derives,
-                            false,
-                            &format!("{name}{rust_name}"),
-                            out,
-                        )
-                    });
-                    quote! { { #( #properties, )* } }
-                }
-            };
+                let data = match details {
+                    VariantDetails::Unit => TokenStream::new(),
+                    VariantDetails::Item(item) => {
+                        let item_ident = typespace.render_ident(item, out);
+                        quote! { (#item_ident) }
+                    }
+                    VariantDetails::Tuple(items) => {
+                        let item_idents =
+                            items.iter().map(|item| typespace.render_ident(item, out));
+                        quote! { ( #( #item_idents, )* ) }
+                    }
+                    VariantDetails::Struct(properties) => {
+                        let properties = properties.iter().map(|prop| {
+                            typespace.render_struct_property(
+                                prop,
+                                serde_derives,
+                                false,
+                                &format!("{name}{rust_name}"),
+                                out,
+                            )
+                        });
+                        quote! { { #( #properties, )* } }
+                    }
+                };
 
-            quote! {
-                #rustdoc
-                #variant_serde
-                #default_attr
-                #variant_ident #data
-            }
-        });
-        // Rendered now, since each variant writes into `out`.
-        let rendered_variants = rendered_variants.collect::<Vec<_>>();
+                quote! {
+                    #rustdoc
+                    #variant_serde
+                    #default_attr
+                    #variant_ident #data
+                }
+            })
+            .collect::<Vec<_>>();
 
         // An unknown field is a deserialization concern, so this one is
         // held back from a Serialize-only type rather than left inert.

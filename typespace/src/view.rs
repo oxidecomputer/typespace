@@ -45,7 +45,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
     /// The Rust identifier for this type as a [`TokenStream`].
     pub fn ident(&self) -> TokenStream {
-        // A query renders into an output it then drops.
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
             .render_ident(self.id, &mut Outputspace::new(&self.typespace.settings))
     }
@@ -58,6 +59,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// Rendering honors the typespace's settings (container overrides,
     /// `std` syntax).
     pub fn ident_in(&self, scope: &str) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
             .render_ident_with_scope(
                 self.id,
@@ -82,6 +85,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// `String` reads as `&'a str` while a `bool` is unchanged. The
     /// two are independent: pass either, neither, or both.
     pub fn parameter_ident(&self, scope: Option<&str>, lifetime: Option<&str>) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         self.renderer().render_parameter_ident(
             self.id,
             scope,
