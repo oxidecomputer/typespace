@@ -223,6 +223,9 @@
 //! typespace, and the consumer should document them.
 
 pub mod build;
+
+/// The crate [`Typespace::to_codespace`] renders into.
+pub use codespace;
 pub(crate) mod cycles;
 mod default;
 pub mod error;
@@ -300,7 +303,11 @@ pub enum TypespaceTrait {
 }
 
 impl TypespaceTrait {
-    pub(crate) fn render(&self, settings: &Settings) -> proc_macro2::TokenStream {
+    pub(crate) fn render(
+        &self,
+        settings: &Settings,
+        out: &mut Outputspace,
+    ) -> proc_macro2::TokenStream {
         if settings.std == Std::FullyQualified {
             match self {
                 // TypespaceTrait::Clone => quote! { ::std::clone::Clone },
@@ -309,9 +316,22 @@ impl TypespaceTrait {
                 // TypespaceTrait::Copy => quote! { ::std::marker::Copy },
                 TypespaceTrait::Copy => quote! { Copy },
                 TypespaceTrait::Debug => quote! { Debug },
-                TypespaceTrait::Serialize => quote! { ::serde::Serialize },
-                TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
-                TypespaceTrait::JsonSchema => quote! { schemars::JsonSchema },
+                TypespaceTrait::Serialize => {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
+                    quote! { #serde::Serialize }
+                }
+                TypespaceTrait::Deserialize => {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
+                    quote! { #serde::Deserialize }
+                }
+                // Written without its leading `::` under this setting.
+                TypespaceTrait::JsonSchema => {
+                    let schemars = out.crate_path(GeneratedCrate::Schemars);
+                    let unrooted = schemars.to_string().trim_start_matches("::").to_string();
+                    let schemars = syn::parse_str::<syn::Path>(&unrooted)
+                        .expect("a crate path without its leading colons is a path");
+                    quote! { #schemars::JsonSchema }
+                }
                 // TypespaceTrait::Eq => quote! { ::std::cmp::Eq },
                 // TypespaceTrait::PartialEq => quote! { ::std::cmp::PartialEq },
                 // TypespaceTrait::Hash => quote! { ::std::hash::Hash },
@@ -332,9 +352,18 @@ impl TypespaceTrait {
                 TypespaceTrait::Clone => quote! { Clone },
                 TypespaceTrait::Copy => quote! { Copy },
                 TypespaceTrait::Debug => quote! { Debug },
-                TypespaceTrait::Serialize => quote! { ::serde::Serialize },
-                TypespaceTrait::Deserialize => quote! { ::serde::Deserialize },
-                TypespaceTrait::JsonSchema => quote! { ::schemars::JsonSchema },
+                TypespaceTrait::Serialize => {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
+                    quote! { #serde::Serialize }
+                }
+                TypespaceTrait::Deserialize => {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
+                    quote! { #serde::Deserialize }
+                }
+                TypespaceTrait::JsonSchema => {
+                    let schemars = out.crate_path(GeneratedCrate::Schemars);
+                    quote! { #schemars::JsonSchema }
+                }
                 TypespaceTrait::Ord => quote! { Ord },
                 TypespaceTrait::PartialOrd => quote! { PartialOrd },
                 TypespaceTrait::Eq => quote! { Eq },
@@ -505,6 +534,7 @@ pub enum TraitProvision {
 pub struct TypespaceBuilder<Id> {
     types: BTreeMap<Id, Type<Id>>,
     settings: Settings,
+    dependencies: Vec<codespace::Dependency>,
 }
 
 impl<Id> Default for TypespaceBuilder<Id> {
@@ -521,7 +551,19 @@ impl<Id> TypespaceBuilder<Id> {
         Self {
             types: Default::default(),
             settings,
+            dependencies: Vec::new(),
         }
+    }
+
+    /// Record a crate the consumer's native types need.
+    ///
+    /// typespace reports the crates required by the code it generates; any
+    /// dependencies introcued by [`build::Native`] types are the consumer's to
+    /// specify. Every dependency recorded here is reported by
+    /// [`Typespace::to_codespace`] alongside typespace's own, merged by crate
+    /// name as [`codespace::Codespace::add_dependency`] merges them.
+    pub fn add_dependency(&mut self, dependency: codespace::Dependency) {
+        self.dependencies.push(dependency);
     }
 }
 
@@ -619,7 +661,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Panics if `id`--or any type ID it references transitively
     /// through container types--has not been inserted.
     pub fn ident(&self, id: &Id) -> TokenStream {
-        self.renderer().render_ident(id)
+        // A query renders into an output it then drops.
+        self.renderer()
+            .render_ident(id, &mut Outputspace::new(&self.settings))
     }
 
     /// Like [`TypespaceBuilder::ident`], with named types qualified by
@@ -629,7 +673,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// Panics under the same conditions as [`TypespaceBuilder::ident`].
     pub fn ident_in(&self, id: &Id, scope: &str) -> TokenStream {
-        self.renderer().render_ident_with_scope(id, Some(scope))
+        self.renderer().render_ident_with_scope(
+            id,
+            Some(scope),
+            &mut Outputspace::new(&self.settings),
+        )
     }
 
     /// Render the identifier of an inserted type as a function
@@ -650,7 +698,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         scope: Option<&str>,
         lifetime: Option<&str>,
     ) -> TokenStream {
-        self.renderer().render_parameter_ident(id, scope, lifetime)
+        self.renderer().render_parameter_ident(
+            id,
+            scope,
+            lifetime,
+            &mut Outputspace::new(&self.settings),
+        )
     }
 
     fn renderer(&self) -> TypespaceRenderer<'_, Id> {
@@ -1222,6 +1275,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         let Self {
             mut types,
             settings,
+            dependencies,
         } = self;
 
         build_commons(&mut types);
@@ -1235,8 +1289,31 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         trait_resolution::resolve_from_string_irrefutable(&mut types);
         trait_resolution::resolve_traits(&mut types, &settings, &default_checks)?;
 
-        Ok(Typespace { types, settings })
+        Ok(Typespace {
+            types,
+            settings,
+            dependencies,
+        })
     }
+}
+
+/// The crate a type path is written from; see [`path_crate`].
+fn type_crate(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(type_path) => path_crate(&type_path.path),
+        _ => None,
+    }
+}
+
+/// The crate a path is written from: its first segment when it starts
+/// with `::`, and nothing for a bare or relative path or for a path
+/// into the toolchain's own crates.
+fn path_crate(path: &syn::Path) -> Option<String> {
+    let root = path
+        .leading_colon
+        .and_then(|_| path.segments.first())
+        .map(|segment| segment.ident.to_string())?;
+    (!["std", "core", "alloc"].contains(&root.as_str())).then_some(root)
 }
 
 /// A `make_box_id` argument for [`TypespaceBuilder::finalize`] that
@@ -1256,6 +1333,8 @@ pub struct Typespace<Id> {
     pub(crate) types: BTreeMap<Id, Type<Id>>,
     /// The settings supplied at finalization, which govern rendering.
     pub settings: Settings,
+    /// The crates the consumer recorded for its native types.
+    pub(crate) dependencies: Vec<codespace::Dependency>,
 }
 
 impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
@@ -1291,8 +1370,101 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     /// routed to their own modules. Output is deterministic and
     /// unformatted; turning the codespace into a token stream or files
     /// is the caller's job from here.
+    ///
+    /// The codespace also tracks the crates its code depends on; see
+    /// [`codespace::Codespace::dependencies`]. A consumer records the
+    /// crates behind its native types with
+    /// [`TypespaceBuilder::add_dependency`].
     pub fn to_codespace(&self) -> codespace::Codespace {
-        TypespaceRenderer::new(&self.types, &self.settings).render()
+        let mut cs = TypespaceRenderer::new(&self.types, &self.settings).render();
+        for krate in self
+            .container_crates()
+            .into_iter()
+            .chain(self.foreign_derive_crates())
+        {
+            cs.add_dependency(codespace::Dependency::new(krate))
+                .expect("each crate is registered once at any version, so none can conflict");
+        }
+        for dep in &self.dependencies {
+            cs.add_dependency(dep.clone())
+                .unwrap_or_else(|conflict| panic!("{conflict}"));
+        }
+        cs
+    }
+
+    /// The crates the configured containers come from: the root of each
+    /// container path written from a crate (`::indexmap::IndexMap`), for
+    /// each container kind the graph uses. The std containers name no
+    /// crate.
+    fn container_crates(&self) -> BTreeSet<String> {
+        let mut crates = BTreeSet::new();
+        let uses = |pred: fn(&Type<Id>) -> bool| self.types.values().any(pred);
+        if uses(|typ| matches!(typ, Type::Vec(_))) {
+            crates.extend(type_crate(self.settings.vec_type.path()));
+        }
+        if uses(|typ| matches!(typ, Type::Set(_))) {
+            crates.extend(type_crate(self.settings.set_type.path()));
+        }
+        if uses(|typ| matches!(typ, Type::Map(_, _))) {
+            crates.extend(type_crate(self.settings.map_type.path()));
+        }
+        if let OptionalNullable::CustomType(container) = &self.settings.optional_nullable
+            && self
+                .types
+                .values()
+                .any(|typ| self.has_optional_option_property(typ))
+        {
+            crates.extend(type_crate(container.path()));
+        }
+        crates
+    }
+
+    /// Whether `typ` has an optional property of `Option` type, the
+    /// property the custom optional-nullable container wraps.
+    fn has_optional_option_property(&self, typ: &Type<Id>) -> bool {
+        let properties: Vec<&StructProperty<Id>> = match typ {
+            Type::Struct(struct_info) => struct_info.properties.iter().collect(),
+            Type::Enum(enum_info) => enum_info
+                .variants
+                .iter()
+                .filter_map(|variant| match &variant.details {
+                    VariantDetails::Struct(properties) => Some(properties.iter()),
+                    _ => None,
+                })
+                .flatten()
+                .collect(),
+            _ => Vec::new(),
+        };
+        properties.into_iter().any(|property| {
+            matches!(property.state, StructPropertyState::Optional)
+                && matches!(self.types.get(&property.type_id), Some(Type::Option(_)))
+        })
+    }
+
+    /// The crates the foreign derives on rendered types come from: the
+    /// root of each derive path written from a crate (`::deftly::Deftly`),
+    /// crate-wide or on one type. A bare or relative derive names
+    /// nothing the consumer has not already brought into scope.
+    fn foreign_derive_crates(&self) -> BTreeSet<String> {
+        let renders_item = |typ: &Type<Id>| typ.is_named() && !matches!(typ, Type::TypeAlias(_));
+        let mut crates = BTreeSet::new();
+        if self.types.values().any(renders_item) {
+            crates.extend(
+                self.settings
+                    .extra_derives
+                    .iter()
+                    .filter_map(|derive| path_crate(derive.path())),
+            );
+        }
+        for typ in self.types.values().filter(|typ| renders_item(typ)) {
+            crates.extend(
+                typ.extra_derives()
+                    .iter()
+                    .filter_map(|derive| syn::parse_str::<syn::Path>(derive).ok())
+                    .filter_map(|path| path_crate(&path)),
+            );
+        }
+        crates
     }
 }
 
@@ -1307,7 +1479,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     }
 
     fn render(&self) -> codespace::Codespace {
-        let mut out = Outputspace::default();
+        let mut out = Outputspace::new(self.settings);
 
         for (id, typ) in self.types {
             match typ {
@@ -1323,11 +1495,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::UnitStruct(u) => {
                     let name = u.common.built_name().to_string();
-                    out.cs().add_item(name, u.render(self));
+                    let tokens = u.render(self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 Type::TupleStruct(t) => {
                     let name = t.common.built_name().to_string();
-                    out.cs().add_item(name, t.render(id, self));
+                    let tokens = t.render(id, self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 Type::NewtypeStruct(n) => {
                     let name = n.common.built_name().to_string();
@@ -1336,7 +1510,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::TypeAlias(a) => {
                     let name = a.common.built_name().to_string();
-                    out.cs().add_item(name, a.render(self));
+                    let tokens = a.render(self, &mut out);
+                    out.cs().add_item(name, tokens);
                 }
                 _ => {}
             }
@@ -1396,16 +1571,21 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         }
     }
 
-    pub(crate) fn render_ident(&self, id: &Id) -> TokenStream {
-        self.render_ident_impl(id, None, false)
+    pub(crate) fn render_ident(&self, id: &Id, out: &mut Outputspace) -> TokenStream {
+        self.render_ident_impl(id, None, false, out)
     }
 
-    pub(crate) fn render_ident_with_scope(&self, id: &Id, scope: Option<&str>) -> TokenStream {
-        self.render_ident_impl(id, scope, false)
+    pub(crate) fn render_ident_with_scope(
+        &self,
+        id: &Id,
+        scope: Option<&str>,
+        out: &mut Outputspace,
+    ) -> TokenStream {
+        self.render_ident_impl(id, scope, false, out)
     }
 
-    pub(crate) fn render_raw_type(&self, id: &Id) -> TokenStream {
-        self.render_ident_impl(id, None, true)
+    pub(crate) fn render_raw_type(&self, id: &Id, out: &mut Outputspace) -> TokenStream {
+        self.render_ident_impl(id, None, true, out)
     }
 
     /// Whether a type gets a generated builder.
@@ -1460,6 +1640,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         id: &Id,
         scope: Option<&str>,
         lifetime: Option<&str>,
+        out: &mut Outputspace,
     ) -> TokenStream {
         let lifetime_tok = lifetime
             .map(|name| syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site()));
@@ -1468,7 +1649,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // An all-unit-variant enum is value-like, so it passes by
             // value rather than by reference.
             Type::Enum(type_enum) if type_enum.every_variant_is_unit() => {
-                self.render_ident_with_scope(id, scope)
+                self.render_ident_with_scope(id, scope, out)
             }
 
             Type::Enum(_)
@@ -1484,7 +1665,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             | Type::Set(_)
             | Type::Array(..)
             | Type::JsonValue => {
-                let ident = self.render_ident_with_scope(id, scope);
+                let ident = self.render_ident_with_scope(id, scope, out);
                 quote! { & #lifetime_tok #ident }
             }
 
@@ -1495,7 +1676,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // collapse to one level, since the inner one says nothing
             // the outer one has not already said.
             Type::Option(inner_id) => {
-                let inner = self.render_parameter_ident(inner_id, scope, lifetime);
+                let inner = self.render_parameter_ident(inner_id, scope, lifetime, out);
                 match self.types.get(inner_id).expect("invalid type id") {
                     Type::Option(_) => inner,
                     _ => {
@@ -1512,7 +1693,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::Tuple(inner_ids) => {
                 let inner = inner_ids
                     .iter()
-                    .map(|inner_id| self.render_parameter_ident(inner_id, scope, lifetime))
+                    .map(|inner_id| self.render_parameter_ident(inner_id, scope, lifetime, out))
                     .collect::<Vec<_>>();
                 // A one-element tuple needs its trailing comma, which
                 // is what separates it from a parenthesized type.
@@ -1524,7 +1705,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
 
             Type::Unit | Type::Boolean | Type::Integer(_) | Type::Float(_) | Type::Never => {
-                self.render_ident_with_scope(id, scope)
+                self.render_ident_with_scope(id, scope, out)
             }
         }
     }
@@ -1566,6 +1747,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         traits: &TypespaceTraitSet,
         extra_derives: &[String],
         comparison_exempt: bool,
+        out: &mut Outputspace,
     ) -> Option<TokenStream> {
         // Verify that traits that require manual implementation aren't
         // included as derives. If this happens it indicates that either the
@@ -1617,7 +1799,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             .filter(|tt| {
                 comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
             })
-            .map(|tt| tt.render(self.settings))
+            .map(|tt| tt.render(self.settings, out))
             // TODO 8/20/2026
             // I think that we should validate (and maybe render) these extra
             // derives from settings during finalization and store them in the
@@ -1660,6 +1842,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         id: &Id,
         scope: Option<&str>,
         base_type: bool,
+        out: &mut Outputspace,
     ) -> TokenStream {
         let ty = self.types.get(id).unwrap();
         match ty {
@@ -1688,7 +1871,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 let parameters = (!base_type && !parameters.is_empty()).then(|| {
                     let parameter_idents = parameters
                         .iter()
-                        .map(|param_id| self.render_ident_with_scope(param_id, scope));
+                        .map(|param_id| self.render_ident_with_scope(param_id, scope, out));
                     quote! {
                         < #( #parameter_idents ),* >
                     }
@@ -1699,7 +1882,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             }
 
             Type::Array(schema_ref, n) => {
-                let inner_ident = self.render_ident_with_scope(schema_ref, scope);
+                let inner_ident = self.render_ident_with_scope(schema_ref, scope, out);
                 quote! {
                     [#inner_ident; #n]
                 }
@@ -1707,7 +1890,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::Tuple(schema_refs) => {
                 let inner_idents = schema_refs
                     .iter()
-                    .map(|id| self.render_ident_with_scope(id, scope));
+                    .map(|id| self.render_ident_with_scope(id, scope, out));
                 quote! {
                     ( #( #inner_idents ),* )
                 }
@@ -1721,7 +1904,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 if base_type {
                     option_type
                 } else {
-                    let option_ident = self.render_ident_with_scope(option_id, scope);
+                    let option_ident = self.render_ident_with_scope(option_id, scope, out);
                     quote! {
                         #option_type<#option_ident>
                     }
@@ -1735,7 +1918,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 if base_type {
                     box_type
                 } else {
-                    let boxed_ident = self.render_ident_with_scope(boxed_id, scope);
+                    let boxed_ident = self.render_ident_with_scope(boxed_id, scope, out);
                     quote! {
                         #box_type<#boxed_ident>
                     }
@@ -1749,7 +1932,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 if base_type {
                     quote! { #set_type }
                 } else {
-                    let inner_ident = self.render_ident_with_scope(inner_id, scope);
+                    let inner_ident = self.render_ident_with_scope(inner_id, scope, out);
                     quote! {
                         #set_type<#inner_ident>
                     }
@@ -1760,7 +1943,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 if base_type {
                     quote! { #vec_type }
                 } else {
-                    let inner_ident = self.render_ident_with_scope(inner_id, scope);
+                    let inner_ident = self.render_ident_with_scope(inner_id, scope, out);
                     quote! {
                         #vec_type<#inner_ident>
                     }
@@ -1774,7 +1957,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 let value_ty = self.types.get(value_id).unwrap();
                 let map_type =
                     if matches!(key_ty, Type::String) && matches!(value_ty, Type::JsonValue) {
-                        quote! { ::serde_json::Map }
+                        let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                        quote! { #serde_json::Map }
                     } else {
                         let path = self.settings.map_type.rendered_path(&self.settings.std);
                         quote! { #path }
@@ -1782,8 +1966,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 if base_type {
                     map_type
                 } else {
-                    let key_ident = self.render_ident_with_scope(key_id, scope);
-                    let value_ident = self.render_ident_with_scope(value_id, scope);
+                    let key_ident = self.render_ident_with_scope(key_id, scope, out);
+                    let value_ident = self.render_ident_with_scope(value_id, scope, out);
                     quote! {
                         #map_type<#key_ident, #value_ident>
                     }
@@ -1797,9 +1981,12 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 Std::FullyQualified => quote! { ::std::string::String },
                 Std::Unqualified => quote! { String },
             },
-            Type::JsonValue => quote! { ::serde_json::Value },
+            Type::JsonValue => {
+                let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                quote! { #serde_json::Value }
+            }
             Type::Never => {
-                let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
+                let json_serde = out.crate_path(GeneratedCrate::JsonSerde);
                 quote! { #json_serde::Never }
             }
             Type::Unit => quote! { () },
@@ -1885,10 +2072,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             _ => TypeOfInterest::Other,
         };
 
-        let ty_ident = self.render_ident(type_id);
-        let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"));
-
-        let json_serde_text = self.settings.crate_paths.text(GeneratedCrate::JsonSerde);
+        let ty_ident = self.render_ident(type_id, out);
+        let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"), out);
 
         let std_opt_type = match &self.settings.std {
             Std::FullyQualified => quote! { ::std::option::Option },
@@ -1916,7 +2101,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // use the json::serde::deserialize_some function to enforce this.
             (StructPropertyState::Optional, TypeOfInterest::Other) => {
                 serde_options.push(quote! { default });
-                let deserialize_some = format!("{json_serde_text}::deserialize_some");
+                let json_serde = serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
+                let deserialize_some = format!("{json_serde}::deserialize_some");
                 serde_options.push(quote! {
                     deserialize_with = #deserialize_some
                 });
@@ -1947,7 +2133,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     }
                     OptionalNullable::DoubleOption => {
                         serde_options.push(quote! { default });
-                        let deserialize_some = format!("{json_serde_text}::deserialize_some");
+                        let json_serde =
+                            serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
+                        let deserialize_some = format!("{json_serde}::deserialize_some");
                         serde_options.push(quote! {
                             deserialize_with = #deserialize_some
                         });
@@ -1965,14 +2153,16 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     OptionalNullable::CustomType(container) => {
                         let custom_type_path = container.rendered_path(&self.settings.std);
                         serde_options.push(quote! { default });
-                        let is_absent = format!("{json_serde_text}::OptionalNullable::is_absent");
+                        let json_serde =
+                            serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
+                        let is_absent = format!("{json_serde}::OptionalNullable::is_absent");
                         serde_options.push(quote! {
                             skip_serializing_if = #is_absent
                         });
 
-                        let inner_ident = self.render_ident(inner_id);
+                        let inner_ident = self.render_ident(inner_id, out);
                         let inner_ident_scoped =
-                            self.render_ident_with_scope(inner_id, Some("super"));
+                            self.render_ident_with_scope(inner_id, Some("super"), out);
 
                         (
                             quote! { #custom_type_path<#inner_ident> },
@@ -1988,6 +2178,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     type_id,
                     ty,
                     std_opt_is_none,
+                    out,
                 );
 
                 (ty_ident, ty_ident_scoped)
@@ -2009,12 +2200,15 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // cannot be serialized (and to work around schemars bugs in
                 // all versions).
                 serde_options.push(quote! { default });
-                let always = format!("{json_serde_text}::always");
+                let json_serde = out.crate_path(GeneratedCrate::JsonSerde);
+                let always = format!(
+                    "{}::always",
+                    serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
+                );
                 serde_options.push(quote! {
                     skip_serializing_if = #always
                 });
 
-                let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
                 (
                     quote! { #json_serde::Absent },
                     quote! { #json_serde::Absent },
@@ -2076,8 +2270,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 let fn_name_str = heck::AsSnakeCase(format!("{context}_{rust_name}")).to_string();
                 let fn_name_ident = format_ident!("{}", fn_name_str);
 
-                let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"));
-                let body = self.generate_default(value, type_id);
+                let ty_for_fn = self.render_ident_with_scope(type_id, Some("super"), out);
+                let body = self.generate_default(value, type_id, out);
                 // Key the item by the CONTAINING TYPE, not by the
                 // function, which is what typify does
                 // (typify-impl/src/structs.rs, `add_item(Defaults,
@@ -2108,6 +2302,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         ty_id: &Id,
         ty: &Type<Id>,
         std_opt_is_none: String,
+        out: &mut Outputspace,
     ) {
         match ty {
             // Here we assume that the generated type for the field has an
@@ -2136,6 +2331,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     boxed_id,
                     boxed_ty,
                     std_opt_is_none,
+                    out,
                 );
             }
 
@@ -2145,7 +2341,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Type::String if self.settings.typify_compat => {}
 
             Type::Vec(_) | Type::Map(_, _) | Type::Set(_) | Type::String => {
-                let ty_raw_ident = self.render_raw_type(ty_id);
+                let ty_raw_ident = self.render_raw_type(ty_id, out);
                 let is_empty = format!("{}::is_empty", ty_raw_ident.token_print());
                 serde_options.push(quote! { skip_serializing_if = #is_empty });
             }

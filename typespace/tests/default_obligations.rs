@@ -109,7 +109,7 @@ fn generated_property_default_needs_nothing_of_its_type() {
          type",
     );
 
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream())
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream())
         .expect("rendered output parses as a Rust file");
     assert!(
         common::has_impl(&file, "Default", "Inner"),

@@ -210,3 +210,125 @@ macro_rules! implemented_traits {
         .collect::<::typespace::TypespaceTraitSet>()
     }};
 }
+
+/// Render `ts` through codespace, checking that the crates the rendered
+/// code names are exactly the crates the codespace reports.
+///
+/// The code names a crate by a leading-`::` path, in code or inside the
+/// string value of a serde attribute, or by the unrooted
+/// `schemars::JsonSchema` derive. A native's crate is the consumer's to
+/// report, not typespace's, so the crates of the natives declared in
+/// `ts` are left out of the comparison.
+pub fn codespace<Id>(ts: &typespace::Typespace<Id>) -> codespace::Codespace
+where
+    Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
+{
+    let cs = ts.to_codespace();
+    let reported = cs
+        .dependencies()
+        .map(|dep| dep.ident())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut named = std::collections::BTreeSet::new();
+    crates_named(&ts.to_codespace().into_stream(), &mut named);
+    for typ in ts.iter_types() {
+        if let typespace::view::TypeDetails::Builtin(path) = typ.details()
+            && let Some(path) = path.strip_prefix("::")
+        {
+            let mut native = std::collections::BTreeSet::new();
+            report_root(path, &mut native);
+            for root in native {
+                if !reported.contains(&root) {
+                    named.remove(&root);
+                }
+            }
+        }
+    }
+    if named != reported {
+        let rendered = ts.to_codespace().into_stream().to_string();
+        let mentions = named
+            .symmetric_difference(&reported)
+            .map(|krate| {
+                let lines = rendered
+                    .split(';')
+                    .filter(|line| line.contains(krate.as_str()))
+                    .map(|line| line.trim().chars().take(200).collect::<String>())
+                    .collect::<Vec<_>>();
+                format!("{krate}: {lines:#?}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        panic!(
+            "crates the rendered code names {named:?} differ from the crates the \
+             codespace reports {reported:?}\n{mentions}"
+        );
+    }
+    cs
+}
+
+/// Add to `out` the root of every crate path in `tokens`.
+fn crates_named(tokens: &proc_macro2::TokenStream, out: &mut std::collections::BTreeSet<String>) {
+    use proc_macro2::{Spacing, TokenTree};
+
+    // Whether a `::` at this point starts a path: after nothing, a
+    // keyword, or punctuation other than a generic-closing `>`.
+    let mut open = true;
+    let mut joint: Option<char> = None;
+    let mut tokens = tokens.clone().into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        let this_joint = match &token {
+            TokenTree::Punct(punct) if punct.spacing() == Spacing::Joint => Some(punct.as_char()),
+            _ => None,
+        };
+        match token {
+            TokenTree::Group(group) => {
+                crates_named(&group.stream(), out);
+                open = false;
+            }
+            TokenTree::Ident(ident) => {
+                let ident = ident.to_string();
+                // The derive table writes `schemars::JsonSchema` unrooted.
+                if ident == "schemars" {
+                    out.insert(ident.clone());
+                }
+                open = !["self", "super", "crate", "Self"].contains(&ident.as_str())
+                    && syn::parse_str::<syn::Ident>(&ident).is_err();
+            }
+            TokenTree::Literal(literal) => {
+                if let Some(path) = literal.to_string().strip_prefix("\"::") {
+                    report_root(path, out);
+                }
+                open = false;
+            }
+            TokenTree::Punct(punct) => {
+                let is_separator = punct.as_char() == ':'
+                    && punct.spacing() == Spacing::Joint
+                    && matches!(
+                        tokens.peek(),
+                        Some(TokenTree::Punct(next)) if next.as_char() == ':'
+                    );
+                if is_separator {
+                    tokens.next();
+                    if let (true, Some(TokenTree::Ident(ident))) = (open, tokens.peek()) {
+                        report_root(&ident.to_string(), out);
+                    }
+                    open = true;
+                } else {
+                    open = !(punct.as_char() == '>' && !matches!(joint, Some('-') | Some('=')));
+                }
+            }
+        }
+        joint = this_joint;
+    }
+}
+
+/// Report the crate a path refers to, given the path after its leading
+/// `::`; toolchain crates are not dependencies.
+fn report_root(path: &str, out: &mut std::collections::BTreeSet<String>) {
+    let root = path
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .unwrap_or("");
+    if !root.is_empty() && !root.starts_with("r#") && !["std", "core", "alloc"].contains(&root) {
+        out.insert(root.to_string());
+    }
+}

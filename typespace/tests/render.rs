@@ -164,7 +164,7 @@ fn test_struct_field_serde() {
 
     let outputs = builders.into_iter().map(|(name, builder)| {
         let ts = builder.finalize(no_cycles).unwrap();
-        let out = ts.to_codespace();
+        let out = common::codespace(&ts);
 
         (name, out)
     });
@@ -261,7 +261,7 @@ fn test_unit_struct() {
 
     let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_unit_struct.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_unit_struct.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let value = import::MyUnitStruct;
         assert_eq!(serde_json::to_string(&value).unwrap(), "\"<<+>>\"");
@@ -292,7 +292,7 @@ fn test_unit_struct_float_repr() {
 
     #[check_and_include(
         "tests/output/test_unit_struct_float_repr.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         let value = import::FloatUnitStruct;
@@ -321,7 +321,7 @@ fn test_tuple_struct() {
 
     let ts = builder.finalize(no_cycles).expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_tuple_struct.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_tuple_struct.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // Serialization: rest Vec<String> is flattened into the outer sequence.
         let value = import::MyTupleStruct("hello".to_string(), 42, vec![]);
@@ -518,7 +518,7 @@ fn test_simple_enum_str_impls() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_simple_enum_str_impls.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_simple_enum_str_impls.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         assert_eq!(import::Color::Red.to_string(), "red");
         assert_eq!(import::Color::SeaGreen.to_string(), "sea green");
@@ -596,7 +596,7 @@ fn test_enum_variant_from() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_enum_variant_from.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_enum_variant_from.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         assert_eq!(import::Collide::from(true), import::Collide::Only(true));
         assert_eq!(import::Label::from(7u32), import::Label::Count(7));
@@ -630,7 +630,7 @@ fn test_enum_default_precedes_variant_from() {
 
     #[check_and_include(
         "tests/output/test_enum_default_precedes_variant_from.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(import::Choice::default(), import::Choice::Count(0));
@@ -658,7 +658,7 @@ fn test_tuple_marker_struct() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_tuple_marker_struct.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_tuple_marker_struct.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         assert_eq!(serde_json::to_string(&import::Wrapped(7)).unwrap(), "7");
         assert_eq!(serde_json::to_string(&import::Listed(7)).unwrap(), "[7]");
@@ -758,7 +758,7 @@ fn test_enum_variant_from_distinct_ids() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_enum_variant_from_distinct_ids.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_enum_variant_from_distinct_ids.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // In each enum only the u32 variant gets a From impl; the
         // payloads that render as Vec<String> suppress one another.
@@ -784,7 +784,7 @@ fn test_newtype_struct() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_newtype_struct.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_newtype_struct.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v = import::MyString("hello".to_string());
         assert_eq!(serde_json::to_string(&v).unwrap(), r#""hello""#);
@@ -821,7 +821,7 @@ fn test_type_alias() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_type_alias.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_type_alias.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v: import::MyAlias = "hello".to_string();
         assert_eq!(v, "hello");
@@ -856,7 +856,7 @@ fn test_struct_serde_rename_flatten() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_struct_serde_rename_flatten.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v: import::Outer =
             serde_json::from_str(r#"{"my-field": "hello", "value": 42}"#).unwrap();
@@ -893,7 +893,7 @@ fn test_native_type() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_native_type.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_native_type.rs", common::codespace(&ts).into_stream())]
     fn inner() {}
 }
 
@@ -982,7 +982,7 @@ fn test_compound_field_types() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_compound_field_types.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_compound_field_types.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v: import::All = serde_json::from_value(serde_json::json!({
             "a_bool": true,
@@ -1471,7 +1471,7 @@ fn test_cycles() {
         .finalize(|_: &i32| next())
         .expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_cycles.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_cycles.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let value = serde_json::json!({
             "a": {
@@ -1648,7 +1648,7 @@ fn test_container_overrides() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_container_overrides.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_container_overrides.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v: import::Containers = serde_json::from_value(serde_json::json!({
             "a_map": {"k": 1},
@@ -1710,7 +1710,7 @@ fn test_trait_impls() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_trait_impls.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_trait_impls.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // Clone, PartialEq/Eq, and Hash from with_required_trait; the foreign
         // derive expands to nothing.
@@ -1957,7 +1957,7 @@ fn test_never_in_vec() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_vec.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_vec.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::VecHolder { values: Vec::new() };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
@@ -1981,7 +1981,7 @@ fn test_never_in_set() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_set.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_set.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::SetHolder { values: Vec::new() };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
@@ -2003,7 +2003,7 @@ fn test_never_in_map_value() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_map_value.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_map_value.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::MapValueHolder {
             entries: std::collections::BTreeMap::new(),
@@ -2029,7 +2029,7 @@ fn test_never_in_map_key() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_map_key.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_map_key.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::MapKeyHolder {
             entries: std::collections::BTreeMap::new(),
@@ -2052,7 +2052,7 @@ fn test_never_nullable() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_nullable.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_nullable.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let null = import::NullableHolder { value: None };
         assert_eq!(serde_json::to_string(&null).unwrap(), r#"{"value":null}"#);
@@ -2078,7 +2078,7 @@ fn test_never_optional() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_optional.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_optional.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let value = import::OptionalHolder {
             value: ::json_serde::Absent,
@@ -2167,7 +2167,7 @@ fn test_never_optional_nullable() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_optional_nullable.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_optional_nullable.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let absent = import::OptionalNullableHolder { value: None };
         assert_eq!(serde_json::to_string(&absent).unwrap(), "{}");
@@ -2236,7 +2236,7 @@ fn test_never_in_array_zero() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_array_zero.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_array_zero.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let value = import::ArrayZeroHolder { values: [] };
         assert_eq!(serde_json::to_string(&value).unwrap(), r#"{"values":[]}"#);
@@ -2411,7 +2411,7 @@ fn test_never_optional_enum_struct_variant() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_optional_enum_struct_variant.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_optional_enum_struct_variant.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let gone = import::OptionalStructEnum::Gone {
             gone: ::json_serde::Absent,
@@ -2464,7 +2464,7 @@ fn test_never_in_nested_vec() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_nested_vec.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_nested_vec.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::NestedHolder { values: Vec::new() };
         assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
@@ -2495,7 +2495,7 @@ fn test_never_optional_vec() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_optional_vec.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_optional_vec.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let absent = import::OptionalVecHolder { values: None };
         assert_eq!(serde_json::to_string(&absent).unwrap(), "{}");
@@ -2524,7 +2524,7 @@ fn test_never_in_vec_typical_traits() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_never_in_vec_typical_traits.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_never_in_vec_typical_traits.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let empty = import::TypicalVecHolder {
             values: ::std::vec::Vec::new(),
@@ -2668,7 +2668,7 @@ fn test_deny_unknown_fields_struct() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_deny_unknown_fields_struct.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_deny_unknown_fields_struct.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let v: import::Strict = serde_json::from_str(r#"{"name": "ok"}"#).unwrap();
         assert_eq!(v.name, "ok");
@@ -2721,7 +2721,7 @@ fn test_deny_unknown_fields_enum_tags() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_deny_unknown_fields_enum_tags.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_deny_unknown_fields_enum_tags.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // External: the tag type contributes no options of its own, so
         // the composed attribute is `#[serde(deny_unknown_fields)]`.
@@ -2773,7 +2773,7 @@ fn test_deny_unknown_fields_gate() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_deny_unknown_fields_gate.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_deny_unknown_fields_gate.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // No Deserialize in the trait set, so there is nothing to
         // round-trip; this just proves the Serialize-only type still
@@ -2899,7 +2899,7 @@ fn test_serde_trait_combinations() {
 
         let ts = builder.finalize(no_cycles).unwrap();
 
-        (name, ts.to_codespace())
+        (name, common::codespace(&ts))
     });
 
     let mut codespace = Codespace::default();
@@ -2979,7 +2979,7 @@ fn test_extra_derives_combine() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_extra_derives_combine.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_extra_derives_combine.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         // Hash is required crate-wide; PartialOrd is the per-type extra.
         let a = import::Widget { x: 1 };
@@ -3030,7 +3030,7 @@ fn test_extra_derives_multi_shape() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/test_extra_derives_multi_shape.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_extra_derives_multi_shape.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         assert!(import::ShapeStruct { x: 1 } < import::ShapeStruct { x: 2 });
         assert!(import::ShapeEnum::Only(1) < import::ShapeEnum::Only(2));
@@ -3056,7 +3056,7 @@ fn test_copy_desired_fieldless_enum_gets_copy_and_clone() {
     );
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let mut derives = common::derives_of(&file, "Color");
     derives.sort();
     assert_eq!(derives, ["Clone", "Copy"]);
@@ -3081,7 +3081,7 @@ fn test_copy_desired_struct_with_string_field_drops_copy() {
     );
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     assert_eq!(common::derives_of(&file, "Widget"), ["Clone"]);
 }
 
@@ -3101,7 +3101,7 @@ fn test_copy_required_brings_clone() {
     );
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let mut derives = common::derives_of(&file, "Flag");
     derives.sort();
     assert_eq!(derives, ["Clone", "Copy"]);
@@ -3123,7 +3123,7 @@ fn test_copy_desired_renders_and_compiles() {
     });
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     assert!(
         common::derives_of(&file, "Port").contains(&"Copy".to_string()),
         "Port did not earn Copy"
@@ -3135,7 +3135,7 @@ fn test_copy_desired_renders_and_compiles() {
 
     #[check_and_include(
         "tests/output/test_copy_desired_renders_and_compiles.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         fn assert_copy<T: Copy>(_value: T) {}
@@ -3163,7 +3163,7 @@ fn test_copy_withheld_under_typify_compat() {
     });
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         !common::derives_of(&file, "Port").contains(&"Copy".to_string()),
@@ -3198,7 +3198,7 @@ fn test_string_default_skip_withheld_under_typify_compat() {
     );
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let rendered = ts.to_codespace().into_stream().to_string();
+    let rendered = common::codespace(&ts).into_stream().to_string();
     assert!(
         !rendered.contains("String::is_empty"),
         "the String skip leaked under typify_compat"
@@ -3236,7 +3236,7 @@ fn test_box_and_json_value_drop_desired_traits() {
     );
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     assert_eq!(common::derives_of(&file, "Boxed"), ["Clone"]);
     assert_eq!(common::derives_of(&file, "Blob"), ["Clone"]);
     assert_eq!(common::derives_of(&file, "Blob2"), ["Clone"]);
@@ -3258,7 +3258,7 @@ fn test_struct_builder() {
         }
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    #[check_and_include("tests/output/test_struct_builder.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_struct_builder.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let builder = import::builder::MyStruct::default();
         assert!(import::MyStruct::try_from(builder).is_err());
@@ -3319,7 +3319,7 @@ fn test_tuple_marker_extras() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    #[check_and_include("tests/output/test_tuple_marker_extras.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_tuple_marker_extras.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         assert!(import::Listed(1) < import::Listed(2));
     }
@@ -3364,7 +3364,7 @@ fn test_default_fn_names_are_snake_case() {
 
     // The name carries the enum once, not twice, and the variant name
     // and property arrive snake-cased.
-    let rendered = ts.to_codespace().into_stream().to_string();
+    let rendered = common::codespace(&ts).into_stream().to_string();
     for name in [
         "density_distribution_normal_dist_stdev",
         "density_distribution_uniform_dist_max_value",
@@ -3375,7 +3375,7 @@ fn test_default_fn_names_are_snake_case() {
 
     #[check_and_include(
         "tests/output/test_default_fn_names_are_snake_case.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         let value =
@@ -3416,7 +3416,7 @@ fn test_default_derived_all_defaulted() {
 
     #[check_and_include(
         "tests/output/test_default_derived_all_defaulted.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3454,7 +3454,7 @@ fn test_default_impl_from_property_value() {
 
     #[check_and_include(
         "tests/output/test_default_impl_from_property_value.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3508,7 +3508,7 @@ fn test_default_value_property_kinds() {
     // deserializes to the same thing.
     #[check_and_include(
         "tests/output/test_default_value_property_kinds.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3544,7 +3544,7 @@ fn test_default_value_shared_fn_alone() {
 
     #[check_and_include(
         "tests/output/test_default_value_shared_fn_alone.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(import::Switch::default(), import::Switch { on: true });
@@ -3597,7 +3597,7 @@ fn test_default_value_shared_fns_across_types() {
 
     #[check_and_include(
         "tests/output/test_default_value_shared_fns_across_types.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3647,7 +3647,7 @@ fn test_default_null_value_nullable_property() {
 
     #[check_and_include(
         "tests/output/test_default_null_value_nullable_property.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3685,7 +3685,7 @@ fn test_default_value_property_struct_kind() {
 
     #[check_and_include(
         "tests/output/test_default_value_property_struct_kind.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3714,7 +3714,7 @@ fn test_default_impossible_required_property() {
 
     #[check_and_include(
         "tests/output/test_default_impossible_required_property.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         // The property that blocks `Default` is the same one that has no
@@ -3749,7 +3749,7 @@ fn test_default_other_struct_shapes() {
 
     #[check_and_include(
         "tests/output/test_default_other_struct_shapes.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -3783,7 +3783,7 @@ fn newtype_with_an_attached_default_renders_the_impl() {
         struct Count(u32);
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
     assert!(
         rendered.contains("impl ::std::default::Default for Count"),
@@ -3834,7 +3834,7 @@ fn default_is_withheld_when_the_value_needs_an_unmet_trait() {
         struct Fine2{ x: ::ext::Readable }
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
 
     assert!(
@@ -3870,7 +3870,7 @@ fn test_default_other_struct_shapes_typify_compat() {
 
     #[check_and_include(
         "tests/output/test_default_other_struct_shapes_typify_compat.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         // TupleShape and UnitShape are neither of typify's two
@@ -3924,7 +3924,7 @@ fn test_comparison_derives_typify_compat_on() {
         }
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     let comparison_traits = ["Eq", "PartialEq", "Ord", "PartialOrd", "Hash"];
     for name in ["AllUnit", "StringWrapper"] {
@@ -3974,7 +3974,7 @@ fn test_comparison_derives_typify_compat_off() {
         }
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     let comparison_traits = ["Eq", "PartialEq", "Ord", "PartialOrd", "Hash"];
     for name in ["AllUnit", "StringWrapper", "Ordinary", "IntWrapper"] {
@@ -4005,7 +4005,7 @@ fn test_default_enum_with_default_value() {
 
     #[check_and_include(
         "tests/output/test_default_enum_with_default_value.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4042,7 +4042,7 @@ fn test_default_whole_type_value_with_required_property() {
         }
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
 
     assert!(
@@ -4093,7 +4093,7 @@ fn test_default_value_shapes_accepted() {
 
     #[check_and_include(
         "tests/output/test_default_value_shapes_accepted.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(import::Counted::from(3), import::Counted(3));
@@ -4305,7 +4305,7 @@ fn test_default_value_container_kinds() {
 
     #[check_and_include(
         "tests/output/test_default_value_container_kinds.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4349,7 +4349,7 @@ fn test_default_value_configured_containers() {
 
     #[check_and_include(
         "tests/output/test_default_value_configured_containers.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         let value = serde_json::from_str::<import::ConfiguredContainers>("{}").unwrap();
@@ -4392,7 +4392,7 @@ fn test_default_value_map_key_type() {
 
     #[check_and_include(
         "tests/output/test_default_value_map_key_type.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4452,7 +4452,7 @@ fn test_default_value_tuple_struct_kinds() {
 
     #[check_and_include(
         "tests/output/test_default_value_tuple_struct_kinds.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4524,7 +4524,7 @@ fn test_default_value_enum_tag_kinds() {
 
     #[check_and_include(
         "tests/output/test_default_value_enum_tag_kinds.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4576,7 +4576,7 @@ fn test_default_value_internal_enum_item_variant() {
 
     #[check_and_include(
         "tests/output/test_default_value_internal_enum_item_variant.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -4858,7 +4858,7 @@ fn test_default_not_actually_a_cycle() {
 
     let ts = builder.finalize(make_box_id).expect("finalize typespace");
 
-    #[check_and_include("tests/output/test_default_not_actually_a_cycle.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_default_not_actually_a_cycle.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         use import::*;
 
@@ -4943,7 +4943,7 @@ fn object_default_takes_the_properties_own_defaults() {
 
     let ts = builder.finalize(no_cycles).unwrap();
 
-    #[check_and_include("tests/output/object_default_takes_the_properties_own_defaults.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/object_default_takes_the_properties_own_defaults.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let holder = import::Holder::default();
 
@@ -5025,7 +5025,7 @@ fn test_default_untagged_backtracks_to_a_later_variant() {
 
     #[check_and_include(
         "tests/output/test_default_untagged_backtracks.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -5056,7 +5056,7 @@ fn test_render_constrained_newtype_string() {
         .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include("tests/output/test_render_constrained_newtype_string.rs", out)]
     fn inner() {
@@ -5522,7 +5522,7 @@ fn test_render_constrained_newtype_allow_list() {
 
         builder.finalize(no_cycles).unwrap()
     };
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include("tests/output/test_render_constrained_newtype_allow_list.rs", out)]
     fn inner() {
@@ -5587,7 +5587,7 @@ fn test_render_constrained_newtype_json_schema() {
 
         builder.finalize(no_cycles).unwrap()
     };
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include("tests/output/test_render_constrained_newtype_json_schema.rs", out)]
     fn inner() {
@@ -5656,7 +5656,7 @@ fn test_render_constrained_newtype_json_schema_string() {
 
         builder.finalize(no_cycles).unwrap()
     };
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include(
         "tests/output/test_render_constrained_newtype_json_schema_string.rs",
@@ -5716,7 +5716,7 @@ fn test_render_constrained_newtype_json_schema_draft() {
 
         builder.finalize(no_cycles).unwrap()
     };
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include(
         "tests/output/test_render_constrained_newtype_json_schema_draft.rs",
@@ -5765,7 +5765,7 @@ fn json_schema_constraint_without_a_draft_validates_as_draft_07() {
 
         builder.finalize(no_cycles).unwrap()
     };
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include("tests/output/test_json_schema_constraint_without_a_draft.rs", out)]
     fn inner() {
@@ -5921,7 +5921,7 @@ fn newtype_display_and_from_str_render() {
     let ts = builder
         .finalize(no_cycles)
         .expect("a newtype forwards Display and FromStr to its inner type");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "Wrapper"),
@@ -5950,7 +5950,7 @@ fn test_newtype_from_str_forwards_to_a_non_string_inner() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "Port"),
@@ -5963,7 +5963,7 @@ fn test_newtype_from_str_forwards_to_a_non_string_inner() {
 
     #[check_and_include(
         "tests/output/test_newtype_from_str_forwards_to_a_non_string_inner.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -5991,7 +5991,7 @@ fn test_newtype_from_str_wraps_a_string_inner() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    let rendered = ts.to_codespace().into_stream().to_string();
+    let rendered = common::codespace(&ts).into_stream().to_string();
 
     assert!(
         !rendered.contains(&quote! { ::std::convert::TryFrom }.to_string()),
@@ -6000,7 +6000,7 @@ fn test_newtype_from_str_wraps_a_string_inner() {
 
     #[check_and_include(
         "tests/output/test_newtype_from_str_wraps_a_string_inner.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -6024,7 +6024,7 @@ fn maximal_settings_newtype_renders() {
         struct Wrapper(String);
     });
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         file.items
@@ -6052,7 +6052,7 @@ fn untagged_enum_display_renders() {
     let ts = builder
         .finalize(no_cycles)
         .expect("an untagged item enum forwards Display to its payloads");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "U"),
@@ -6076,7 +6076,7 @@ fn untagged_enum_from_str_renders() {
     let ts = builder
         .finalize(no_cycles)
         .expect("an untagged item enum forwards FromStr to its payloads");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "FromStr", "Parsed"),
@@ -6102,7 +6102,7 @@ fn untagged_enum_with_irrefutable_payload_loses_from_str() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "StrOrInt"),
@@ -6134,7 +6134,7 @@ fn untagged_enum_with_irrefutable_payload_last_loses_from_str() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "IntOrStr"),
@@ -6204,7 +6204,7 @@ fn untagged_enum_with_pattern_constrained_payload_keeps_from_str() {
         .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "IdOrYolo"),
@@ -6240,7 +6240,7 @@ fn untagged_enum_over_string_newtypes_loses_from_str() {
         }
     );
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "FromStr", "Reference"),
@@ -6261,7 +6261,7 @@ fn untagged_enum_over_string_newtypes_loses_from_str() {
     // `FromStr` for a dead `Literal` arm to hide in.
     #[check_and_include(
         "tests/output/untagged_enum_over_string_newtypes_loses_from_str.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7036,7 +7036,7 @@ fn test_enum_derive_default() {
 
     #[check_and_include(
         "tests/output/test_enum_derive_default.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7098,7 +7098,7 @@ fn test_enum_generate_default_for_typify() {
 
     #[check_and_include(
         "tests/output/test_enum_generate_default_for_typify.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7158,7 +7158,7 @@ fn test_enum_generate_default() {
 
     #[check_and_include(
         "tests/output/test_enum_generate_default.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7194,7 +7194,7 @@ fn test_struct_defaults() {
 
     #[check_and_include(
         "tests/output/test_struct_defaults.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7234,7 +7234,7 @@ fn whole_type_default_value_populates_default_impl() {
 
     #[check_and_include(
         "tests/output/whole_type_default_value_populates_default_impl.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         assert_eq!(
@@ -7285,7 +7285,7 @@ fn test_default_fn_items_group_by_containing_type() {
     });
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
 
     let density = rendered
@@ -7325,7 +7325,7 @@ fn test_optional_nullable_custom_default() {
     let ts = builder.finalize(no_cycles).unwrap();
     #[check_and_include(
         "tests/output/test_optional_nullable_custom_default.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         use import::*;
@@ -7384,7 +7384,7 @@ fn test_tuple_struct_rest_cycles_through_a_box() {
     let ts = builder
         .finalize(no_cycles)
         .expect("finalize accepts the graph");
-    let rendered = ts.to_codespace().into_stream().to_string();
+    let rendered = common::codespace(&ts).into_stream().to_string();
 
     // The fixed field is still guaranteed; an unknown remainder count
     // leaves the upper end open.
@@ -7410,7 +7410,7 @@ fn test_tuple_struct_rest_bounds() {
 
     #[check_and_include(
         "tests/output/test_tuple_struct_rest_bounds.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         let array = schemars::schema_for!(import::Fixed).schema.array.unwrap();
@@ -7512,7 +7512,7 @@ fn a_default_value_that_is_never_rendered_requires_nothing() {
         .finalize(no_cycles)
         .expect("Holder never gets Default, so its value is never constructed");
 
-    let rendered = typespace.to_codespace().into_stream().to_string();
+    let rendered = common::codespace(&typespace).into_stream().to_string();
     assert!(
         !rendered.contains("Default for Holder"),
         "nothing required Default of Holder, so no impl should be rendered"
@@ -7538,7 +7538,7 @@ fn test_tuple_struct_schema_description() {
 
     #[check_and_include(
         "tests/output/test_tuple_struct_schema_description.rs",
-        ts.to_codespace().into_stream()
+        common::codespace(&ts).into_stream()
     )]
     fn inner() {
         let schema = serde_json::to_value(schemars::schema_for!(import::Widget)).unwrap();
@@ -7600,7 +7600,7 @@ fn test_crate_path_overrides() {
         .unwrap();
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let out = ts.to_codespace().into_stream();
+    let out = common::codespace(&ts).into_stream();
 
     #[check_and_include("tests/output/test_crate_path_overrides.rs", out)]
     fn inner() {

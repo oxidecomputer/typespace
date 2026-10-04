@@ -11,6 +11,7 @@ use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, 
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
+use crate::settings::GeneratedCrate;
 use crate::{
     DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
 };
@@ -423,7 +424,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             traits.remove(TypespaceTrait::Default);
 
             if let Some(JsonValue(default_value)) = default {
-                let body = typespace.generate_default_value_for_impl(default_value, id);
+                let body = typespace.generate_default_value_for_impl(default_value, id, out);
                 quote! {
                     impl ::std::default::Default for #name_ident {
                         fn default() -> Self {
@@ -463,7 +464,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
 
         // An ordinary struct is neither of typify's comparison-derive
         // exceptions, so it is never exempt.
-        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false, out);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let mut serde = serde_derives.attrs();
@@ -787,6 +788,7 @@ impl UnitStruct {
     pub(crate) fn render<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
+        out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
         let Self {
             common:
@@ -811,48 +813,61 @@ impl UnitStruct {
         let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
-        let repr_tokens = crate::value_tokens::value_tokens(repr);
         let repr_string = serde_json::to_string(repr).unwrap();
 
         let mut traits = traits.clone();
-        let serialize_impl = traits.remove(TypespaceTrait::Serialize).then(|| {
-            quote! {
-                impl ::serde::Serialize for #name_ident {
-                    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                    where
-                        S: ::serde::Serializer,
-                    {
-                        #repr_tokens.serialize(serializer)
-                    }
-                }
-            }
-        });
+        let serialize = traits.remove(TypespaceTrait::Serialize);
+        let deserialize = traits.remove(TypespaceTrait::Deserialize);
+        // Both impls go through the representation as a serde_json value.
+        let serde_impls = (serialize || deserialize).then(|| {
+            let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+            let serde = out.crate_path(GeneratedCrate::Serde);
+            let repr_tokens = crate::value_tokens::value_tokens(repr, &serde_json);
 
-        let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
-            quote! {
-                impl<'de> ::serde::Deserialize<'de> for #name_ident {
-                    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                    where
-                        D: ::serde::Deserializer<'de>,
-                    {
-                        let expected = #repr_tokens;
-                        let value: ::serde_json::Value =
-                            ::serde::Deserialize::deserialize(deserializer)?;
-                        if value != expected {
-                            return Err(::serde::de::Error::custom(format!(
-                                "expected unit struct value {}, found {}",
-                                #repr_string,
-                                ::serde_json::to_string(&value).unwrap())));
+            let serialize_impl = serialize.then(|| {
+                quote! {
+                    impl #serde::Serialize for #name_ident {
+                        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                        where
+                            S: #serde::Serializer,
+                        {
+                            #repr_tokens.serialize(serializer)
                         }
-                        Ok(#name_ident)
                     }
                 }
+            });
+
+            let deserialize_impl = deserialize.then(|| {
+                quote! {
+                    impl<'de> #serde::Deserialize<'de> for #name_ident {
+                        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                        where
+                            D: #serde::Deserializer<'de>,
+                        {
+                            let expected = #repr_tokens;
+                            let value: #serde_json::Value =
+                                #serde::Deserialize::deserialize(deserializer)?;
+                            if value != expected {
+                                return Err(#serde::de::Error::custom(format!(
+                                    "expected unit struct value {}, found {}",
+                                    #repr_string,
+                                    #serde_json::to_string(&value).unwrap())));
+                            }
+                            Ok(#name_ident)
+                        }
+                    }
+                }
+            });
+
+            quote! {
+                #serialize_impl
+                #deserialize_impl
             }
         });
 
         // A unit struct is neither of typify's comparison-derive
         // exceptions, so it is never exempt.
-        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false, out);
         let attrs = typespace.render_attrs(extra_attrs);
 
         // Canonical item order: see tests/item_order.rs.
@@ -862,8 +877,7 @@ impl UnitStruct {
             #derive_attr
             pub struct #name_ident;
 
-            #serialize_impl
-            #deserialize_impl
+            #serde_impls
         }
     }
 }
@@ -1034,6 +1048,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         &self,
         id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
+        out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
         let Self {
             common:
@@ -1062,9 +1077,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         let field_ident = fields
             .iter()
-            .map(|field_id| typespace.render_ident(field_id))
+            .map(|field_id| typespace.render_ident(field_id, out))
             .collect::<Vec<_>>();
-        let rest_ident = rest.as_ref().map(|rest_id| typespace.render_ident(rest_id));
+        let rest_ident = rest
+            .as_ref()
+            .map(|rest_id| typespace.render_ident(rest_id, out));
 
         let field_index = (0..fields.len()).map(syn::Index::from);
         let rest_index = rest
@@ -1083,46 +1100,50 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             .collect::<Vec<_>>();
         let expected = format!("a tuple of size {} or more", fields.len());
 
-        let json_serde = typespace
-            .settings
-            .crate_paths
-            .tokens(crate::settings::GeneratedCrate::JsonSerde);
-
         let mut traits = traits.clone();
-        let serialize_impl = traits.remove(TypespaceTrait::Serialize).then(|| {
-            let json_serde = &json_serde;
-            quote! {
-                impl ::serde::Serialize for #name_ident {
-                    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-                    where
-                        S: ::serde::Serializer,
-                    {
-                        use ::serde::ser::SerializeSeq;
-                        let mut seq = serializer.serialize_seq(None)?;
-                        #(
-                            seq.serialize_element(&self.#field_index)?;
-                        )*
-                        #(
-                            self.#rest_index.serialize(
-                                #json_serde::FlattenedSequenceSerializer::new(&mut seq)
-                            )?;
-                        )*
-                        seq.end()
+        let serialize = traits.remove(TypespaceTrait::Serialize);
+        let deserialize = traits.remove(TypespaceTrait::Deserialize);
+        let serde_impls = (serialize || deserialize).then(|| {
+            let serde = out.crate_path(GeneratedCrate::Serde);
+            // The remainder goes through json-serde's flattening helpers.
+            let json_serde = rest
+                .as_ref()
+                .map(|_| out.crate_path(GeneratedCrate::JsonSerde));
+
+            let serialize_impl = serialize.then(|| {
+                let json_serde = &json_serde;
+                quote! {
+                    impl #serde::Serialize for #name_ident {
+                        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+                        where
+                            S: #serde::Serializer,
+                        {
+                            use #serde::ser::SerializeSeq;
+                            let mut seq = serializer.serialize_seq(None)?;
+                            #(
+                                seq.serialize_element(&self.#field_index)?;
+                            )*
+                            #(
+                                self.#rest_index.serialize(
+                                    #json_serde::FlattenedSequenceSerializer::new(&mut seq)
+                                )?;
+                            )*
+                            seq.end()
+                        }
                     }
                 }
-            }
-        });
-        let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+            });
+            let deserialize_impl = deserialize.then(|| {
             let json_serde = &json_serde;
             quote! {
-                impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                impl<'de> #serde::Deserialize<'de> for #name_ident {
                     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
                     where
-                        D: ::serde::Deserializer<'de>,
+                        D: #serde::Deserializer<'de>,
                     {
                         struct Visitor;
 
-                        impl<'de> ::serde::de::Visitor<'de> for Visitor {
+                        impl<'de> #serde::de::Visitor<'de> for Visitor {
                             type Value = #name_ident;
 
                             fn expecting(&self, formatter: &mut ::std::fmt::Formatter)
@@ -1133,7 +1154,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
                             fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
                             where
-                                A: ::serde::de::SeqAccess<'de>,
+                                A: #serde::de::SeqAccess<'de>,
                             {
                                 // Strictly speaking, we don't need to store
                                 // each tuple element in a variable, but as a
@@ -1143,13 +1164,13 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                                 #(
                                     let #field_var = seq
                                         .next_element()?
-                                        .ok_or_else(|| ::serde::de::Error::invalid_length(
+                                        .ok_or_else(|| #serde::de::Error::invalid_length(
                                             #field_int,
                                             &#expected
                                         ))?;
                                 )*
                                 #(
-                                    let #rest_var = ::serde::Deserialize::deserialize(
+                                    let #rest_var = #serde::Deserialize::deserialize(
                                         #json_serde::FlattenedSequenceDeserializer::new(&mut seq)
                                     )?;
                                 )*
@@ -1166,10 +1187,17 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
 
+            quote! {
+                #serialize_impl
+                #deserialize_impl
+            }
+        });
+
         // TODO 9/10/2026
         // Do we only want to do this if `rest` is Some? Or do we want to err
         // on the side of more generated and less derive impls?
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+            let schemars = out.crate_path(GeneratedCrate::Schemars);
             let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
                 assert!(rest_ident.is_some());
                 let additional_items = quote! {
@@ -1216,19 +1244,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             });
 
             let default = default.as_ref().map(|JsonValue(value)| {
+                let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
                 let as_str = value.to_string();
-                quote! { default: Some(::serde_json::from_str(#as_str).unwrap()), }
+                quote! { default: Some(#serde_json::from_str(#as_str).unwrap()), }
             });
 
             quote! {
-                impl ::schemars::JsonSchema for #name_ident {
+                impl #schemars::JsonSchema for #name_ident {
                     fn schema_name() -> ::std::string::String {
                         #name.to_string()
                     }
 
                     fn json_schema(
-                        g: &mut ::schemars::r#gen::SchemaGenerator,
-                    ) -> ::schemars::schema::Schema {
+                        g: &mut #schemars::r#gen::SchemaGenerator,
+                    ) -> #schemars::schema::Schema {
                         let fields = [
                             #(
                                 g.subschema_for::<#field_ident>(),
@@ -1236,9 +1265,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                         ]
                             .into_iter()
                             .collect();
-                        ::schemars::schema::SchemaObject {
+                        #schemars::schema::SchemaObject {
                             metadata: Some(::std::boxed::Box::new(
-                                ::schemars::schema::Metadata {
+                                #schemars::schema::Metadata {
                                     title: Some(#name.to_string()),
                                     #schema_description
                                     #default
@@ -1246,16 +1275,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                                 }
                             )),
                             instance_type: Some(
-                                ::schemars::schema::SingleOrVec::Single(
+                                #schemars::schema::SingleOrVec::Single(
                                     ::std::boxed::Box::new(
-                                        ::schemars::schema::InstanceType::Array,
+                                        #schemars::schema::InstanceType::Array,
                                     )
                                 )
                             ),
                             array: Some(::std::boxed::Box::new(
-                                ::schemars::schema::ArrayValidation {
+                                #schemars::schema::ArrayValidation {
                                     items: Some(
-                                        ::schemars::schema::SingleOrVec::Vec(fields)
+                                        #schemars::schema::SingleOrVec::Vec(fields)
                                     ),
                                     #additional_items
                                     #max_items
@@ -1274,7 +1303,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         let default_impl = if let Some(JsonValue(value)) = default
             && traits.remove(TypespaceTrait::Default)
         {
-            let default_value = typespace.generate_default_value_for_impl(value, id);
+            let default_value = typespace.generate_default_value_for_impl(value, id, out);
             quote! {
                 impl ::std::default::Default for #name_ident {
                     fn default() -> Self {
@@ -1288,7 +1317,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
         // A tuple struct is neither of typify's comparison-derive
         // exceptions, so it is never exempt.
-        let derive_attr = typespace.render_derives(&traits, extra_derives, false);
+        let derive_attr = typespace.render_derives(&traits, extra_derives, false, out);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let rest_ident_iter = rest_ident.into_iter();
@@ -1304,8 +1333,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             );
 
             #default_impl
-            #serialize_impl
-            #deserialize_impl
+            #serde_impls
             #json_schema_impl
         }
     }
@@ -2210,7 +2238,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
-        let inner_ident = typespace.render_ident(inner);
+        let inner_ident = typespace.render_ident(inner, out);
 
         // A newtype wrapping `String` directly is typify's other
         // comparison-derive exception.
@@ -2225,7 +2253,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let default_impl = traits.contains(&TypespaceTrait::Default).then(|| {
             if let Some(JsonValue(default_value)) = default {
                 traits.remove(TypespaceTrait::Default);
-                let body = typespace.generate_default_value_for_impl(default_value, id);
+                let body = typespace.generate_default_value_for_impl(default_value, id, out);
                 quote! {
                     impl ::std::default::Default for #name_ident {
                         fn default() -> Self {
@@ -2238,7 +2266,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             }
         });
 
-        let derive_attr = typespace.render_derives(&traits, extra_derives, wraps_string);
+        let derive_attr = typespace.render_derives(&traits, extra_derives, wraps_string, out);
         let attrs = typespace.render_attrs(extra_attrs);
 
         // A newtype struct is its inner value on the wire.
@@ -2294,7 +2322,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         };
 
         let name_ident = format_ident!("{name}");
-        let inner_ident = typespace.render_ident(inner);
+        let inner_ident = typespace.render_ident(inner, out);
         let inner_type = typespace
             .types
             .get(inner)
@@ -2368,26 +2396,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
             NewtypeConstraints::AllowList(values) | NewtypeConstraints::DenyList(values) => {
                 let value_output = values
                     .iter()
-                    .map(|value| typespace.generate_default(&value.0, inner));
+                    .map(|value| typespace.generate_default(&value.0, inner, out))
+                    .collect::<Vec<_>>();
 
                 let value_string = values
                     .iter()
                     .map(|value| serde_json::to_string(&value.0).unwrap());
 
                 let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
                     quote! {
-                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                        impl<'de> #serde::Deserialize<'de> for #name_ident {
                             fn deserialize<D>(
                                 deserializer: D,
                             ) -> ::std::result::Result<Self, D::Error>
                             where
-                                D: ::serde::Deserializer<'de>,
+                                D: #serde::Deserializer<'de>,
                             {
                                 Self::try_from(
                                     <#inner_ident>::deserialize(deserializer)?,
                                 )
                                 .map_err(|e| {
-                                    <D::Error as ::serde::de::Error>::custom(
+                                    <D::Error as #serde::de::Error>::custom(
                                         e.to_string(),
                                     )
                                 })
@@ -2400,13 +2430,15 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 // impl. If it's present in the set of derives, remove it and
                 // generate something that accurately models the type.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                    let schemars = out.crate_path(GeneratedCrate::Schemars);
                     // TODO 9/7/2026
                     // I'm really not sure why typify 1 did this `from_str` stuff
                     // when we--I think--already have serde_json::Value tokens
                     // ready to go... but we can look into that later.
                     let enum_values = quote! {
                         ::std::option::Option::Some([
-                            #( ::serde_json::from_str(#value_string).unwrap(), )*
+                            #( #serde_json::from_str(#value_string).unwrap(), )*
                         ].into_iter().collect())
                     };
 
@@ -2415,7 +2447,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             schema.enum_values = #enum_values;
                         },
                         NewtypeConstraints::DenyList(_) => quote! {
-                            let not = ::schemars::schema::SchemaObject {
+                            let not = #schemars::schema::SchemaObject {
                                 enum_values: #enum_values,
                                 ..::std::default::Default::default()
                             };
@@ -2426,16 +2458,16 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                         _ => unreachable!(),
                     };
                     quote! {
-                        impl ::schemars::JsonSchema for #name_ident {
+                        impl #schemars::JsonSchema for #name_ident {
                             fn schema_name() -> ::std::string::String {
                                 #name.to_string()
                             }
 
                             fn json_schema(
-                                g: &mut ::schemars::r#gen::SchemaGenerator
-                            ) -> ::schemars::schema::Schema {
+                                g: &mut #schemars::r#gen::SchemaGenerator
+                            ) -> #schemars::schema::Schema {
                                 let mut schema =
-                                    <#inner_ident as ::schemars::JsonSchema>
+                                    <#inner_ident as #schemars::JsonSchema>
                                         ::json_schema(g)
                                         .into_object();
                                 #body
@@ -2503,12 +2535,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                let regress = typespace
-                    .settings
-                    .crate_paths
-                    .tokens(crate::settings::GeneratedCrate::Regress);
                 let pat = patterns.iter().map(|p| {
                 let err = format!("doesn't match pattern \"{}\"", p);
+                let regress = out.crate_path(GeneratedCrate::Regress);
                 let regress = &regress;
                 quote! {
                     static PATTERN: ::std::sync::LazyLock<#regress::Regex> = ::std::sync::LazyLock::new(|| {
@@ -2534,13 +2563,14 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 };
 
                 let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
                     quote! {
-                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                        impl<'de> #serde::Deserialize<'de> for #name_ident {
                             fn deserialize<D>(
                                 deserializer: D,
                             ) -> ::std::result::Result<Self, D::Error>
                             where
-                                D: ::serde::Deserializer<'de>,
+                                D: #serde::Deserializer<'de>,
                             {
                                 ::std::convert::TryFrom::try_from(
                                     ::std::string::String::deserialize(
@@ -2548,7 +2578,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                                     )?
                                 )
                                 .map_err(|e: self::error::ConversionError| {
-                                    <D::Error as ::serde::de::Error>::custom(
+                                    <D::Error as #serde::de::Error>::custom(
                                         e.to_string(),
                                     )
                                 })
@@ -2920,19 +2950,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 // through `to_value`, but it would restrict the impl to
                 // self-describing formats and write the check twice.
                 let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
                     quote! {
-                        impl<'de> ::serde::Deserialize<'de> for #name_ident {
+                        impl<'de> #serde::Deserialize<'de> for #name_ident {
                             fn deserialize<D>(
                                 deserializer: D,
                             ) -> ::std::result::Result<Self, D::Error>
                             where
-                                D: ::serde::Deserializer<'de>,
+                                D: #serde::Deserializer<'de>,
                             {
                                 Self::try_from(
                                     <#inner_ident>::deserialize(deserializer)?,
                                 )
                                 .map_err(|e| {
-                                    <D::Error as ::serde::de::Error>::custom(
+                                    <D::Error as #serde::de::Error>::custom(
                                         e.to_string(),
                                     )
                                 })
@@ -2950,6 +2981,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 // draft-07 is dropped, since the reported document
                 // declares its draft at the root.
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                    let schemars = out.crate_path(GeneratedCrate::Schemars);
                     let reported = match schema {
                         serde_json::Value::Object(map) => {
                             let mut map = map.clone();
@@ -2960,24 +2993,24 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     };
                     let reported_string = serde_json::to_string(&reported).unwrap();
                     quote! {
-                        impl ::schemars::JsonSchema for #name_ident {
+                        impl #schemars::JsonSchema for #name_ident {
                             fn schema_name() -> ::std::string::String {
                                 #name.to_string()
                             }
 
                             fn json_schema(
-                                g: &mut ::schemars::r#gen::SchemaGenerator
-                            ) -> ::schemars::schema::Schema {
+                                g: &mut #schemars::r#gen::SchemaGenerator
+                            ) -> #schemars::schema::Schema {
                                 let inner = g.subschema_for::<#inner_ident>();
-                                let constraint = ::serde_json::from_str::<
-                                    ::schemars::schema::Schema>(
+                                let constraint = #serde_json::from_str::<
+                                    #schemars::schema::Schema>(
                                         #reported_string
                                     ).unwrap();
-                                ::schemars::schema::Schema::Object(
-                                    ::schemars::schema::SchemaObject {
+                                #schemars::schema::Schema::Object(
+                                    #schemars::schema::SchemaObject {
                                         subschemas: ::std::option::Option::Some(
                                             ::std::boxed::Box::new(
-                                                ::schemars::schema::SubschemaValidation {
+                                                #schemars::schema::SubschemaValidation {
                                                     all_of: ::std::option::Option::Some(
                                                         ::std::vec![
                                                             inner,
@@ -2996,6 +3029,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
+                let jsonschema = out.crate_path(GeneratedCrate::Jsonschema);
+                let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
                 quote! {
                     #display_impl
                     #from_str_impl
@@ -3008,9 +3043,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             value: #inner_ident
                         ) -> ::std::result::Result<Self, self::error::ConversionError>
                         {
-                            #[::jsonschema::validator(schema = #schema_string #draft)]
+                            #[#jsonschema::validator(schema = #schema_string #draft)]
                             struct Schema;
-                            let json = ::serde_json::to_value(&value)
+                            let json = #serde_json::to_value(&value)
                                 .map_err(|e| e.to_string())?;
                             Schema::validate(&json).map_err(|e| e.to_string())?;
                             Ok(Self(value))

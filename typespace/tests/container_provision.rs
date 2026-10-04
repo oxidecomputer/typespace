@@ -568,9 +568,10 @@ fn desired_mismatches(position: Position, name: &str, declaration: &ContainerTyp
                              {err}"
                         )),
                         Ok(typespace) => {
-                            let file =
-                                syn::parse2::<syn::File>(typespace.to_codespace().into_stream())
-                                    .unwrap();
+                            let file = syn::parse2::<syn::File>(
+                                common::codespace(&typespace).into_stream(),
+                            )
+                            .unwrap();
                             let actual = common::implements(&file, WRAPPER, &trait_.to_string());
                             (actual != expected).then(|| {
                                 format!(
@@ -879,7 +880,7 @@ fn a_forwarded_set_stays_closed() {
     });
 
     let typespace = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(typespace.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&typespace).into_stream()).unwrap();
     let mut derives = common::derives_of(&file, "Value");
     derives.sort();
     assert_eq!(derives, ["Eq", "Ord", "PartialEq", "PartialOrd"]);
@@ -903,7 +904,7 @@ fn a_json_value_map_grants_only_what_serde_json_map_has() {
     });
 
     let typespace = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(typespace.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&typespace).into_stream()).unwrap();
     let granted = all_traits()
         .into_iter()
         .filter(|trait_| common::implements(&file, WRAPPER, &trait_.to_string()))
@@ -959,7 +960,7 @@ fn ordered_containers_render_what_they_provide() {
     });
     let typespace = builder.finalize(no_cycles).unwrap();
 
-    let file = syn::parse2::<syn::File>(typespace.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&typespace).into_stream()).unwrap();
     let mut derives = common::derives_of(&file, "Holder");
     derives.sort();
     assert_eq!(
@@ -979,7 +980,7 @@ fn ordered_containers_render_what_they_provide() {
 
     #[check_and_include(
         "tests/output/ordered_containers_render_what_they_provide.rs",
-        typespace.to_codespace().into_stream()
+        common::codespace(&typespace).into_stream()
     )]
     fn inner() {
         // Every container the holder names implements Default, whatever
@@ -1016,7 +1017,7 @@ fn hash_containers_render_what_they_provide() {
     });
     let typespace = builder.finalize(no_cycles).unwrap();
 
-    let file = syn::parse2::<syn::File>(typespace.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&typespace).into_stream()).unwrap();
     let mut derives = common::derives_of(&file, "Holder");
     derives.sort();
     assert_eq!(
@@ -1033,7 +1034,7 @@ fn hash_containers_render_what_they_provide() {
 
     #[check_and_include(
         "tests/output/hash_containers_render_what_they_provide.rs",
-        typespace.to_codespace().into_stream()
+        common::codespace(&typespace).into_stream()
     )]
     fn inner() {
         let holder = import::Holder {

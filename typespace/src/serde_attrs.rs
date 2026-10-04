@@ -15,6 +15,8 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
+use crate::output::Outputspace;
+use crate::settings::GeneratedCrate;
 use crate::{TypespaceTrait, TypespaceTraitSet};
 
 /// The serde derives an item carries.
@@ -50,6 +52,12 @@ impl SerdeDerives {
         self.deserialize
     }
 
+    /// Whether an option list renders at all: serde reads it under
+    /// either serde derive and schemars reads it under `JsonSchema`.
+    pub(crate) fn renders(self) -> bool {
+        self.serialize || self.deserialize || self.jsonschema
+    }
+
     /// An empty option list for an item with these derives.
     pub(crate) fn attrs(self) -> SerdeAttrs {
         SerdeAttrs {
@@ -74,6 +82,16 @@ impl SerdeAttrs {
     pub(crate) fn push(&mut self, option: TokenStream) {
         self.options.push(option);
     }
+
+    /// The path an option refers to `krate` by, recorded as a dependency
+    /// only if the attribute renders.
+    pub(crate) fn crate_path_text(&self, out: &mut Outputspace, krate: GeneratedCrate) -> String {
+        if self.derives.renders() {
+            out.crate_path_text(krate)
+        } else {
+            out.settings().crate_paths.text(krate)
+        }
+    }
 }
 
 impl Extend<TokenStream> for SerdeAttrs {
@@ -85,15 +103,14 @@ impl Extend<TokenStream> for SerdeAttrs {
 impl ToTokens for SerdeAttrs {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { derives, options } = self;
-        let serde = derives.serialize || derives.deserialize;
-        if !options.is_empty() {
-            if serde {
+        if !options.is_empty() && derives.renders() {
+            if derives.serialize || derives.deserialize {
                 tokens.extend(quote! {
                     #[serde(
                         #( #options ),*
                     )]
                 });
-            } else if derives.jsonschema {
+            } else {
                 tokens.extend(quote! {
                     #[schemars(
                         #( #options ),*

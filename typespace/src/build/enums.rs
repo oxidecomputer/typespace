@@ -383,7 +383,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             EnumTagType::Untagged => vec![quote! { untagged }],
         });
 
-        let variant_from = self.render_variant_from(typespace, &name_ident);
+        let variant_from = self.render_variant_from(typespace, &name_ident, out);
 
         let (default_impl, unit_default_value) =
             if derived_traits.contains(&TypespaceTrait::Default) {
@@ -391,7 +391,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     .as_ref()
                     .expect("validated type with Default among its impls must have a valid default")
                     .0;
-                let generated_default = typespace.generate_default_enum(default_value, id);
+                let generated_default = typespace.generate_default_enum(default_value, id, out);
 
                 match generated_default {
                     EnumDefault::Value(default_value) => {
@@ -430,11 +430,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
             let data = match details {
                 VariantDetails::Unit => TokenStream::new(),
                 VariantDetails::Item(item) => {
-                    let item_ident = typespace.render_ident(item);
+                    let item_ident = typespace.render_ident(item, out);
                     quote! { (#item_ident) }
                 }
                 VariantDetails::Tuple(items) => {
-                    let item_idents = items.iter().map(|item| typespace.render_ident(item));
+                    let item_idents = items.iter().map(|item| typespace.render_ident(item, out));
                     quote! { ( #( #item_idents, )* ) }
                 }
                 VariantDetails::Struct(properties) => {
@@ -458,6 +458,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 #variant_ident #data
             }
         });
+        // Rendered now, since each variant writes into `out`.
+        let rendered_variants = rendered_variants.collect::<Vec<_>>();
 
         // An unknown field is a deserialization concern, so this one is
         // held back from a Serialize-only type rather than left inert.
@@ -466,7 +468,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         }
 
         let derive_attr =
-            typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit);
+            typespace.render_derives(&derived_traits, extra_derives, every_variant_is_unit, out);
         let attrs = typespace.render_attrs(extra_attrs);
 
         let EnumSpecialImpls {
@@ -687,6 +689,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         &self,
         typespace: &TypespaceRenderer<'_, Id>,
         name_ident: &Ident,
+        out: &mut Outputspace,
     ) -> Vec<TokenStream> {
         // Key each Item and Tuple variant by the rendered form of the types
         // it carries. A key carried by more than one variant yields no impl
@@ -727,11 +730,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                 .fold(BTreeMap::new(), |mut map, (index, variant)| {
                     let key = match &variant.details {
                         VariantDetails::Item(id) => {
-                            vec![typespace.render_ident(id).to_string()]
+                            vec![typespace.render_ident(id, out).to_string()]
                         }
                         VariantDetails::Tuple(ids) => ids
                             .iter()
-                            .map(|id| typespace.render_ident(id).to_string())
+                            .map(|id| typespace.render_ident(id, out).to_string())
                             .collect::<Vec<_>>(),
                         VariantDetails::Unit | VariantDetails::Struct(_) => return map,
                     };
@@ -767,7 +770,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                         None
                     }
                     VariantDetails::Item(id) => {
-                        let payload = typespace.render_ident(id);
+                        let payload = typespace.render_ident(id, out);
                         Some(quote! {
                             impl ::std::convert::From<#payload> for #name_ident {
                                 fn from(value: #payload) -> Self {
@@ -779,7 +782,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
                     VariantDetails::Tuple(ids) => {
                         let payloads = ids
                             .iter()
-                            .map(|id| typespace.render_ident(id))
+                            .map(|id| typespace.render_ident(id, out))
                             .collect::<Vec<_>>();
                         // A one-element tuple type needs its trailing comma to
                         // be a tuple at all.

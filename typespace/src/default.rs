@@ -18,6 +18,7 @@ use crate::{
         Type, VariantDetails, integer_width,
     },
     error::{Error, PathStep, Relation},
+    output::Outputspace,
     settings::{GeneratedCrate, OptionalNullable, Settings, Std},
 };
 
@@ -216,7 +217,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         value: &serde_json::Value,
         id: &Id,
     ) -> Result<Vec<Obligation<Id>>, Error<Id>> {
-        let Self { types, settings } = self;
+        let Self {
+            types, settings, ..
+        } = self;
         check_default(types, settings, value, id)
     }
 }
@@ -243,17 +246,27 @@ where
 }
 
 impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
-    pub(crate) fn generate_default(&self, value: &serde_json::Value, id: &Id) -> TokenStream {
-        let Self { types, settings } = self;
-        generate_default(types, settings, value, id)
+    pub(crate) fn generate_default(
+        &self,
+        value: &serde_json::Value,
+        id: &Id,
+        out: &mut Outputspace,
+    ) -> TokenStream {
+        let Self {
+            types, settings, ..
+        } = self;
+        generate_default(types, settings, value, id, out)
     }
 
     pub(crate) fn generate_default_value_for_impl(
         &self,
         value: &serde_json::Value,
         id: &Id,
+        out: &mut Outputspace,
     ) -> TokenStream {
-        let Self { types, settings } = self;
+        let Self {
+            types, settings, ..
+        } = self;
         let imp = DefaultImpl {
             types,
             settings,
@@ -261,13 +274,23 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             mode: Mode::Generate,
         };
         let mut state = WalkState::new();
-        imp.default_impl(&mut state, id, value)
+        let tokens = imp
+            .default_impl(&mut state, id, value)
             .expect("an error should not be possible post-validation")
-            .expect("a value should be generated with Mode::Generate")
+            .expect("a value should be generated with Mode::Generate");
+        out.record_crates(state.crates);
+        tokens
     }
 
-    pub(crate) fn generate_default_enum(&self, value: &serde_json::Value, id: &Id) -> EnumDefault {
-        let Self { types, settings } = self;
+    pub(crate) fn generate_default_enum(
+        &self,
+        value: &serde_json::Value,
+        id: &Id,
+        out: &mut Outputspace,
+    ) -> EnumDefault {
+        let Self {
+            types, settings, ..
+        } = self;
         let imp = DefaultImpl {
             types,
             settings,
@@ -284,6 +307,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             .default_impl_enum(&mut state, enum_info, value, id)
             .expect("an error should not be possible post-validation")
             .expect("a value should be generated with Mode::Generate");
+        out.record_crates(state.crates);
 
         match (enum_default, &settings.typify_compat) {
             ((_, Some(variant_name)), false) => EnumDefault::Variant(variant_name),
@@ -297,6 +321,7 @@ fn generate_default<Id>(
     settings: &Settings,
     value: &serde_json::Value,
     id: &Id,
+    out: &mut Outputspace,
 ) -> TokenStream
 where
     Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
@@ -309,9 +334,12 @@ where
         mode: Mode::Generate,
     };
     let mut state = WalkState::new();
-    imp.default_impl(&mut state, id, value)
+    let tokens = imp
+        .default_impl(&mut state, id, value)
         .expect("an error should not be possible post-validation")
-        .expect("a value should be generated with Mode::Generate")
+        .expect("a value should be generated with Mode::Generate");
+    out.record_crates(state.crates);
+    tokens
 }
 
 pub(crate) enum EnumDefault {
@@ -352,6 +380,11 @@ struct WalkState<Id> {
     /// that trait resolution may never grant, so these are handed to
     /// `feasibility` to evaluate rather than seeded as requirements.
     obligations: Vec<Obligation<Id>>,
+    /// The crates the rendered value refers to. Most values construct
+    /// their type directly; a value that lands on a native or a JSON
+    /// value deserializes through `serde_json`, and a custom
+    /// optional-nullable container is built through `json-serde`.
+    crates: BTreeSet<GeneratedCrate>,
 }
 
 impl<Id> WalkState<Id> {
@@ -360,6 +393,7 @@ impl<Id> WalkState<Id> {
             expansion_set: Vec::new(),
             path: Vec::new(),
             obligations: Vec::new(),
+            crates: BTreeSet::new(),
         }
     }
 }
@@ -380,9 +414,23 @@ where
         }
     }
 
+    /// The path a value refers to `krate` by, recorded on the walk.
+    ///
+    /// The walk has no [`Outputspace`] of its own (it also runs to
+    /// check), so the crates it names ride in its state until a
+    /// generate entry point hands them over.
+    fn crate_path(&self, state: &mut WalkState<Id>, krate: GeneratedCrate) -> TokenStream {
+        state.crates.insert(krate);
+        self.settings.crate_paths.tokens(krate)
+    }
+
     /// Render `id`'s type, qualified for the walk's scope.
     fn render_ident(&self, id: &Id) -> TokenStream {
-        TypespaceRenderer::new(self.types, self.settings).render_ident_with_scope(id, self.scope)
+        TypespaceRenderer::new(self.types, self.settings).render_ident_with_scope(
+            id,
+            self.scope,
+            &mut Outputspace::new(self.settings),
+        )
     }
 
     /// Render `id`'s type with its generic arguments left off.
@@ -390,7 +438,8 @@ where
     /// That is how the path to one of the type's variants or
     /// associated functions is written.
     fn render_base_type(&self, id: &Id) -> TokenStream {
-        TypespaceRenderer::new(self.types, self.settings).render_raw_type(id)
+        TypespaceRenderer::new(self.types, self.settings)
+            .render_raw_type(id, &mut Outputspace::new(self.settings))
     }
 
     /// Render one of `Option`'s variants.
@@ -493,11 +542,12 @@ where
                         target: id.clone(),
                     });
                 }
+                let serde_json = self.crate_path(state, GeneratedCrate::SerdeJson);
                 let text = value.to_string();
                 Ok(self.generate(|| {
                     let type_path = self.render_ident(id);
                     quote! {
-                        ::serde_json::from_str::<#type_path>(#text)
+                        #serde_json::from_str::<#type_path>(#text)
                             .expect("invalid default provided")
                     }
                 }))
@@ -748,10 +798,11 @@ where
                 Ok(self.generate(|| quote! { #s.to_string()}))
             }
             Type::JsonValue => {
+                let serde_json = self.crate_path(state, GeneratedCrate::SerdeJson);
                 let text = value.to_string();
                 Ok(self.generate(|| {
                     quote! {
-                        ::serde_json::from_str::<::serde_json::Value>(#text)
+                        #serde_json::from_str::<#serde_json::Value>(#text)
                             .expect("invalid default provided")
                     }
                 }))
@@ -1627,7 +1678,7 @@ where
         id: &Id,
         value: &serde_json::Value,
     ) -> Result<Option<TokenStream>, Error<Id>> {
-        let json_serde = self.settings.crate_paths.tokens(GeneratedCrate::JsonSerde);
+        let json_serde = self.crate_path(state, GeneratedCrate::JsonSerde);
         if value.is_null() {
             Ok(self.generate(|| {
                 quote! {
@@ -1703,7 +1754,14 @@ mod tests {
         value: &serde_json::Value,
     ) -> String {
         check_default(types, settings, value, &id.to_string()).unwrap();
-        generate_default(types, settings, value, &id.to_string()).to_string()
+        generate_default(
+            types,
+            settings,
+            value,
+            &id.to_string(),
+            &mut Outputspace::new(settings),
+        )
+        .to_string()
     }
 
     /// Run only the check half, returning the error it produced.
@@ -1726,7 +1784,13 @@ mod tests {
         let settings = Settings::minimal();
 
         check_default(&types, &settings, &value, &id).unwrap();
-        let code = generate_default(&types, &settings, &value, &id);
+        let code = generate_default(
+            &types,
+            &settings,
+            &value,
+            &id,
+            &mut Outputspace::new(&settings),
+        );
 
         assert_eq!(code.to_string(), "()");
     }

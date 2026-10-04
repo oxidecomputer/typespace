@@ -2,15 +2,18 @@
 
 use std::collections::BTreeSet;
 
+use proc_macro2::TokenStream;
+
 use crate::default::DefaultHelper;
+use crate::settings::{GeneratedCrate, Settings};
 
 /// The destination a render pass writes into.
 ///
 /// A single `&mut Outputspace` travels the render call chain: items go
 /// into the codespace it holds, and anything a rendered type needs the
 /// whole output to carry accumulates alongside them.
-#[derive(Default)]
-pub(crate) struct Outputspace {
+pub(crate) struct Outputspace<'a> {
+    settings: &'a Settings,
     cs: codespace::Codespace,
 
     /// Shared `defaults` functions that the rendered properties call.
@@ -19,9 +22,26 @@ pub(crate) struct Outputspace {
     /// [`Outputspace::into_codespace`] defines each one once every type
     /// is rendered.
     default_helpers: BTreeSet<DefaultHelper>,
+
+    /// The crates the rendered code refers to, recorded as each path is
+    /// written through [`Outputspace::crate_path`].
+    crates: BTreeSet<GeneratedCrate>,
 }
 
-impl Outputspace {
+impl<'a> Outputspace<'a> {
+    pub(crate) fn new(settings: &'a Settings) -> Self {
+        Self {
+            settings,
+            cs: codespace::Codespace::default(),
+            default_helpers: BTreeSet::new(),
+            crates: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn settings(&self) -> &'a Settings {
+        self.settings
+    }
+
     /// The codespace that rendered items go into.
     pub(crate) fn cs(&mut self) -> &mut codespace::Codespace {
         &mut self.cs
@@ -32,12 +52,51 @@ impl Outputspace {
         self.default_helpers.insert(helper);
     }
 
-    /// Finish the output, yielding the codespace it accumulated.
+    /// The path generated code refers to `krate` by, recording that the
+    /// output depends on it.
+    ///
+    /// Call this where the code naming the crate is emitted, inside
+    /// whatever gate decides that it is (a granted trait, a present
+    /// remainder, a non-empty pattern list), never above it: a lookup
+    /// hoisted over the gate reports a crate the output may not use.
+    pub(crate) fn crate_path(&mut self, krate: GeneratedCrate) -> TokenStream {
+        self.crates.insert(krate);
+        self.settings.crate_paths.tokens(krate)
+    }
+
+    /// [`Outputspace::crate_path`] as the unspaced string a serde attribute
+    /// value takes.
+    pub(crate) fn crate_path_text(&mut self, krate: GeneratedCrate) -> String {
+        self.crates.insert(krate);
+        self.settings.crate_paths.text(krate)
+    }
+
+    /// Record crates referred to by code rendered elsewhere, such as a
+    /// default value the walk in `default.rs` produced.
+    pub(crate) fn record_crates(&mut self, crates: impl IntoIterator<Item = GeneratedCrate>) {
+        self.crates.extend(crates);
+    }
+
+    /// Finish the output, yielding the codespace it accumulated, with the
+    /// crates the code refers to registered as its dependencies: each
+    /// under its registry name, or under the root of its override when
+    /// the settings point it at another crate (an override naming a
+    /// module of the consumer's own registers nothing).
     pub(crate) fn into_codespace(self) -> codespace::Codespace {
         let Self {
+            settings,
             mut cs,
             default_helpers,
+            crates,
         } = self;
+
+        for dep in crates
+            .into_iter()
+            .filter_map(|krate| settings.crate_paths.dependency(krate))
+        {
+            cs.add_dependency(dep)
+                .expect("each crate is registered once at any version, so none can conflict");
+        }
 
         // Every property whose default value a shared function
         // produces recorded that function as it rendered; define each
