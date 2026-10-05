@@ -15,6 +15,8 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
+use crate::output::Outputspace;
+use crate::settings::GeneratedCrate;
 use crate::{TypespaceTrait, TypespaceTraitSet};
 
 /// The serde derives an item carries.
@@ -50,6 +52,11 @@ impl SerdeDerives {
         self.deserialize
     }
 
+    /// Whether any of the derives are set.
+    pub(crate) fn any(self) -> bool {
+        self.serialize || self.deserialize || self.jsonschema
+    }
+
     /// An empty option list for an item with these derives.
     pub(crate) fn attrs(self) -> SerdeAttrs {
         SerdeAttrs {
@@ -73,6 +80,16 @@ impl SerdeAttrs {
     /// Add one option, such as `rename = "my-field"`.
     pub(crate) fn push(&mut self, option: TokenStream) {
         self.options.push(option);
+    }
+
+    /// The path an option refers to `krate` by, recorded as a dependency
+    /// only if the attribute renders at all.
+    pub(crate) fn crate_path_text(&self, out: &mut Outputspace, krate: GeneratedCrate) -> String {
+        if self.derives.any() {
+            out.crate_path_text(krate)
+        } else {
+            out.settings().crate_paths.text(krate)
+        }
     }
 }
 

@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
 
+use crate::output::Outputspace;
 use crate::{Typespace, TypespaceRenderer, TypespaceTrait, build};
 
 /// A view of a type in a finalized [`Typespace`].
@@ -44,8 +45,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
 
     /// The Rust identifier for this type as a [`TokenStream`].
     pub fn ident(&self) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
-            .render_ident(self.id)
+            .render_ident(self.id, &mut Outputspace::new(&self.typespace.settings))
     }
 
     /// The Rust identifier for this type qualified by the module
@@ -56,8 +59,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// Rendering honors the typespace's settings (container overrides,
     /// `std` syntax).
     pub fn ident_in(&self, scope: &str) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         TypespaceRenderer::new(&self.typespace.types, &self.typespace.settings)
-            .render_ident_with_scope(self.id, Some(scope))
+            .render_ident_with_scope(
+                self.id,
+                Some(scope),
+                &mut Outputspace::new(&self.typespace.settings),
+            )
     }
 
     /// The Rust identifier suitable for use as a function parameter type.
@@ -76,8 +85,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
     /// `String` reads as `&'a str` while a `bool` is unchanged. The
     /// two are independent: pass either, neither, or both.
     pub fn parameter_ident(&self, scope: Option<&str>, lifetime: Option<&str>) -> TokenStream {
-        self.renderer()
-            .render_parameter_ident(self.id, scope, lifetime)
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
+        self.renderer().render_parameter_ident(
+            self.id,
+            scope,
+            lifetime,
+            &mut Outputspace::new(&self.typespace.settings),
+        )
     }
 
     /// The identifier of this type's generated builder, if it has

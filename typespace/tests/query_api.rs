@@ -2,6 +2,8 @@
 
 //! What a finalized typespace answers about the types it holds.
 
+mod common;
+
 use quote::quote;
 use typespace::build::StructPropertyState;
 use typespace::settings;
@@ -924,7 +926,7 @@ fn builder_ident_tracks_what_rendering_emits() {
     // Whether the generated code puts a type of this name in the
     // `builder` module.
     let is_rendered = |ts: &typespace::Typespace<String>, name: &str| {
-        let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream())
+        let file = syn::parse2::<syn::File>(common::codespace(ts).into_stream())
             .expect("generated code parses");
         file.items.iter().any(|item| match item {
             syn::Item::Mod(item) if item.ident == "builder" => item

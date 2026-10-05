@@ -13,6 +13,8 @@
 //! and one the active order ranks; an `impl` the ranking does not know
 //! fails the test by name rather than passing unnoticed.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;

@@ -152,7 +152,7 @@ fn a_bounded_foreign_derive_is_emitted_with_its_bounds() {
             .has_impl(TypespaceTrait::Ord)
     );
 
-    #[check_and_include("tests/output/test_bounded_foreign_derive.rs", ts.to_codespace().into_stream())]
+    #[check_and_include("tests/output/test_bounded_foreign_derive.rs", common::codespace(&ts).into_stream())]
     fn inner() {
         let a = import::Point { x: 1, y: 2 };
         let b = import::Point { x: 1, y: 3 };

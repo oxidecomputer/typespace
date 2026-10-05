@@ -6,6 +6,10 @@
 * A newtype's constraints are checked against the type it wraps at
   finalization, reported as `Error::InvalidConstraints` (#19)
 * Allow a foreign derive to be a bare (unscoped) name (#18)
+* The codespace from `Typespace::to_codespace` tracks the crates its code
+  depends on (`Codespace::dependencies`), including those a consumer records
+  for its native types with `TypespaceBuilder::add_dependency` (#22)
+* Re-export `codespace` (#22)
 
 ## [0.0.1-alpha.2] - 2026-09-28
 

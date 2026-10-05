@@ -52,7 +52,7 @@ fn desired_eq_not_granted_over_unknown_hash_key() {
     });
 
     let ts = builder.finalize(no_cycles).expect("an unknown passes");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let derives = common::derives_of(&file, "Holder");
 
     assert!(
@@ -88,7 +88,7 @@ fn box_provides_display() {
     });
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "Display", "Wrapper"),
@@ -128,7 +128,7 @@ fn json_value_property_in_default_state_renders() {
     let ts = builder
         .finalize(no_cycles)
         .expect("Value implements Default; resolution accepts this graph");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream())
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream())
         .expect("rendered output parses as a Rust file");
 
     assert!(
@@ -183,7 +183,7 @@ fn allow_list_newtype_renders_from_str_and_display() {
     let ts = builder
         .finalize(no_cycles)
         .expect("a constrained newtype realizes both traits itself");
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
 
     assert!(
         common::has_impl(&file, "FromStr", "ConstrainedString"),

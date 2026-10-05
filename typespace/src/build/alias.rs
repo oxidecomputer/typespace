@@ -6,6 +6,7 @@ use quote::{format_ident, quote};
 use crate::TypespaceRenderer;
 use crate::build::{Type, TypeCommon};
 use crate::error::Error;
+use crate::output::Outputspace;
 
 /// A type alias (`pub type Name = Target;`).
 ///
@@ -100,7 +101,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
         vec![self.target.clone()]
     }
 
-    pub(crate) fn render(&self, typespace: &TypespaceRenderer<'_, Id>) -> TokenStream {
+    pub(crate) fn render(
+        &self,
+        typespace: &TypespaceRenderer<'_, Id>,
+        out: &mut Outputspace,
+    ) -> TokenStream {
         let Self {
             common:
                 TypeCommon {
@@ -117,7 +122,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
         let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
         let name_ident = format_ident!("{name}");
 
-        let target_ident = typespace.render_ident(type_id);
+        let target_ident = typespace.render_ident(type_id, out);
 
         quote! {
             #description

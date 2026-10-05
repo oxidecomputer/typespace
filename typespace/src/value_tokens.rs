@@ -5,24 +5,24 @@ use quote::quote;
 
 /// Emit a `serde_json::Value` as a token stream that constructs the same value
 /// at runtime.
-pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
+pub fn value_tokens(value: &serde_json::Value, serde_json: &TokenStream) -> TokenStream {
     match value {
         serde_json::Value::Null => quote! {
-            ::serde_json::Value::Null
+            #serde_json::Value::Null
         },
         serde_json::Value::Bool(b) => {
             quote! {
-                ::serde_json::Value::Bool(#b)
+                #serde_json::Value::Bool(#b)
             }
         }
         serde_json::Value::Number(number) => {
             if let Some(n) = number.as_i64() {
                 quote! {
-                    ::serde_json::Value::Number(::serde_json::Number::from(#n))
+                    #serde_json::Value::Number(#serde_json::Number::from(#n))
                 }
             } else if let Some(n) = number.as_u64() {
                 quote! {
-                    ::serde_json::Value::Number(::serde_json::Number::from(#n))
+                    #serde_json::Value::Number(#serde_json::Number::from(#n))
                 }
             } else if let Some(n) = number.as_f64() {
                 // The unwrap in the emitted code cannot fire: from_f64
@@ -30,8 +30,8 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
                 // serde_json::Number cannot hold one, so any f64 read
                 // out of a Number converts back.
                 quote! {
-                    ::serde_json::Value::Number(
-                        ::serde_json::Number::from_f64(#n).unwrap()
+                    #serde_json::Value::Number(
+                        #serde_json::Number::from_f64(#n).unwrap()
                     )
                 }
             } else {
@@ -39,31 +39,31 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
                 // serde_json's arbitrary_precision feature is enabled.
                 let value_as_str = number.to_string();
                 quote! {
-                    ::serde_json::from_str::<::serde_json::Value>(
+                    #serde_json::from_str::<#serde_json::Value>(
                         #value_as_str
                     ).unwrap()
                 }
             }
         }
         serde_json::Value::String(s) => quote! {
-            ::serde_json::Value::String(#s.to_string())
+            #serde_json::Value::String(#s.to_string())
         },
         serde_json::Value::Array(values) => {
-            let elems = values.iter().map(value_tokens);
+            let elems = values.iter().map(|value| value_tokens(value, serde_json));
             quote! {
-                ::serde_json::Value::Array(vec![#(#elems),*])
+                #serde_json::Value::Array(vec![#(#elems),*])
             }
         }
         serde_json::Value::Object(map) => {
             let entries = map.iter().map(|(k, v)| {
-                let value = value_tokens(v);
+                let value = value_tokens(v, serde_json);
                 quote! {
                     (#k.to_string(), #value)
                 }
             });
             quote! {
-                ::serde_json::Value::Object(
-                    ::serde_json::Map::from_iter([#(#entries),*])
+                #serde_json::Value::Object(
+                    #serde_json::Map::from_iter([#(#entries),*])
                 )
             }
         }
@@ -73,6 +73,7 @@ pub fn value_tokens(value: &serde_json::Value) -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::value_tokens;
+    use quote::quote;
 
     /// The three number kinds that have a Rust literal form.
     ///
@@ -91,7 +92,7 @@ mod tests {
         ];
         for (literal, expected) in cases {
             let value = serde_json::from_str::<serde_json::Value>(literal).unwrap();
-            let rendered = value_tokens(&value).to_string();
+            let rendered = value_tokens(&value, &quote! { ::serde_json }).to_string();
             assert!(
                 rendered.contains(expected),
                 "{literal} rendered as {rendered}, wanted {expected}",

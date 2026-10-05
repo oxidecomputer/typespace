@@ -40,6 +40,8 @@
 //! tagged representations; an untagged enum is judged one variant at a
 //! time.
 
+mod common;
+
 use typespace::{
     TypespaceTrait,
     error::Error,
@@ -60,7 +62,7 @@ fn settings() -> Settings {
 
 /// The rendered file, from `impl Default for #name` onward.
 fn default_body(ts: &typespace::Typespace<String>, name: &str) -> String {
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
     let needle = format!("impl ::std::default::Default for {name} {{");
     let start = rendered
@@ -220,7 +222,7 @@ fn property_level_default_fills_a_flattened_struct() {
     });
 
     let ts = builder.finalize(no_cycles).unwrap();
-    let file = syn::parse2::<syn::File>(ts.to_codespace().into_stream()).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
     let rendered = prettyplease::unparse(&file);
     assert!(rendered.contains("mod defaults"), "{rendered}");
     assert!(rendered.contains("inner: super::Inner {"), "{rendered}");

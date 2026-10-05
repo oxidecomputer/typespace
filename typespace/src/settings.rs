@@ -1292,6 +1292,10 @@ pub enum GeneratedCrate {
     /// Pattern validation in constrained string newtypes.
     #[serde(rename = "regress")]
     Regress,
+    /// The `jsonschema` crate, which validates a newtype's JSON Schema
+    /// constraint at runtime.
+    #[serde(rename = "jsonschema")]
+    Jsonschema,
 }
 
 impl GeneratedCrate {
@@ -1303,6 +1307,19 @@ impl GeneratedCrate {
             GeneratedCrate::Schemars => "::schemars",
             GeneratedCrate::JsonSerde => "::json_serde",
             GeneratedCrate::Regress => "::regress",
+            GeneratedCrate::Jsonschema => "::jsonschema",
+        }
+    }
+
+    /// The crate's name on a registry.
+    pub fn package_name(&self) -> &'static str {
+        match self {
+            GeneratedCrate::Serde => "serde",
+            GeneratedCrate::SerdeJson => "serde_json",
+            GeneratedCrate::Schemars => "schemars",
+            GeneratedCrate::JsonSerde => "json-serde",
+            GeneratedCrate::Regress => "regress",
+            GeneratedCrate::Jsonschema => "jsonschema",
         }
     }
 
@@ -1315,6 +1332,7 @@ impl GeneratedCrate {
             GeneratedCrate::Schemars => quote! { ::schemars },
             GeneratedCrate::JsonSerde => quote! { ::json_serde },
             GeneratedCrate::Regress => quote! { ::regress },
+            GeneratedCrate::Jsonschema => quote! { ::jsonschema },
         }
     }
 }
@@ -1340,10 +1358,31 @@ impl std::fmt::Debug for CratePaths {
 }
 
 impl CratePaths {
-    /// The configured path for `krate`, or `None` for the canonical
-    /// path.
+    /// The configured path for `krate`, or `None` for the canonical path.
     pub fn get(&self, krate: GeneratedCrate) -> Option<&syn::Path> {
         self.0.get(&krate)
+    }
+
+    /// The dependency for generated code.
+    pub(crate) fn dependency(&self, krate: GeneratedCrate) -> Option<codespace::Dependency> {
+        let xxx = self.0.get(&krate);
+
+        let dep_name = match xxx {
+            // Default value.
+            None => krate.package_name().to_string(),
+            // Custom value for an external crate.
+            Some(path) if path.leading_colon.is_some() => path.segments.first()?.ident.to_string(),
+            // Local replacement; no dependency needed.
+            Some(_) => return None,
+        };
+
+        let mut dep = codespace::Dependency::new(dep_name);
+
+        if krate == GeneratedCrate::Serde {
+            dep.features.push("derive".to_string());
+        }
+
+        Some(dep)
     }
 
     fn set(&mut self, krate: GeneratedCrate, path: &str) {

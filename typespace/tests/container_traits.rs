@@ -2,6 +2,8 @@
 
 //! What a caller states about a container type, and what reads back.
 
+mod common;
+
 use typespace::{
     TraitProvision, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet,
     build::Type,
