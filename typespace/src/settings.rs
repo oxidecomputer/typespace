@@ -1365,9 +1365,7 @@ impl CratePaths {
 
     /// The dependency for generated code.
     pub(crate) fn dependency(&self, krate: GeneratedCrate) -> Option<codespace::Dependency> {
-        let xxx = self.0.get(&krate);
-
-        let dep_name = match xxx {
+        let dep_name = match self.0.get(&krate) {
             // Default value.
             None => krate.package_name().to_string(),
             // Custom value for an external crate.
