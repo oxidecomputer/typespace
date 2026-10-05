@@ -415,6 +415,11 @@ where
     }
 
     /// Render `id`'s type, qualified for the walk's scope.
+    ///
+    /// The walk renders into an output it ignores, even when it has one
+    /// to record on: a value constructs named types and natives, whose
+    /// idents name no crate of typespace's, and whatever else it names
+    /// is also rendered as a field or alias through the real output.
     fn render_ident(&self, id: &Id) -> TokenStream {
         TypespaceRenderer::new(self.types, self.settings).render_ident_with_scope(
             id,

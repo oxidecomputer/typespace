@@ -3,9 +3,10 @@
 use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
+use quote::ToTokens;
 
 use crate::default::DefaultHelper;
-use crate::settings::{GeneratedCrate, Settings};
+use crate::settings::{ContainerType, GeneratedCrate, Settings};
 
 /// The destination a render pass writes into.
 ///
@@ -26,6 +27,10 @@ pub(crate) struct Outputspace<'a> {
     /// The crates the rendered code refers to, recorded as each path is
     /// written through [`Outputspace::crate_path`].
     crates: BTreeSet<GeneratedCrate>,
+
+    /// The crates the paths in the settings are written from, containers
+    /// and foreign derives, recorded by root as each is written.
+    foreign: BTreeSet<String>,
 }
 
 impl<'a> Outputspace<'a> {
@@ -35,6 +40,7 @@ impl<'a> Outputspace<'a> {
             cs: codespace::Codespace::default(),
             default_helpers: BTreeSet::new(),
             crates: BTreeSet::new(),
+            foreign: BTreeSet::new(),
         }
     }
 
@@ -71,22 +77,54 @@ impl<'a> Outputspace<'a> {
         self.settings.crate_paths.text(krate)
     }
 
+    /// The path generated code refers to a configured container by,
+    /// recording the crate it is written from.
+    pub(crate) fn container<'c>(&mut self, container: &'c ContainerType) -> &'c syn::Type {
+        if let syn::Type::Path(type_path) = container.path() {
+            self.record_root(&type_path.path);
+        }
+        container.rendered_path(&self.settings.std)
+    }
+
+    /// A foreign derive's path as written, recording the crate it is
+    /// written from.
+    pub(crate) fn foreign_path(&mut self, path: &syn::Path) -> TokenStream {
+        self.record_root(path);
+        path.to_token_stream()
+    }
+
+    /// Record the crate a path is written from: its first segment when
+    /// the path starts with `::`. A bare or relative path names nothing
+    /// the consumer has not already brought into scope, and the
+    /// toolchain's own crates are not dependencies.
+    fn record_root(&mut self, path: &syn::Path) {
+        if let (Some(_), Some(segment)) = (path.leading_colon, path.segments.first()) {
+            let root = segment.ident.to_string();
+            if !["std", "core", "alloc"].contains(&root.as_str()) {
+                self.foreign.insert(root);
+            }
+        }
+    }
+
     /// Finish the output, yielding the codespace it accumulated, with the
-    /// crates the code refers to registered as its dependencies: each
-    /// under its registry name, or under the root of its override when
-    /// the settings point it at another crate (an override naming a
-    /// module of the consumer's own registers nothing).
+    /// crates the code refers to registered as its dependencies: each of
+    /// typespace's own under its registry name, or under the root of its
+    /// override when the settings point it at another crate (an override
+    /// naming a module of the consumer's own registers nothing), and
+    /// each container or foreign derive crate under its root.
     pub(crate) fn into_codespace(self) -> codespace::Codespace {
         let Self {
             settings,
             mut cs,
             default_helpers,
             crates,
+            foreign,
         } = self;
 
         for dep in crates
             .into_iter()
             .filter_map(|krate| settings.crate_paths.dependency(krate))
+            .chain(foreign.into_iter().map(codespace::Dependency::new))
         {
             cs.add_dependency(dep)
                 .expect("each crate is registered once at any version, so none can conflict");

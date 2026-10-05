@@ -303,12 +303,8 @@ pub enum TypespaceTrait {
 }
 
 impl TypespaceTrait {
-    pub(crate) fn render(
-        &self,
-        settings: &Settings,
-        out: &mut Outputspace,
-    ) -> proc_macro2::TokenStream {
-        if settings.std == Std::FullyQualified {
+    pub(crate) fn render(&self, out: &mut Outputspace) -> proc_macro2::TokenStream {
+        if out.settings().std == Std::FullyQualified {
             match self {
                 // TypespaceTrait::Clone => quote! { ::std::clone::Clone },
                 // TypespaceTrait::Debug => quote! { ::std::fmt::Debug },
@@ -666,7 +662,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     /// Panics if `id`--or any type ID it references transitively
     /// through container types--has not been inserted.
     pub fn ident(&self, id: &Id) -> TokenStream {
-        // A query renders into an output it then drops.
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         self.renderer()
             .render_ident(id, &mut Outputspace::new(&self.settings))
     }
@@ -678,6 +675,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     ///
     /// Panics under the same conditions as [`TypespaceBuilder::ident`].
     pub fn ident_in(&self, id: &Id, scope: &str) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         self.renderer().render_ident_with_scope(
             id,
             Some(scope),
@@ -703,6 +702,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         scope: Option<&str>,
         lifetime: Option<&str>,
     ) -> TokenStream {
+        // A query renders into an output it ignores in order to share a huge
+        // chunk of code.
         self.renderer().render_parameter_ident(
             id,
             scope,
@@ -1302,25 +1303,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     }
 }
 
-/// The crate a type path is written from; see [`path_crate`].
-fn type_crate(ty: &syn::Type) -> Option<String> {
-    match ty {
-        syn::Type::Path(type_path) => path_crate(&type_path.path),
-        _ => None,
-    }
-}
-
-/// The crate a path is written from: its first segment when it starts
-/// with `::`, and nothing for a bare or relative path or for a path
-/// into the toolchain's own crates.
-fn path_crate(path: &syn::Path) -> Option<String> {
-    let root = path
-        .leading_colon
-        .and_then(|_| path.segments.first())
-        .map(|segment| segment.ident.to_string())?;
-    (!["std", "core", "alloc"].contains(&root.as_str())).then_some(root)
-}
-
 /// A `make_box_id` argument for [`TypespaceBuilder::finalize`] that
 /// asserts the type graph contains no containment cycles: it panics if
 /// finalization ever needs to insert a `Box`.
@@ -1382,94 +1364,11 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Typespace<Id> {
     /// [`TypespaceBuilder::add_dependency`].
     pub fn to_codespace(&self) -> codespace::Codespace {
         let mut cs = TypespaceRenderer::new(&self.types, &self.settings).render();
-        for krate in self
-            .container_crates()
-            .into_iter()
-            .chain(self.foreign_derive_crates())
-        {
-            cs.add_dependency(codespace::Dependency::new(krate))
-                .expect("each crate is registered once at any version, so none can conflict");
-        }
         for dep in &self.dependencies {
             cs.add_dependency(dep.clone())
                 .unwrap_or_else(|conflict| panic!("{conflict}"));
         }
         cs
-    }
-
-    /// The crates the configured containers come from: the root of each
-    /// container path written from a crate (`::indexmap::IndexMap`), for
-    /// each container kind the graph uses. The std containers name no
-    /// crate.
-    fn container_crates(&self) -> BTreeSet<String> {
-        let mut crates = BTreeSet::new();
-        let uses = |pred: fn(&Type<Id>) -> bool| self.types.values().any(pred);
-        if uses(|typ| matches!(typ, Type::Vec(_))) {
-            crates.extend(type_crate(self.settings.vec_type.path()));
-        }
-        if uses(|typ| matches!(typ, Type::Set(_))) {
-            crates.extend(type_crate(self.settings.set_type.path()));
-        }
-        if uses(|typ| matches!(typ, Type::Map(_, _))) {
-            crates.extend(type_crate(self.settings.map_type.path()));
-        }
-        if let OptionalNullable::CustomType(container) = &self.settings.optional_nullable
-            && self
-                .types
-                .values()
-                .any(|typ| self.has_optional_option_property(typ))
-        {
-            crates.extend(type_crate(container.path()));
-        }
-        crates
-    }
-
-    /// Whether `typ` has an optional property of `Option` type, the
-    /// property the custom optional-nullable container wraps.
-    fn has_optional_option_property(&self, typ: &Type<Id>) -> bool {
-        let properties: Vec<&StructProperty<Id>> = match typ {
-            Type::Struct(struct_info) => struct_info.properties.iter().collect(),
-            Type::Enum(enum_info) => enum_info
-                .variants
-                .iter()
-                .filter_map(|variant| match &variant.details {
-                    VariantDetails::Struct(properties) => Some(properties.iter()),
-                    _ => None,
-                })
-                .flatten()
-                .collect(),
-            _ => Vec::new(),
-        };
-        properties.into_iter().any(|property| {
-            matches!(property.state, StructPropertyState::Optional)
-                && matches!(self.types.get(&property.type_id), Some(Type::Option(_)))
-        })
-    }
-
-    /// The crates the foreign derives on rendered types come from: the
-    /// root of each derive path written from a crate (`::deftly::Deftly`),
-    /// crate-wide or on one type. A bare or relative derive names
-    /// nothing the consumer has not already brought into scope.
-    fn foreign_derive_crates(&self) -> BTreeSet<String> {
-        let renders_item = |typ: &Type<Id>| typ.is_named() && !matches!(typ, Type::TypeAlias(_));
-        let mut crates = BTreeSet::new();
-        if self.types.values().any(renders_item) {
-            crates.extend(
-                self.settings
-                    .extra_derives
-                    .iter()
-                    .filter_map(|derive| path_crate(derive.path())),
-            );
-        }
-        for typ in self.types.values().filter(|typ| renders_item(typ)) {
-            crates.extend(
-                typ.extra_derives()
-                    .iter()
-                    .filter_map(|derive| syn::parse_str::<syn::Path>(derive).ok())
-                    .filter_map(|path| path_crate(&path)),
-            );
-        }
-        crates
     }
 }
 
@@ -1799,29 +1698,26 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         // derives and the extra derives sort together rather than the
         // extras trailing the rest, and a path named both ways appears
         // once.
-        let derives = traits
-            .iter()
-            .filter(|tt| {
-                comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
-            })
-            .map(|tt| tt.render(self.settings, out))
-            // TODO 8/20/2026
-            // I think that we should validate (and maybe render) these extra
-            // derives from settings during finalization and store them in the
-            // TypespaceRenderer.
-            .chain(
-                self.settings
-                    .extra_derives
-                    .iter()
-                    .map(|derive| derive.path().to_token_stream()),
-            )
-            .chain(extra_derives.iter().map(|derive| {
-                syn::parse_str::<syn::Path>(derive)
-                    .expect("invalid derive path")
-                    .to_token_stream()
-            }))
-            .map(|tokens| (tokens.to_string(), tokens))
-            .collect::<BTreeMap<_, _>>();
+        let mut derives = BTreeMap::new();
+        let mut add = |tokens: TokenStream| {
+            derives.insert(tokens.to_string(), tokens);
+        };
+        for tt in traits.iter().filter(|tt| {
+            comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
+        }) {
+            add(tt.render(out));
+        }
+        // TODO 8/20/2026
+        // I think that we should validate (and maybe render) these extra
+        // derives from settings during finalization and store them in the
+        // TypespaceRenderer.
+        for derive in &self.settings.extra_derives {
+            add(out.foreign_path(derive.path()));
+        }
+        for derive in extra_derives {
+            add(out
+                .foreign_path(&syn::parse_str::<syn::Path>(derive).expect("invalid derive path")));
+        }
 
         (!derives.is_empty()).then(|| {
             let derives = derives.values();
@@ -1933,7 +1829,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // Without an override, a set renders as a Vec:
                 // deduplication is not enforced, but no trait demands
                 // are made of the element type either.
-                let set_type = self.settings.set_type.rendered_path(&self.settings.std);
+                let set_type = out.container(&self.settings.set_type);
                 if base_type {
                     quote! { #set_type }
                 } else {
@@ -1944,7 +1840,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
             }
             Type::Vec(inner_id) => {
-                let vec_type = self.settings.vec_type.rendered_path(&self.settings.std);
+                let vec_type = out.container(&self.settings.vec_type);
                 if base_type {
                     quote! { #vec_type }
                 } else {
@@ -1965,7 +1861,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                         let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
                         quote! { #serde_json::Map }
                     } else {
-                        let path = self.settings.map_type.rendered_path(&self.settings.std);
+                        let path = out.container(&self.settings.map_type);
                         quote! { #path }
                     };
                 if base_type {
@@ -2156,7 +2052,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     // Trait resolution's edge classifier mirrors this
                     // condition.
                     OptionalNullable::CustomType(container) => {
-                        let custom_type_path = container.rendered_path(&self.settings.std);
+                        let custom_type_path = out.container(container);
                         serde_options.push(quote! { default });
                         let json_serde =
                             serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
