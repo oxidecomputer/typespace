@@ -2,6 +2,8 @@
 
 ## Next
 
+## [0.0.1-alpha.3] - 2026-10-04
+
 * Adds `NewtypeConstraints` for `Array`, `Integer`, and `Number` (#19)
 * A newtype's constraints are checked against the type it wraps at
   finalization, reported as `Error::InvalidConstraints` (#19)
