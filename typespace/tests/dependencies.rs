@@ -3,8 +3,8 @@
 //! The dependency list a rendered typespace reports.
 
 use typespace::build::{NewtypeConstraints, NewtypeStruct, Type};
-use typespace::settings::{GeneratedCrate, Settings};
-use typespace::{TypespaceBuilder, TypespaceTrait, no_cycles};
+use typespace::settings::{ContainerType, ForeignTrait, GeneratedCrate, Settings};
+use typespace::{TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::typespace_builder;
 
 mod common;
@@ -142,4 +142,46 @@ fn a_module_override_reports_nothing() {
     });
     let ts = builder.finalize(no_cycles).unwrap();
     assert_eq!(names(&ts), ["schemars", "serde"]);
+}
+
+/// A container configured from another crate reports that crate when a
+/// type uses the container; the std containers report nothing.
+#[test]
+fn a_configured_container_reports_its_crate() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_map_type(ContainerType::new(
+            "::indexmap::IndexMap",
+            [TypespaceTraitSet::empty(), TypespaceTraitSet::empty()],
+        ))
+        .with_set_type(ContainerType::btree_set());
+    let builder = typespace_builder!(settings, {
+        struct Thing {
+            by_name: Map<String, u32>,
+            names: Set<String>,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    assert_eq!(names(&ts), ["indexmap", "serde"]);
+}
+
+/// A foreign derive written from a crate reports that crate, whether
+/// it applies crate-wide or to one type; a bare derive reports nothing.
+#[test]
+fn a_foreign_derive_reports_its_crate() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_derive(ForeignTrait::new("::deftly::Deftly").unwrap());
+    let builder = typespace_builder!(settings, {
+        struct Thing {
+            name: String,
+        }
+
+        #[derive = ["::educe::Educe", "Bare"]]
+        struct Other {
+            name: String,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    assert_eq!(names(&ts), ["deftly", "educe", "serde"]);
 }

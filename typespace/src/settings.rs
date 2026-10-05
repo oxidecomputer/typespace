@@ -1365,9 +1365,7 @@ impl CratePaths {
 
     /// The dependency for generated code.
     pub(crate) fn dependency(&self, krate: GeneratedCrate) -> Option<codespace::Dependency> {
-        let override_path = self.0.get(&krate);
-
-        let dep_name = match override_path {
+        let dep_name = match self.0.get(&krate) {
             // Default value.
             None => krate.package_name().to_string(),
             // Custom value for an external crate.
@@ -1378,9 +1376,7 @@ impl CratePaths {
 
         let mut dep = codespace::Dependency::new(dep_name);
 
-        // The derive macros are a feature of serde itself, not of a crate
-        // that stands in for it.
-        if krate == GeneratedCrate::Serde && override_path.is_none() {
+        if krate == GeneratedCrate::Serde {
             dep.features.push("derive".to_string());
         }
 
