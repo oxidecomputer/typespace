@@ -1358,25 +1358,31 @@ impl std::fmt::Debug for CratePaths {
 }
 
 impl CratePaths {
-    /// The configured path for `krate`, or `None` for the canonical
-    /// path.
+    /// The configured path for `krate`, or `None` for the canonical path.
     pub fn get(&self, krate: GeneratedCrate) -> Option<&syn::Path> {
         self.0.get(&krate)
     }
 
-    /// The dependency generated code takes on `krate`: the crate itself
-    /// under its registry name when it renders under the canonical path,
-    /// the crate an override roots in when the override is a `::` path,
-    /// and nothing when the override names a module of the consumer's
-    /// own.
+    /// The dependency for generated code.
     pub(crate) fn dependency(&self, krate: GeneratedCrate) -> Option<codespace::Dependency> {
-        match self.0.get(&krate) {
-            None => Some(codespace::Dependency::new(krate.package_name())),
-            Some(path) if path.leading_colon.is_some() => Some(codespace::Dependency::new(
-                path.segments.first()?.ident.to_string(),
-            )),
-            Some(_) => None,
+        let xxx = self.0.get(&krate);
+
+        let dep_name = match xxx {
+            // Default value.
+            None => krate.package_name().to_string(),
+            // Custom value for an external crate.
+            Some(path) if path.leading_colon.is_some() => path.segments.first()?.ident.to_string(),
+            // Local replacement; no dependency needed.
+            Some(_) => return None,
+        };
+
+        let mut dep = codespace::Dependency::new(dep_name);
+
+        if krate == GeneratedCrate::Serde {
+            dep.features.push("derive".to_string());
         }
+
+        Some(dep)
     }
 
     fn set(&mut self, krate: GeneratedCrate, path: &str) {
