@@ -3873,14 +3873,10 @@ fn test_default_other_struct_shapes_typify_compat() {
         common::codespace(&ts).into_stream()
     )]
     fn inner() {
-        // TupleShape and UnitShape are neither of typify's two
-        // comparison-derive exceptions, so under typify_compat they no
-        // longer derive PartialEq; only construction is checked here.
         let tuple_shape = import::TupleShape("a".to_string(), 7);
         assert_eq!(tuple_shape.0, "a");
         assert_eq!(tuple_shape.1, 7);
         assert_eq!(format!("{:?}", import::UnitShape), "UnitShape");
-        // NewtypeShape wraps String, so it keeps PartialEq.
         assert_eq!(
             import::NewtypeShape::from("x".to_string()),
             import::NewtypeShape("x".to_string())
@@ -3945,6 +3941,72 @@ fn test_comparison_derives_typify_compat_on() {
             );
         }
     }
+}
+
+/// A comparison trait the consumer requires by name is written on every
+/// type under `typify_compat`: the withholding covers only what typify
+/// derived on its own, and typify always wrote a consumer's derive.
+#[test]
+fn test_required_comparison_trait_survives_typify_compat() {
+    let settings = Settings::minimal()
+        .with_typify_compat(true)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_desired_trait(TypespaceTrait::Eq)
+        .with_desired_trait(TypespaceTrait::Hash);
+
+    let builder = typespace_builder!(settings, {
+        struct Ordinary {
+            value: u32,
+        }
+
+        struct IntWrapper(u32);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+
+    for name in ["Ordinary", "IntWrapper"] {
+        let derives = common::derives_of(&file, name);
+        assert!(
+            derives.iter().any(|d| d == "PartialEq"),
+            "{name} should keep the required PartialEq: {derives:?}"
+        );
+        for trait_name in ["Eq", "Hash"] {
+            assert!(
+                !derives.iter().any(|d| d == trait_name),
+                "{name} should still not derive the merely desired {trait_name}: {derives:?}"
+            );
+        }
+    }
+}
+
+/// A per-type derive naming a trait typespace models brings the
+/// supertraits it needs: `Eq` on one type keeps `PartialEq` out of the
+/// withholding for that type alone.
+#[test]
+fn test_per_type_eq_derive_keeps_partial_eq_under_typify_compat() {
+    let settings = Settings::minimal()
+        .with_typify_compat(true)
+        .with_desired_trait(TypespaceTrait::Eq)
+        .with_desired_trait(TypespaceTrait::PartialEq);
+
+    let builder = typespace_builder!(settings, {
+        #[derive = ["Eq"]]
+        struct Keyed {
+            value: u32,
+        }
+
+        struct Plain {
+            value: u32,
+        }
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+
+    let keyed = common::derives_of(&file, "Keyed");
+    assert!(keyed.iter().any(|d| d == "Eq"), "{keyed:?}");
+    assert!(keyed.iter().any(|d| d == "PartialEq"), "{keyed:?}");
+    let plain = common::derives_of(&file, "Plain");
+    assert!(!plain.iter().any(|d| d == "PartialEq"), "{plain:?}");
 }
 
 /// The same graph as [`test_comparison_derives_typify_compat_on`], with

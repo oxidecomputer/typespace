@@ -413,7 +413,7 @@ where
 /// settings-required set, container obligations, and the serde-default and
 /// default-value seeds), so a requirement enters the queue with the
 /// supertraits it needs.
-fn expand_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
+pub(crate) fn expand_supertraits(mut traits: TypespaceTraitSet) -> TypespaceTraitSet {
     if traits.contains(&TypespaceTrait::Ord) {
         traits.add(TypespaceTrait::PartialOrd);
         traits.add(TypespaceTrait::Eq);
