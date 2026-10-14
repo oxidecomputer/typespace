@@ -2,6 +2,12 @@
 
 ## Next
 
+## [0.0.1-alpha.4] - 2026-10-14
+
+* Under `typify_compat`, a comparison trait the consumer required explicitly, or
+  specified in a type's extra derives, is derived retained; only the derives
+  that typify chose on its own are excluded (#26)
+
 ## [0.0.1-alpha.3] - 2026-10-04
 
 * Adds `NewtypeConstraints` for `Array`, `Integer`, and `Number` (#19)
