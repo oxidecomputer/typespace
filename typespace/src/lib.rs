@@ -1670,12 +1670,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             });
 
         // TYPIFY COMPAT
-        // typify derives these six only for an all-unit enum or a
-        // string newtype; everywhere else it never derives or
-        // implements them, even where a container elsewhere depends
+        // typify derives these six on its own only for an all-unit
+        // enum or a string newtype; everywhere else it never derives
+        // or implements them, even where a container elsewhere depends
         // on the type having them. typify_compat matches that outside
         // of the two exempted forms, without touching what trait
-        // resolution computed.
+        // resolution computed. A trait the consumer required by name
+        // is not typify's own choice, and typify always wrote a
+        // consumer's derive on every type, so those stay.
         //
         // Copy's rule is narrower: typify grants it to the all-unit
         // enum alone, never to a string newtype. The shared exemption
@@ -1698,12 +1700,31 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         // derives and the extra derives sort together rather than the
         // extras trailing the rest, and a path named both ways appears
         // once.
+        // What the consumer asked for by name: the crate-wide required
+        // set, and any per-type derive naming a trait typespace models,
+        // with the supertraits each implies, since `Eq` derives only
+        // over `PartialEq`.
+        let asked = trait_resolution::expand_supertraits(
+            self.settings
+                .required_traits
+                .iter()
+                .copied()
+                .chain(
+                    extra_derives
+                        .iter()
+                        .filter_map(|d| TypespaceTrait::from_path(d)),
+                )
+                .collect(),
+        );
         let mut derives = BTreeMap::new();
         let mut add = |tokens: TokenStream| {
             derives.insert(tokens.to_string(), tokens);
         };
         for tt in traits.iter().filter(|tt| {
-            comparison_exempt || !self.settings.typify_compat || !WITHHELD_TRAITS.contains(*tt)
+            comparison_exempt
+                || !self.settings.typify_compat
+                || !WITHHELD_TRAITS.contains(*tt)
+                || asked.contains(tt)
         }) {
             add(tt.render(out));
         }

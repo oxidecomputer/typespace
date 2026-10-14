@@ -17,7 +17,7 @@ impl ::std::convert::From<::std::string::String> for NewtypeShape {
         Self(value)
     }
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct TupleShape(pub ::std::string::String, pub u32);
 impl ::serde::Serialize for TupleShape {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -67,7 +67,7 @@ impl<'de> ::serde::Deserialize<'de> for TupleShape {
         deserializer.deserialize_seq(Visitor)
     }
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct UnitShape;
 impl ::serde::Serialize for UnitShape {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
