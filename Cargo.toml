@@ -7,10 +7,10 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-codespace = "0.1"
+codespace = "0.1.0"
 expectorate = "1.2.0"
 heck = "0.5.0"
-json-serde = "1"
+json-serde = "1.0.0"
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 log = "0.4.29"
 newline-converter = "0.3.0"

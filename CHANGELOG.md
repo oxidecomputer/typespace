@@ -7,7 +7,7 @@
 * Initial stable release
 * `Type::details()` identifies a `Never` as `::json_serde::Never` rather than
   `::json_serde::Absent`
-* Bumps codespace to 0.1 and json-serde to 1.0
+* codespace to 0.1 and json-serde to 1.0
 
 ## [0.0.1-alpha.4] - 2026-10-14
 
