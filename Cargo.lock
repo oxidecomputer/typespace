@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "typespace"
-version = "0.0.1-alpha.4"
+version = "0.1.0"
 dependencies = [
  "codespace",
  "expectorate",
