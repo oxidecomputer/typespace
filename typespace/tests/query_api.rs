@@ -980,7 +980,7 @@ fn builder_ident_tracks_what_rendering_emits() {
 }
 
 /// A crate-path override reaches query answers, not just rendering:
-/// `details()` names a `Never` by the configured json-serde path.
+/// `details()` names a `Never` type by the configured json-serde path.
 #[test]
 fn details_follows_the_configured_json_serde_path() {
     fn build(settings: Settings) -> typespace::Typespace<String> {
@@ -1007,7 +1007,7 @@ fn details_follows_the_configured_json_serde_path() {
     else {
         panic!("expected a builtin");
     };
-    assert_eq!(name, "::json_serde::Absent");
+    assert_eq!(name, "::json_serde::Never");
 
     let remapped = build(
         Settings::minimal()
@@ -1016,5 +1016,34 @@ fn details_follows_the_configured_json_serde_path() {
     let view::TypeDetails::Builtin(name) = remapped.get_type(&"never".to_string()).details() else {
         panic!("expected a builtin");
     };
-    assert_eq!(name, "::my_sdk::json_serde::Absent");
+    assert_eq!(name, "::my_sdk::json_serde::Never");
+}
+
+/// `details()` and `ident()` must agree on the name of a `Never` type.
+/// `Absent` is only how an optional struct property of that type renders.
+#[test]
+fn details_and_ident_agree_for_never() {
+    let mut builder = typespace::TypespaceBuilder::new(Settings::minimal());
+    builder.insert("never".to_string(), Type::Never).unwrap();
+    builder
+        .insert(
+            "holder".to_string(),
+            Struct::new()
+                .name("Holder")
+                .properties(vec![
+                    StructProperty::new("gone", "never".to_string())
+                        .with_state(StructPropertyState::Optional),
+                ])
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    let never_ti = ts.get_type(&"never".to_string());
+    let view::TypeDetails::Builtin(name) = never_ti.details() else {
+        panic!("expected a builtin");
+    };
+    let ident = never_ti.ident().to_string().replace(' ', "");
+    assert_eq!(name, ident);
 }

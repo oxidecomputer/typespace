@@ -147,7 +147,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Type<'a, Id> {
             build::Type::Float(s) => TypeDetails::Builtin(Cow::Borrowed(s.as_str())),
             build::Type::JsonValue => TypeDetails::Builtin(Cow::Borrowed("::serde_json::Value")),
             build::Type::Never => TypeDetails::Builtin(Cow::Owned(format!(
-                "{}::Absent",
+                "{}::Never",
                 self.typespace
                     .settings
                     .crate_paths
