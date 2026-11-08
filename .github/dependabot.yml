@@ -12,8 +12,5 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    commit-message:
-      prefix: chore
-      include: scope
     ignore:
       - dependency-name: dtolnay/rust-toolchain

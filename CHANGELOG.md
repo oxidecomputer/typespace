@@ -2,8 +2,12 @@
 
 ## Next
 
+## [0.1.0] - 2026-11-07
+
+* Initial stable release
 * `Type::details()` identifies a `Never` as `::json_serde::Never` rather than
   `::json_serde::Absent`
+* codespace to 0.1 and json-serde to 1.0
 
 ## [0.0.1-alpha.4] - 2026-10-14
 
@@ -50,3 +54,9 @@
 ## [0.0.1-alpha.1] - 2026-09-19
 
 * Initial release
+
+[0.1.0]: https://github.com/oxidecomputer/typespace/releases/v0.1.0
+[0.0.1-alpha.4]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.4
+[0.0.1-alpha.3]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.3
+[0.0.1-alpha.2]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.2
+[0.0.1-alpha.1]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.1
