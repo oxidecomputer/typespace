@@ -11,9 +11,10 @@ use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, 
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
-use crate::settings::GeneratedCrate;
+use crate::settings::{GeneratedCrate, path_text};
 use crate::{
-    DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
+    DefaultConstructor, RenderedStructProperty, TraitProvision, TypespaceBuilder,
+    TypespaceRenderer, TypespaceTrait,
 };
 
 /// A struct with named fields.
@@ -1199,10 +1200,28 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
             let schemars = out.crate_path(GeneratedCrate::Schemars);
             let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
-                assert!(rest_ident.is_some());
+                // For a direct standard Vec remainder, each trailing item uses
+                // the element's schema. IfParameters establishes trait availability;
+                // it does not establish how a custom container represents its items.
+                // Restrict this correction to the known standard Vec case. Custom
+                // containers (including transparent Vec wrappers or aliases) and
+                // other remainder shapes retain their existing schema behavior,
+                // which may still describe an extra array level.
+                let vec_type = &typespace.settings.vec_type;
+                let additional_item_id = match typespace.types.get(rest_id) {
+                    Some(Type::Vec(element_id))
+                        if path_text(vec_type.path()) == "::std::vec::Vec"
+                            && vec_type.provision(TypespaceTrait::JsonSchema)
+                                == TraitProvision::IfParameters =>
+                    {
+                        element_id
+                    }
+                    _ => rest_id,
+                };
+                let additional_item_ident = typespace.render_ident(additional_item_id, out);
                 let additional_items = quote! {
                     additional_items: Some(::std::boxed::Box::new(
-                        g.subschema_for::<#rest_ident>()
+                        g.subschema_for::<#additional_item_ident>()
                     )),
                 };
 

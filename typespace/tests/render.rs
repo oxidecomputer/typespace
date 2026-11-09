@@ -354,6 +354,29 @@ fn test_tuple_struct() {
 
         let schema = schemars::schema_for!(import::MyTupleStruct);
         let schema = serde_json::to_value(&schema).unwrap();
+        let validator = jsonschema::draft7::new(&schema).unwrap();
+        for tail in [vec![], vec!["a".to_string(), "b".to_string()]] {
+            let value = import::MyTupleStruct("hello".to_string(), 42, tail);
+            let json = serde_json::to_value(&value).unwrap();
+            assert!(
+                validator.is_valid(&json),
+                "flattened-tail schema must accept serializer output: {json}"
+            );
+            let round_trip: import::MyTupleStruct = serde_json::from_value(json).unwrap();
+            assert_eq!(round_trip.2, value.2);
+        }
+        assert!(
+            validator.is_valid(&serde_json::to_value(import::MyTupleStruct::default()).unwrap())
+        );
+        for invalid in [
+            serde_json::json!(["hello", 42, ["a"], ["b"]]),
+            serde_json::json!(["hello", 42, []]),
+            serde_json::json!(["hello", 42, 99]),
+            serde_json::json!(["hello"]),
+        ] {
+            assert!(!validator.is_valid(&invalid), "{invalid}");
+            assert!(serde_json::from_value::<import::MyTupleStruct>(invalid).is_err());
+        }
         let expected = serde_json::json!(
             {
                 "$schema": "http://json-schema.org/draft-07/schema#",
@@ -371,10 +394,7 @@ fn test_tuple_struct() {
                     }
                 ],
                 "additionalItems": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
+                    "type": "string"
                 },
                 "minItems": 2
             }

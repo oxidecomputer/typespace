@@ -2,6 +2,10 @@
 
 ## Next
 
+* Schemas for tuple structs with a direct standard `Vec` remainder now describe
+  each trailing element instead of the vector container. This changes schema
+  validation without changing the generated Rust representation or Serde behavior.
+
 ## [0.1.0] - 2026-11-07
 
 * Initial stable release
