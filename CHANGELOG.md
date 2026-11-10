@@ -6,6 +6,8 @@
   positional sequences and custom containers. Trailing items and length bounds
   now describe the flattened representation. This changes schema validation
   without changing the generated Rust types or Serde implementations.
+  Suffix uniqueness remains unenforced: schemas can accept duplicate tail
+  values and relax logical constraints that depend on uniqueness.
 * Opaque tuple remainder schemas require ready, Schemars-managed sequence
   references. Unavailable or cyclic references and ambiguous false targets now
   cause a contextual schema-generation panic instead of silently losing a

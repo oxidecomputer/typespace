@@ -406,6 +406,10 @@ fn custom_and_recursive_remainder_schemas() {
             serde_json::json!(["a", "a"]),
             &[serde_json::json!(["a", ["a"]]), serde_json::json!(["a", 1])],
         );
+        // Suffix uniqueness is deferred: the flattened schema accepts duplicates,
+        // while the ordinary set schema still rejects them.
+        check_schema::<import::SetTail>(&[serde_json::json!(["head", "a", "a"])], &[]);
+        check_schema::<std::collections::BTreeSet<String>>(&[], &[serde_json::json!(["a", "a"])]);
         check(
             import::Recursive(
                 42,
