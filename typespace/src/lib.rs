@@ -157,6 +157,12 @@
 //! If there are types that include implementations of fallible conversions, the
 //! `error` mod is generated to contain the error.
 //!
+//! Tuple structs that need to translate a remainder's schema share a private
+//! associated function on the first tuple struct that needs it. This keeps the
+//! helper in the same module scope as the types, preserving relative crate-path
+//! overrides, and lets disjoint generated type sets be combined without
+//! duplicate helper definitions. The function is an implementation detail.
+//!
 //! ## When `Default` requires `serde_json`
 //!
 //! Types or fields may have associated default values. The value is
@@ -2344,9 +2350,14 @@ fn array_bounds_seen<'a, Id: Ord>(
         }
         let ty = types.get(id)?;
         match ty {
-            // We could pick these types apart... but not now.
-            Type::Enum(_) | Type::UnitStruct(_) => {
+            Type::Enum(_) => {
                 return None;
+            }
+
+            // Array representations have fixed bounds; non-arrays return None.
+            Type::UnitStruct(unit) => {
+                let len = unit.repr.as_array()?.len();
+                return Some((len, Some(len)));
             }
 
             // A struct serializes as an object, not an array.
@@ -2367,23 +2378,41 @@ fn array_bounds_seen<'a, Id: Ord>(
                 };
             }
 
+            // A newtype preserves the inner representation, so its array
+            // constraints must intersect the inner length bounds. Use the
+            // greater minimum and lesser maximum so the generated schema
+            // enforces both; a missing bound adds no restriction.
+            // Draft-07 sections 6.4.3 (maxItems) and 6.4.4 (minItems):
+            // https://json-schema.org/draft-07/draft-handrews-json-schema-validation-01#rfc.section.6.4.3
             Type::NewtypeStruct(NewtypeStruct {
-                inner: inner_id, ..
-            })
-            | Type::TypeAlias(TypeAlias {
+                inner: inner_id,
+                constraints,
+                ..
+            }) => {
+                let (mut min, mut max) = array_bounds_seen(types, inner_id, seen)?;
+                if let build::NewtypeConstraints::Array {
+                    min: lower,
+                    max: upper,
+                } = constraints
+                {
+                    min = min.max(lower.unwrap_or(0));
+                    max = match (max, upper) {
+                        (Some(a), Some(b)) => Some(a.min(*b)),
+                        (a, b) => a.or(*b),
+                    };
+                }
+                return Some((min, max));
+            }
+
+            Type::TypeAlias(TypeAlias {
                 target: inner_id, ..
             })
             | Type::Box(inner_id) => {
                 id = inner_id;
             }
 
-            // If we see a native type in this position, we just hope for
-            // the best in terms of the bounds.
-            //
-            // We could do something cute here, like export its schema and
-            // then--for tuples with flattened remainders--modify the
-            // schema at runtime... but that's pretty fragile since we have
-            // no idea of the structure of the output schema.
+            // This walk only knows the type graph. Native schema constraints
+            // are applied separately when rendering a tuple remainder's schema.
             Type::Native(_) => {
                 return Some((0, None));
             }

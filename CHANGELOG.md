@@ -2,9 +2,14 @@
 
 ## Next
 
-* Schemas for tuple structs with a direct standard `Vec` remainder now describe
-  each trailing element instead of the vector container. This changes schema
-  validation without changing the generated Rust representation or Serde behavior.
+* Correct schemas for flattened tuple remainders, including aliases, wrappers,
+  positional sequences and custom containers. Trailing items and length bounds
+  now describe the flattened representation. This changes schema validation
+  without changing the generated Rust types or Serde implementations.
+* Opaque tuple remainder schemas require ready, Schemars-managed sequence
+  references. Unavailable or cyclic references and ambiguous false targets now
+  cause a contextual schema-generation panic instead of silently losing a
+  constraint or treating an in-progress definition as a finished schema.
 
 ## [0.1.0] - 2026-11-07
 

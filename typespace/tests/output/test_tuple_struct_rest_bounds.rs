@@ -23,7 +23,7 @@ impl ::schemars::JsonSchema for Fixed {
                 ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
                     items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
-                        ::std::boxed::Box::new(g.subschema_for::<[u32; 3usize]>()),
+                        ::std::boxed::Box::new(g.subschema_for::<u32>()),
                     ),
                     max_items: Some(4u32),
                     min_items: Some(4u32),
@@ -43,7 +43,9 @@ impl ::schemars::JsonSchema for Nested {
     fn json_schema(
         g: &mut ::schemars::r#gen::SchemaGenerator,
     ) -> ::schemars::schema::Schema {
-        let fields = [g.subschema_for::<String>()].into_iter().collect();
+        let fields = [g.subschema_for::<String>(), g.subschema_for::<u32>()]
+            .into_iter()
+            .collect();
         ::schemars::schema::SchemaObject {
             metadata: Some(
                 ::std::boxed::Box::new(::schemars::schema::Metadata {
@@ -60,7 +62,7 @@ impl ::schemars::JsonSchema for Nested {
                 ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
                     items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
-                        ::std::boxed::Box::new(g.subschema_for::<Fixed>()),
+                        ::std::boxed::Box::new(g.subschema_for::<u32>()),
                     ),
                     max_items: Some(5u32),
                     min_items: Some(5u32),

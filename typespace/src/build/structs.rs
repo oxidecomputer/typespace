@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
-use proc_macro2::{Literal, TokenStream};
+use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, validate_ident};
@@ -13,8 +13,7 @@ use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
 use crate::settings::{GeneratedCrate, path_text};
 use crate::{
-    DefaultConstructor, RenderedStructProperty, TraitProvision, TypespaceBuilder,
-    TypespaceRenderer, TypespaceTrait,
+    DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
 };
 
 /// A struct with named fields.
@@ -1194,44 +1193,47 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             }
         });
 
-        // TODO 9/10/2026
-        // Do we only want to do this if `rest` is Some? Or do we want to err
-        // on the side of more generated and less derive impls?
+        let mut schema_helper_impl = TokenStream::new();
+        // TODO 11/10/2026
+        // Consider deriving JsonSchema for remainder-free tuple structs where
+        // the derive matches the generated schema. One-field TupleStructs must
+        // still describe arrays, unlike the default derive for newtypes.
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
             let schemars = out.crate_path(GeneratedCrate::Schemars);
+            // Accumulate schema-building expressions, starting with the fixed
+            // prefix. array_items may append positional fields from nested
+            // remainders, add constraints and select the shared utility's owner.
+            // The quoted subschema calls run later, in the generated code.
+            let mut array_schema = ArraySchema {
+                fields: field_ident
+                    .iter()
+                    .map(|ident| quote! { g.subschema_for::<#ident>() })
+                    .collect(),
+                constraints: Vec::new(),
+                owner: name_ident.clone(),
+                helper: None,
+            };
             let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
-                // For a direct standard Vec remainder, each trailing item uses
-                // the element's schema. IfParameters establishes trait availability;
-                // it does not establish how a custom container represents its items.
-                // Restrict this correction to the known standard Vec case. Custom
-                // containers (including transparent Vec wrappers or aliases) and
-                // other remainder shapes retain their existing schema behavior,
-                // which may still describe an extra array level.
-                let vec_type = &typespace.settings.vec_type;
-                let additional_item_id = match typespace.types.get(rest_id) {
-                    Some(Type::Vec(element_id))
-                        if path_text(vec_type.path()) == "::std::vec::Vec"
-                            && vec_type.provision(TypespaceTrait::JsonSchema)
-                                == TraitProvision::IfParameters =>
-                    {
-                        element_id
-                    }
-                    _ => rest_id,
-                };
-                let additional_item_ident = typespace.render_ident(additional_item_id, out);
+                let item_schema =
+                    typespace.array_items(rest_id, &mut array_schema, out, &mut BTreeSet::new());
                 let additional_items = quote! {
                     additional_items: Some(::std::boxed::Box::new(
-                        g.subschema_for::<#additional_item_ident>()
+                        #item_schema
                     )),
                 };
 
+                // Remainder bounds include its nested fields, so add only the
+                // original prefix length here to avoid counting them twice.
                 let array_bounds = typespace.array_bounds(rest_id);
                 let len = fields.len();
 
+                // Unknown remainder bounds must not make a known positional
+                // prefix optional, including fields from nested tuple structs.
                 let min = match array_bounds {
                     Some((min, _)) => len + min,
                     _ => len,
-                } as u32;
+                }
+                .max(array_schema.fields.len()) as u32;
                 let max = match array_bounds {
                     Some((_, Some(max))) => Some((len + max) as u32),
                     _ => None,
@@ -1256,6 +1258,46 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                     quote! { max_items: Some(#len), },
                 )
             };
+            // Construction is complete. Move the accumulated parts into
+            // immutable bindings for rendering; the candidate owner is no
+            // longer needed, since helper records the selected owner.
+            let ArraySchema {
+                fields: schema_fields,
+                constraints,
+                helper,
+                ..
+            } = array_schema;
+            if helper.as_ref() == Some(&name_ident) {
+                let helper = prefix_array_schema(&schemars);
+                schema_helper_impl = quote! {
+                    impl #name_ident {
+                        #helper
+                    }
+                };
+            }
+            let schema_panics = helper.is_some().then(|| {
+                quote! {
+                    /// # Panics
+                    ///
+                    /// When shifting a remainder schema past a nonempty prefix,
+                    /// panics if a sequence-level reference is unavailable in the
+                    /// schema generator, forms a cycle, or targets a false
+                    /// definition. Schemars also uses
+                    /// false for in-progress definitions, so intentional false
+                    /// schemas must be supplied inline. Referenced targets must be
+                    /// ready before the remainder's JsonSchema method returns.
+                    /// Only references managed by the schema generator are supported.
+                    /// References within element schemas are preserved unchanged.
+                }
+            });
+            let subschemas = (!constraints.is_empty()).then(|| {
+                quote! {
+                    subschemas: Some(::std::boxed::Box::new(#schemars::schema::SubschemaValidation {
+                        all_of: Some(vec![ #( #constraints, )* ]),
+                        ..::std::default::Default::default()
+                    })),
+                }
+            });
             let schema_description = description.as_ref().map(|desc| {
                 quote! {
                     description: Some(#desc.to_string()),
@@ -1274,13 +1316,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                         #name.to_string()
                     }
 
+                    #schema_panics
                     fn json_schema(
                         g: &mut #schemars::r#gen::SchemaGenerator,
                     ) -> #schemars::schema::Schema {
                         let fields = [
-                            #(
-                                g.subschema_for::<#field_ident>(),
-                            )*
+                            #( #schema_fields, )*
                         ]
                             .into_iter()
                             .collect();
@@ -1311,6 +1352,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                                     ..::std::default::Default::default()
                                 }
                             )),
+                            #subschemas
                             ..::std::default::Default::default()
                         }
                         .into()
@@ -1352,6 +1394,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             );
 
             #default_impl
+            #schema_helper_impl
             #serde_impls
             #json_schema_impl
         }
@@ -1374,6 +1417,418 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         }
 
         children
+    }
+}
+
+/// Schema fragments for a tuple struct's flattened remainder.
+struct ArraySchema {
+    fields: Vec<TokenStream>,
+    constraints: Vec<TokenStream>,
+    /// The tuple currently being rendered; it can host the utility if needed.
+    owner: Ident,
+    /// The shared utility's owner, when runtime schema translation is needed.
+    helper: Option<Ident>,
+}
+
+impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRenderer<'a, Id> {
+    /// Like array_bounds, follow wrappers and tuple remainders, stopping at
+    /// each element's type.
+    fn array_items(
+        &self,
+        id: &'a Id,
+        schema: &mut ArraySchema,
+        out: &mut Outputspace,
+        seen: &mut BTreeSet<&'a Id>,
+    ) -> TokenStream {
+        // TODO 11/10/2026
+        // Consider sharing the structural traversal with array_bounds. Separate
+        // walks keep the implementation simpler for now; array_bounds also serves
+        // default validation without rendering dependencies. Review both walks
+        // when adding or changing remainder shapes.
+        let schemars = out.crate_path(GeneratedCrate::Schemars);
+        if !seen.insert(id) {
+            // A cycle consisting only of wrappers has no known item layout.
+            // Element recursion, such as Vec<Node>, never follows this edge.
+            return quote! { #schemars::schema::Schema::Bool(true) };
+        }
+
+        let element_schema = |id, out: &mut Outputspace| {
+            let ident = self.render_ident(id, out);
+            quote! { g.subschema_for::<#ident>() }
+        };
+        match &self.types[id] {
+            Type::Box(inner) => return self.array_items(inner, schema, out, seen),
+            Type::TypeAlias(alias) => {
+                return self.array_items(&alias.target, schema, out, seen);
+            }
+            Type::NewtypeStruct(newtype) => {
+                // The constraints apply to the suffix at this point, before
+                // any positional fields belonging to the inner type.
+                let constraint = match &newtype.constraints {
+                    NewtypeConstraints::None | NewtypeConstraints::Array { .. } => None,
+                    NewtypeConstraints::JsonSchema(JsonValue(value)) => Some(value.clone()),
+                    NewtypeConstraints::AllowList(values)
+                    | NewtypeConstraints::DenyList(values) => {
+                        let values = values
+                            .iter()
+                            .map(|JsonValue(value)| value)
+                            .collect::<Vec<_>>();
+                        let allowed = serde_json::json!({"enum": values});
+                        Some(
+                            if matches!(&newtype.constraints, NewtypeConstraints::DenyList(_)) {
+                                serde_json::json!({"not": allowed})
+                            } else {
+                                allowed
+                            },
+                        )
+                    }
+                    _ => None,
+                };
+                if let Some(constraint) = constraint {
+                    let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                    let constraint = constraint.to_string();
+                    let offset = schema.fields.len() as u32;
+                    let helper = out.array_schema_helper_owner(&schema.owner);
+                    schema.helper = Some(helper.clone());
+                    schema.constraints.push(quote! {
+                        #helper::__typespace_prefix_array_schema(
+                            #serde_json::from_str(#constraint).unwrap(), #offset, g,
+                        ).unwrap_or_else(|error| panic!(
+                            "cannot generate schema for `{}`: {error}",
+                            <Self as #schemars::JsonSchema>::schema_name(),
+                        )).0
+                    });
+                }
+                return self.array_items(&newtype.inner, schema, out, seen);
+            }
+            Type::TupleStruct(tuple) => {
+                for field in &tuple.fields {
+                    schema.fields.push(element_schema(field, out));
+                }
+                if let Some(rest) = &tuple.rest {
+                    return self.array_items(rest, schema, out, seen);
+                }
+            }
+            Type::Tuple(fields) => {
+                for field in fields {
+                    schema.fields.push(element_schema(field, out));
+                }
+            }
+            Type::Array(element, len) => {
+                // An empty array does not require a schema for its element.
+                // Otherwise the bounds supply its length, so its homogeneous
+                // items need not be expanded into individual positional fields.
+                if *len != 0 {
+                    return element_schema(element, out);
+                }
+            }
+            Type::UnitStruct(unit) if unit.repr.is_array() => {
+                let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
+                for value in unit.repr.as_array().unwrap() {
+                    let value = crate::value_tokens::value_tokens(value, &serde_json);
+                    schema.fields.push(quote! {
+                        #schemars::schema::SchemaObject {
+                            const_value: Some(#value),
+                            ..::std::default::Default::default()
+                        }.into()
+                    });
+                }
+            }
+            Type::Vec(element) | Type::Set(element)
+                if (match &self.types[id] {
+                    Type::Vec(_) => path_text(self.settings.vec_type.path()) == "::std::vec::Vec",
+                    _ => matches!(
+                        path_text(self.settings.set_type.path()).as_str(),
+                        "::std::collections::BTreeSet" | "::std::collections::HashSet"
+                    ),
+                }) && crate::has_trait(
+                    self.types,
+                    self.settings,
+                    element,
+                    TypespaceTrait::JsonSchema,
+                    &mut BTreeSet::new(),
+                ) =>
+            {
+                return element_schema(element, out);
+            }
+            Type::Vec(_)
+            | Type::Set(_)
+            | Type::Native(_)
+            | Type::Option(_)
+            | Type::Enum(_)
+            | Type::JsonValue => {
+                // A configured container can report an item schema without
+                // its Rust parameter implementing JsonSchema. Use its schema,
+                // including its own constraints, rather than imposing a bound.
+                let ident = self.render_ident(id, out);
+                let offset = schema.fields.len() as u32;
+                let helper = out.array_schema_helper_owner(&schema.owner);
+                schema.helper = Some(helper.clone());
+                schema.constraints.push(quote! {
+                    {
+                        // Ask for the inline schema, as JsonSchema documents,
+                        // without adding a reference to the container itself.
+                        let remainder = <#ident as #schemars::JsonSchema>::json_schema(g);
+                        #helper::__typespace_prefix_array_schema(
+                            remainder, #offset, g,
+                        ).unwrap_or_else(|error| panic!(
+                            "cannot generate schema for `{}`: {error}",
+                            <Self as #schemars::JsonSchema>::schema_name(),
+                        )).0
+                    }
+                });
+                return quote! { #schemars::schema::Schema::Bool(true) };
+            }
+            _ => {
+                // These types cannot serialize through a sequence adapter.
+                schema
+                    .constraints
+                    .push(quote! { #schemars::schema::Schema::Bool(false) });
+            }
+        }
+        quote! { #schemars::schema::Schema::Bool(false) }
+    }
+}
+
+/// Emit the shared utility that translates a suffix schema at runtime, after
+/// opaque JsonSchema implementations have supplied their schemas. The utility
+/// is an associated function on one existing tuple struct, selected by Outputspace.
+/// Only schemas of the sequence itself are translated; item schemas and their
+/// references stay intact. Schemars resolves its own definition references.
+/// The second result says whether the translation is exact: a relaxed suffix
+/// uniqueness constraint cannot safely be negated or used to count alternatives.
+/// Reference failures are reported separately; only the infallible JsonSchema
+/// method turns them into a panic with the generated type's name.
+fn prefix_array_schema(schemars: &TokenStream) -> TokenStream {
+    quote! {
+        /// Translate a suffix schema into constraints on its enclosing array.
+        ///
+        /// The caller must enforce the array type, validate the positional
+        /// prefix, and require at least `prefix_len` elements. Only constraints
+        /// on the suffix as a whole are shifted; element schemas and references
+        /// within them are preserved.
+        ///
+        /// The second result is true for an exact translation. False means
+        /// suffix uniqueness or a boolean combination was relaxed, so the
+        /// result must not be negated or used to count matching alternatives.
+        ///
+        /// # Errors
+        ///
+        /// For a nonempty prefix, sequence-level references must resolve to
+        /// available Schemars definitions and must not form a reference cycle.
+        /// Referenced false is also rejected: Schemars uses false while building
+        /// a definition and cannot distinguish it from a finished false target.
+        /// Intentional false schemas must be provided inline.
+        fn __typespace_prefix_array_schema(
+            schema: #schemars::schema::Schema,
+            prefix_len: u32,
+            g: &#schemars::r#gen::SchemaGenerator,
+        ) -> ::std::result::Result<
+            (#schemars::schema::Schema, bool), ::std::string::String,
+        > {
+            use #schemars::r#gen::SchemaGenerator;
+            use #schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec, SubschemaValidation};
+
+            fn try_prefix_array_schema(
+                schema: Schema,
+                offset: u32,
+                g: &SchemaGenerator,
+                seen: &mut ::std::collections::BTreeSet<::std::string::String>,
+            ) -> ::std::result::Result<(Schema, bool), ::std::string::String> {
+                if offset == 0 {
+                    return Ok((schema, true));
+                }
+                let Schema::Object(mut schema) = schema else { return Ok((schema, true)); };
+                if let Some(reference) = &schema.reference {
+                    return prefix_array_reference(reference, offset, g, seen);
+                }
+                if !schema.has_type(InstanceType::Array) {
+                    return Ok((Schema::Bool(false), true));
+                }
+                schema.instance_type = None;
+                schema.metadata = None;
+
+                let mut exact = true;
+                if let Some(subschemas) = schema.subschemas.as_mut() {
+                    exact = prefix_subschemas(subschemas, offset, g, seen)?;
+                }
+                prefix_array_literals(&mut schema, offset);
+                exact &= prefix_array_validation(&mut schema, offset);
+                Ok((schema.into(), exact))
+            }
+
+            /// Resolve a sequence-level reference and translate its target. The visited
+            /// set tracks the active reference chain, so reused targets remain valid.
+            fn prefix_array_reference(
+                reference: &str,
+                offset: u32,
+                g: &SchemaGenerator,
+                seen: &mut ::std::collections::BTreeSet<::std::string::String>,
+            ) -> ::std::result::Result<(Schema, bool), ::std::string::String> {
+                if !seen.insert(reference.to_string()) {
+                    return Err(format!("sequence schema reference cycle through `{reference}`"));
+                }
+                let result = match g.dereference(&Schema::new_ref(reference.to_string())) {
+                    None => Err(format!(
+                        "sequence schema reference `{reference}` does not resolve to an \
+                         available Schemars definition; only registered targets under \
+                         `{}` are supported and must be ready before the remainder schema returns",
+                        g.settings().definitions_path,
+                    )),
+                    // Schemars publishes false while a definition is being built.
+                    // The public API cannot distinguish that placeholder from a
+                    // finished false target. An intentional false schema can be
+                    // provided inline, without going through a reference.
+                    Some(Schema::Bool(false)) => Err(format!(
+                        "sequence schema reference `{reference}` resolves to false, which \
+                         may still be in progress; provide an intentional false schema inline",
+                    )),
+                    Some(target) => try_prefix_array_schema(target.clone(), offset, g, seen),
+                };
+                seen.remove(reference);
+                result
+            }
+
+            /// Translate logical branches that constrain the suffix itself. Relaxed
+            /// branches remain safe under allOf/anyOf; not, oneOf and the condition of
+            /// if/then/else require exact predicates to avoid rejecting valid arrays.
+            fn prefix_subschemas(
+                subschemas: &mut SubschemaValidation,
+                offset: u32,
+                g: &SchemaGenerator,
+                seen: &mut ::std::collections::BTreeSet<::std::string::String>,
+            ) -> ::std::result::Result<bool, ::std::string::String> {
+                let mut exact = true;
+                for list in [&mut subschemas.all_of, &mut subschemas.any_of]
+                    .into_iter().flatten()
+                {
+                    for sub in list {
+                        let (translated, complete) = try_prefix_array_schema(sub.clone(), offset, g, seen)?;
+                        *sub = translated;
+                        exact &= complete;
+                    }
+                }
+                if let Some(alternatives) = subschemas.one_of.take() {
+                    let alternatives = alternatives.into_iter()
+                        .map(|sub| try_prefix_array_schema(sub, offset, g, seen))
+                        .collect::<::std::result::Result<::std::vec::Vec<_>, _>>()?;
+                    if alternatives.iter().all(|(_, complete)| *complete) {
+                        subschemas.one_of = Some(alternatives.into_iter().map(|(sub, _)| sub).collect());
+                    } else {
+                        exact = false;
+                    }
+                }
+                if let Some(sub) = subschemas.not.take() {
+                    let (translated, complete) = try_prefix_array_schema(*sub, offset, g, seen)?;
+                    if complete {
+                        subschemas.not = Some(::std::boxed::Box::new(translated));
+                    } else {
+                        exact = false;
+                    }
+                }
+                if let Some(condition) = subschemas.if_schema.take() {
+                    let (condition, complete) = try_prefix_array_schema(*condition, offset, g, seen)?;
+                    if complete {
+                        subschemas.if_schema = Some(::std::boxed::Box::new(condition));
+                        for sub in [&mut subschemas.then_schema, &mut subschemas.else_schema]
+                            .into_iter().flatten()
+                        {
+                            let (translated, complete) = try_prefix_array_schema((**sub).clone(), offset, g, seen)?;
+                            **sub = translated;
+                            exact &= complete;
+                        }
+                    } else {
+                        subschemas.then_schema = None;
+                        subschemas.else_schema = None;
+                        exact = false;
+                    }
+                }
+
+                Ok(exact)
+            }
+
+            /// Compare const/enum values with the suffix, leaving the prefix free.
+            /// Non-array literals cannot match a suffix and contribute no alternative.
+            fn prefix_array_literals(schema: &mut SchemaObject, offset: u32) {
+                for values in [schema.const_value.take().map(|v| vec![v]), schema.enum_values.take()]
+                    .into_iter().flatten()
+                {
+                    let alternatives = values.into_iter().filter_map(|value| {
+                        let items = value.as_array()?;
+                        let len = offset.saturating_add(items.len() as u32);
+                        let mut fields = vec![Schema::Bool(true); offset as usize];
+                        fields.extend(items.iter().map(|value| SchemaObject {
+                            const_value: Some(value.clone()),
+                            ..::std::default::Default::default()
+                        }.into()));
+                        let mut alternative = SchemaObject::default();
+                        let array = alternative.array();
+                        array.items = Some(SingleOrVec::Vec(fields));
+                        array.min_items = Some(len);
+                        array.max_items = Some(len);
+                        Some(alternative.into())
+                    }).collect::<::std::vec::Vec<Schema>>();
+                    let constraint = if alternatives.is_empty() {
+                        Schema::Bool(false)
+                    } else {
+                        let mut constraint = SchemaObject::default();
+                        constraint.subschemas().any_of = Some(alternatives);
+                        constraint.into()
+                    };
+                    schema.subschemas().all_of.get_or_insert_with(::std::vec::Vec::new)
+                        .push(constraint);
+                }
+            }
+
+            /// Shift array positions and lengths without translating item schemas.
+            /// The result is false when suffix uniqueness had to be relaxed. Contains
+            /// is expressed separately so a matching prefix item cannot satisfy it.
+            fn prefix_array_validation(schema: &mut SchemaObject, offset: u32) -> bool {
+                let mut exact = true;
+                let mut contains = None;
+                if let Some(array) = schema.array.as_mut() {
+                    match array.items.take() {
+                        Some(SingleOrVec::Single(item)) => {
+                            array.items = Some(SingleOrVec::Vec(vec![Schema::Bool(true); offset as usize]));
+                            array.additional_items = Some(item);
+                        }
+                        Some(SingleOrVec::Vec(items)) => {
+                            let mut fields = vec![Schema::Bool(true); offset as usize];
+                            fields.extend(items);
+                            array.items = Some(SingleOrVec::Vec(fields));
+                        }
+                        None => array.additional_items = None,
+                    }
+                    array.min_items = array.min_items.map(|n| n.saturating_add(offset));
+                    array.max_items = array.max_items.map(|n| n.saturating_add(offset));
+                    contains = array.contains.take();
+                    // Draft-07's uniqueItems covers the whole array. Applying it
+                    // here would also compare the prefix with the suffix and reject
+                    // values the serializer can emit, so omit this constraint.
+                    if array.unique_items.take() == Some(true) {
+                        exact = false;
+                    }
+                }
+                if let Some(contains) = contains {
+                    // There must not be a suffix whose every item fails contains.
+                    let mut not_contains = SchemaObject::default();
+                    not_contains.subschemas().not = Some(contains);
+                    let mut no_match = SchemaObject::default();
+                    let array = no_match.array();
+                    array.items = Some(SingleOrVec::Vec(vec![Schema::Bool(true); offset as usize]));
+                    array.additional_items = Some(::std::boxed::Box::new(not_contains.into()));
+                    let mut constraint = SchemaObject::default();
+                    constraint.subschemas().not = Some(::std::boxed::Box::new(no_match.into()));
+                    schema.subschemas().all_of.get_or_insert_with(::std::vec::Vec::new)
+                        .push(constraint.into());
+                }
+                exact
+            }
+
+            try_prefix_array_schema(
+                schema, prefix_len, g, &mut ::std::collections::BTreeSet::new(),
+            )
+        }
     }
 }
 

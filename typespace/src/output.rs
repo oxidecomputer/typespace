@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::ToTokens;
 
 use crate::default::DefaultHelper;
@@ -24,6 +24,14 @@ pub(crate) struct Outputspace<'a> {
     /// is rendered.
     default_helpers: BTreeSet<DefaultHelper>,
 
+    /// The first tuple struct that needs the shared suffix-schema utility.
+    /// It owns the private associated function. Keeping the utility on an
+    /// existing type avoids a new name in the output's module namespace and
+    /// lets independently rendered, disjoint type sets be merged without
+    /// duplicate free functions. Its definition stays in the owner's item
+    /// group, alongside that type's other generated implementations.
+    array_schema_helper: Option<Ident>,
+
     /// The crates the rendered code refers to, recorded as each path is
     /// written through [`Outputspace::crate_path`].
     crates: BTreeSet<GeneratedCrate>,
@@ -39,6 +47,7 @@ impl<'a> Outputspace<'a> {
             settings,
             cs: codespace::Codespace::default(),
             default_helpers: BTreeSet::new(),
+            array_schema_helper: None,
             crates: BTreeSet::new(),
             foreign: BTreeSet::new(),
         }
@@ -56,6 +65,15 @@ impl<'a> Outputspace<'a> {
     /// Record a shared `defaults` function a rendered property calls.
     pub(crate) fn add_default_helper(&mut self, helper: DefaultHelper) {
         self.default_helpers.insert(helper);
+    }
+
+    /// Choose an existing tuple struct to own the schema utility, once per
+    /// render pass. Call only when a JsonSchema implementation needs it.
+    /// Subsequent callers use the same owner without adding another definition.
+    pub(crate) fn array_schema_helper_owner(&mut self, candidate: &Ident) -> Ident {
+        self.array_schema_helper
+            .get_or_insert_with(|| candidate.clone())
+            .clone()
     }
 
     /// The path generated code refers to `krate` by, recording that the
@@ -117,6 +135,7 @@ impl<'a> Outputspace<'a> {
             settings,
             mut cs,
             default_helpers,
+            array_schema_helper: _,
             crates,
             foreign,
         } = self;
