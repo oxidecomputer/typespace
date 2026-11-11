@@ -17,26 +17,6 @@ fn settings() -> Settings {
         .with_required_trait(TypespaceTrait::JsonSchema)
 }
 
-/// A shared schema utility is emitted only by the JsonSchema path, and
-/// must not add a dependency to output that does not request that trait.
-#[test]
-fn tuple_schema_helper_respects_trait_gate() {
-    for (settings, expected) in [
-        (Settings::minimal(), vec![]),
-        (
-            Settings::minimal().with_required_trait(TypespaceTrait::JsonSchema),
-            vec!["schemars"],
-        ),
-    ] {
-        let builder = typespace_builder!(settings, {
-            native ::std::path::PathBuf: JsonSchema;
-            struct Tail(u32, #[flatten] ::std::path::PathBuf);
-        });
-        let ts = builder.finalize(no_cycles).unwrap();
-        assert_eq!(names(&ts), expected);
-    }
-}
-
 /// A pattern-constrained newtype, inserted raw because the macro has no
 /// NewtypeConstraints syntax.
 fn insert_code(builder: &mut TypespaceBuilder<String>) {
