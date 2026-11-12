@@ -900,6 +900,18 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
                 newtype.check_constraints(&self.types, &self.settings)?;
             }
 
+            // A tuple struct's rest is appended to the tuple's array one
+            // element at a time and described by one `additionalItems` schema,
+            // so it has to serialize as a sequence of a single element type.
+            if let Type::TupleStruct(tuple_struct) = typ
+                && let Some(rest_id) = tuple_struct.rest.as_ref()
+                && array_elements(&self.types, rest_id).is_none()
+            {
+                return Err(Error::InvalidRest {
+                    name: tuple_struct.common.built_name().to_string(),
+                });
+            }
+
             // A struct-style variant's fields are properties like a
             // struct's and its serialized form is an object under every
             // tagging, so both rules reach through it; the enum's own
@@ -2308,31 +2320,80 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         }
     }
 
-    fn array_bounds<'b>(&'b self, id: &'b Id) -> Option<(usize, Option<usize>)> {
-        array_bounds(self.types, id)
+    fn array_elements<'b>(&'b self, id: &'b Id) -> Option<ArrayElements<'b, Id>> {
+        array_elements(self.types, id)
     }
 }
 
 /// How many array elements a type serializes to: an inclusive minimum
 /// and an optional maximum.
 ///
-/// `None` means the count is unknown, which leaves a caller's schema
-/// unconstrained rather than wrong.
+/// `None` means the type does not serialize as a sequence of one
+/// element type; see [`array_elements`].
 pub(crate) fn array_bounds<'a, Id: Ord>(
     types: &'a BTreeMap<Id, Type<Id>>,
     id: &'a Id,
 ) -> Option<(usize, Option<usize>)> {
-    array_bounds_seen(types, id, &mut BTreeSet::new())
+    array_elements(types, id).map(|elements| elements.bounds())
 }
 
-/// array_bounds with the walk's visited ids threaded through, so a
+/// The elements of a type that serializes as a sequence of one element
+/// type, which is what a tuple struct's remainder has to be: its
+/// elements are spliced into the tuple's array one by one and one
+/// `additionalItems` schema describes them all.
+pub(crate) enum ArrayElements<'a, Id> {
+    /// Between `min` and `max` elements of `element`, with no upper
+    /// bound when `max` is `None`.
+    Of {
+        element: &'a Id,
+        min: usize,
+        max: Option<usize>,
+    },
+    /// Elements of a type the walk cannot name, in a count it may know:
+    /// behind a native type, on a path that cycles back to a type the
+    /// walk already passed, or a unit struct's constant array, whose
+    /// elements are JSON values rather than types.
+    Unknown { min: usize, max: Option<usize> },
+}
+
+impl<Id> ArrayElements<'_, Id> {
+    /// The element count as an inclusive minimum and an optional
+    /// maximum. Unknown elements leave a schema unconstrained rather
+    /// than wrong.
+    pub(crate) fn bounds(&self) -> (usize, Option<usize>) {
+        match self {
+            ArrayElements::Of { min, max, .. } | ArrayElements::Unknown { min, max } => {
+                (*min, *max)
+            }
+        }
+    }
+}
+
+/// The elements of `id`, or `None` when it does not serialize as a
+/// sequence of one element type as far as the walk can tell.
+pub(crate) fn array_elements<'a, Id: Ord>(
+    types: &'a BTreeMap<Id, Type<Id>>,
+    id: &'a Id,
+) -> Option<ArrayElements<'a, Id>> {
+    array_elements_seen(types, id, &mut BTreeSet::new())
+}
+
+/// The one type every id in `ids` names, or `None` when they differ or
+/// there are none: positional elements are a sequence of one type only
+/// when they all have it.
+fn homogeneous<Id: Ord>(ids: &[Id]) -> Option<&Id> {
+    let (first, rest) = ids.split_first()?;
+    rest.iter().all(|id| id == first).then_some(first)
+}
+
+/// array_elements with the walk's visited ids threaded through, so a
 /// tuple struct's remainder shares one set with the walk that reached
 /// it.
-fn array_bounds_seen<'a, Id: Ord>(
+fn array_elements_seen<'a, Id: Ord>(
     types: &'a BTreeMap<Id, Type<Id>>,
     id: &'a Id,
     seen: &mut BTreeSet<&'a Id>,
-) -> Option<(usize, Option<usize>)> {
+) -> Option<ArrayElements<'a, Id>> {
     // A newtype, alias, or Box can reach one this walk already passed. That
     // graph is legal: `break_cycles` puts a `Box` in every cycle, and a named
     // type in the loop keeps it clear of `check_anonymous_cycles`. Revisiting
@@ -2340,33 +2401,10 @@ fn array_bounds_seen<'a, Id: Ord>(
     let mut id = id;
     loop {
         if !seen.insert(id) {
-            return None;
+            return Some(ArrayElements::Unknown { min: 0, max: None });
         }
         let ty = types.get(id)?;
         match ty {
-            // We could pick these types apart... but not now.
-            Type::Enum(_) | Type::UnitStruct(_) => {
-                return None;
-            }
-
-            // A struct serializes as an object, not an array.
-            Type::Struct(_) => {
-                return None;
-            }
-
-            // A tuple struct is its fixed fields plus whatever its own
-            // remainder contributes.
-            Type::TupleStruct(tuple_struct) => {
-                let fixed = tuple_struct.fields.len();
-                return match tuple_struct.rest.as_ref() {
-                    None => Some((fixed, Some(fixed))),
-                    Some(rest_id) => {
-                        let (rest_min, rest_max) = array_bounds_seen(types, rest_id, seen)?;
-                        Some((fixed + rest_min, rest_max.map(|max| fixed + max)))
-                    }
-                };
-            }
-
             Type::NewtypeStruct(NewtypeStruct {
                 inner: inner_id, ..
             })
@@ -2385,17 +2423,80 @@ fn array_bounds_seen<'a, Id: Ord>(
             // schema at runtime... but that's pretty fragile since we have
             // no idea of the structure of the output schema.
             Type::Native(_) => {
-                return Some((0, None));
+                return Some(ArrayElements::Unknown { min: 0, max: None });
             }
 
             // Unbounded array
-            Type::Vec(_) | Type::Set(_) => {
-                return Some((0, None));
+            Type::Vec(element) | Type::Set(element) => {
+                return Some(ArrayElements::Of {
+                    element,
+                    min: 0,
+                    max: None,
+                });
             }
 
             // Fixed-length array
-            Type::Array(_, size) => {
-                return Some((*size, Some(*size)));
+            Type::Array(element, size) => {
+                return Some(ArrayElements::Of {
+                    element,
+                    min: *size,
+                    max: Some(*size),
+                });
+            }
+
+            // A tuple is positional, but one whose elements all have the
+            // same type is also a fixed count of that type; which form
+            // the input took is the input's business.
+            Type::Tuple(items) => {
+                return homogeneous(items).map(|element| ArrayElements::Of {
+                    element,
+                    min: items.len(),
+                    max: Some(items.len()),
+                });
+            }
+
+            // A tuple struct likewise, with its own remainder counted in
+            // when that remainder is of the same element type (or of a
+            // type the walk cannot name).
+            Type::TupleStruct(tuple_struct) => {
+                let element = homogeneous(&tuple_struct.fields)?;
+                let fixed = tuple_struct.fields.len();
+                return match tuple_struct.rest.as_ref() {
+                    None => Some(ArrayElements::Of {
+                        element,
+                        min: fixed,
+                        max: Some(fixed),
+                    }),
+                    Some(rest_id) => match array_elements_seen(types, rest_id, seen)? {
+                        ArrayElements::Of {
+                            element: rest_element,
+                            min,
+                            max,
+                        } if rest_element == element => Some(ArrayElements::Of {
+                            element,
+                            min: fixed + min,
+                            max: max.map(|max| fixed + max),
+                        }),
+                        ArrayElements::Of { .. } => None,
+                        ArrayElements::Unknown { min, max } => Some(ArrayElements::Unknown {
+                            min: fixed + min,
+                            max: max.map(|max| fixed + max),
+                        }),
+                    },
+                };
+            }
+
+            // A unit struct serializes as its constant. When that is an
+            // array its length is exact, but its elements are JSON
+            // values, not types the schema could name.
+            Type::UnitStruct(unit_struct) => {
+                return match &unit_struct.repr {
+                    serde_json::Value::Array(items) => Some(ArrayElements::Unknown {
+                        min: items.len(),
+                        max: Some(items.len()),
+                    }),
+                    _ => None,
+                };
             }
 
             // TODO 9/10/2026
@@ -2405,13 +2506,10 @@ fn array_bounds_seen<'a, Id: Ord>(
                 return None;
             }
 
-            // A tuple serializes as an array of exactly its elements.
-            Type::Tuple(items) => {
-                return Some((items.len(), Some(items.len())));
-            }
-
             // Not serialized as an array:
-            Type::Map(_, _)
+            Type::Enum(_)
+            | Type::Struct(_)
+            | Type::Map(_, _)
             | Type::Unit
             | Type::Boolean
             | Type::Integer(_)
