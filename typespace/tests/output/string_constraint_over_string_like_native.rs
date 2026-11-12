@@ -30,7 +30,10 @@ impl ::std::convert::TryFrom<&str> for AnchoredUrl {
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^https://\"".into());
         }
-        Ok(Self(value.to_string()))
+        value
+            .parse()
+            .map(Self)
+            .map_err(|e| { ::std::string::ToString::to_string(&e).into() })
     }
 }
 impl ::std::convert::TryFrom<::std::string::String> for AnchoredUrl {

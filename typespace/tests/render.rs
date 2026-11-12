@@ -5136,11 +5136,10 @@ fn test_render_constrained_newtype_string() {
     }
 }
 
-// A string constraint over a native that is string-like (it implements
-// `Display` and `FromStr` the way `String` does, such as `::url::Url`)
-// has an inner type other than `String`. The generated `TryFrom<&str>`
-// must construct the inner type, not assume it can end with
-// `Ok(Self(value.to_string()))`.
+// A string constraint over a native type that is string-like (it implements
+// `Display` and `FromStr` the way `String` does, such as `::url::Url`) has an
+// inner type other than `String`. The generated `TryFrom<&str>` must construct
+// the inner type, not assume it can end with `Ok(Self(value.to_string()))`.
 #[test]
 fn string_constraint_over_string_like_native() {
     let mut builder = TypespaceBuilder::new(

@@ -2599,6 +2599,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
                 }
             });
+                // The checks above run on the `&str`; the value they accept
+                // is then the inner type's to build. A `String` takes it
+                // verbatim, and a string-like native parses it, reporting a
+                // parse failure through the same error as the checks.
+                let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
+                let construct = if wraps_string {
+                    quote! { Ok(Self(value.to_string())) }
+                } else {
+                    quote! {
+                        value.parse().map(Self).map_err(|e| {
+                            ::std::string::ToString::to_string(&e).into()
+                        })
+                    }
+                };
+
                 // TYPIFY COMPAT: typify 1 writes no Display for a
                 // constrained string newtype.
                 let display_impl = (traits.remove(TypespaceTrait::Display)
@@ -2626,7 +2641,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             #max
                             #min
                             #pat
-                            Ok(Self(value.to_string()))
+                            #construct
                         }
                     }
                     impl ::std::convert::TryFrom<::std::string::String> for #name_ident {

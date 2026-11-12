@@ -2,6 +2,8 @@
 
 ## Next
 
+* Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type; it parsed as `String`
+
 ## [0.1.0] - 2026-11-07
 
 * Initial stable release
