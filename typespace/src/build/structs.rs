@@ -2588,30 +2588,29 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 });
 
                 let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
-                quote! {
-                    impl ::std::str::FromStr for #name_ident {
-                        type Err = self::error::ConversionError;
-
-                        fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-                            ::std::convert::TryFrom::try_from(value)
-                        }
-                    }
-
-                }
-            });
-                // The checks above run on the `&str`; the value they accept
-                // is then the inner type's to build. A `String` takes it
-                // verbatim, and a string-like native parses it, reporting a
-                // parse failure through the same error as the checks.
-                let wraps_string = matches!(typespace.types.get(inner), Some(Type::String));
-                let construct = if wraps_string {
-                    quote! { Ok(Self(value.to_string())) }
-                } else {
                     quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str) ->
+                                ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+
+                    }
+                });
+
+                // Construct the inner type from the value. For a String this
+                // is simple; for other types we rely on FromStr.
+                let construct = match typespace.types.get(inner) {
+                    Some(Type::String) => quote! { Ok(Self(value.to_string())) },
+                    _ => quote! {
                         value.parse().map(Self).map_err(|e| {
                             ::std::string::ToString::to_string(&e).into()
                         })
-                    }
+                    },
                 };
 
                 // TYPIFY COMPAT: typify 1 writes no Display for a
