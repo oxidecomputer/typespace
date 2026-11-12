@@ -2535,19 +2535,23 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                let pat = patterns.iter().map(|p| {
-                let err = format!("doesn't match pattern \"{}\"", p);
-                let regress = out.crate_path(GeneratedCrate::Regress);
-                let regress = &regress;
-                quote! {
-                    static PATTERN: ::std::sync::LazyLock<#regress::Regex> = ::std::sync::LazyLock::new(|| {
-                        #regress::Regex::new(#p).unwrap()
-                    });
-                    if PATTERN.find(value).is_none() {
-                        return Err(#err.into());
-                    }
-                }
-            }).collect::<Vec<_>>();
+                let pat = patterns
+                    .iter()
+                    .map(|p| {
+                        let err = format!("doesn't match pattern \"{}\"", p);
+                        let regress = out.crate_path(GeneratedCrate::Regress);
+                        let regress = &regress;
+                        quote! {
+                            static PATTERN: ::std::sync::LazyLock<#regress::Regex> =
+                                ::std::sync::LazyLock::new(|| {
+                                    #regress::Regex::new(#p).unwrap()
+                                });
+                            if PATTERN.find(value).is_none() {
+                                return Err(#err.into());
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 // TYPIFY 1 COMPAT: pull out a lone pat
                 let pat = match &pat[..] {
