@@ -1720,7 +1720,11 @@ fn lower_type(ty: &Type, lowering: &mut Lowering) -> syn::Result<String> {
             let id = anon_id(ty)?;
             lowering.ensure_anon(
                 &id,
-                quote! { ::typespace::build::Type::Tuple([ #(#ids.to_string()),* ].into_iter().collect()) },
+                quote! {
+                    ::typespace::build::Type::Tuple(
+                        [ #(#ids.to_string()),* ].into_iter().collect()
+                    )
+                },
             );
             Ok(id)
         }
@@ -1971,7 +1975,10 @@ fn lower_path_type(
                     lowering.ensure_anon(
                         &id,
                         quote! {
-                            ::typespace::build::Type::Map(#key_id.to_string(), #value_id.to_string())
+                            ::typespace::build::Type::Map(
+                                #key_id.to_string(),
+                                #value_id.to_string(),
+                            )
                         },
                     );
                     Ok(id)

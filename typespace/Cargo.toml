@@ -34,3 +34,4 @@ regress = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 typespace-test-macro = { path = "../typespace-test-macro" }
+url = { workspace = true, features = ["serde"] }

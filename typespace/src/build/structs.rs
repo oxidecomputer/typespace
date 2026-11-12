@@ -11,10 +11,10 @@ use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, 
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
-use crate::settings::{GeneratedCrate, path_text};
+use crate::settings::{GeneratedCrate, Settings, path_text};
 use crate::{
     DefaultConstructor, RenderedStructProperty, TraitProvision, TypespaceBuilder,
-    TypespaceRenderer, TypespaceTrait,
+    TypespaceRenderer, TypespaceTrait, has_trait,
 };
 
 /// A struct with named fields.
@@ -1655,12 +1655,18 @@ impl<Id> NewtypeStruct<Id> {
 
     /// Check the constraints against the type the newtype wraps.
     ///
-    /// A length constraint calls `len()`, so the inner type has to be a
-    /// sequence. An integer or float constraint compares the wrapped value
-    /// against literals, so the inner type has to be an integer or a float and
-    /// every bound has to fit it: a maximum of 300 for a `u8` would render as
-    /// `300_u8` which is invalid.
-    pub(crate) fn check_constraints(&self, types: &BTreeMap<Id, Type<Id>>) -> Result<(), Error<Id>>
+    /// A string constraint checks a `&str` and then constructs the inner
+    /// value from it, so the inner type has to be `String` or implement
+    /// `FromStr`. A length constraint calls `len()`, so the inner type has
+    /// to be a sequence. An integer or float constraint compares the
+    /// wrapped value against literals, so the inner type has to be an
+    /// integer or a float and every bound has to fit it: a maximum of 300
+    /// for a `u8` would render as `300_u8` which is invalid.
+    pub(crate) fn check_constraints(
+        &self,
+        types: &BTreeMap<Id, Type<Id>>,
+        settings: &Settings,
+    ) -> Result<(), Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
@@ -1675,6 +1681,24 @@ impl<Id> NewtypeStruct<Id> {
             .expect("every reference resolves before this runs");
 
         match &self.constraints {
+            NewtypeConstraints::String { .. } => match inner {
+                Type::String => Ok(()),
+                _ if has_trait(
+                    types,
+                    settings,
+                    &self.inner,
+                    TypespaceTrait::FromStr,
+                    &mut BTreeSet::new(),
+                ) =>
+                {
+                    Ok(())
+                }
+                _ => Err(invalid(
+                    "string",
+                    "the inner type is neither `String` nor `FromStr`".to_string(),
+                )),
+            },
+
             NewtypeConstraints::Array { .. } => match inner {
                 Type::Vec(_) | Type::Set(_) | Type::Array(..) => Ok(()),
                 _ => Err(invalid(
@@ -2554,19 +2578,23 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                let pat = patterns.iter().map(|p| {
-                let err = format!("doesn't match pattern \"{}\"", p);
-                let regress = out.crate_path(GeneratedCrate::Regress);
-                let regress = &regress;
-                quote! {
-                    static PATTERN: ::std::sync::LazyLock<#regress::Regex> = ::std::sync::LazyLock::new(|| {
-                        #regress::Regex::new(#p).unwrap()
-                    });
-                    if PATTERN.find(value).is_none() {
-                        return Err(#err.into());
-                    }
-                }
-            }).collect::<Vec<_>>();
+                let pat = patterns
+                    .iter()
+                    .map(|p| {
+                        let err = format!("doesn't match pattern \"{}\"", p);
+                        let regress = out.crate_path(GeneratedCrate::Regress);
+                        let regress = &regress;
+                        quote! {
+                            static PATTERN: ::std::sync::LazyLock<#regress::Regex> =
+                                ::std::sync::LazyLock::new(|| {
+                                    #regress::Regex::new(#p).unwrap()
+                                });
+                            if PATTERN.find(value).is_none() {
+                                return Err(#err.into());
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
                 // TYPIFY 1 COMPAT: pull out a lone pat
                 let pat = match &pat[..] {
@@ -2607,17 +2635,31 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 });
 
                 let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
-                quote! {
-                    impl ::std::str::FromStr for #name_ident {
-                        type Err = self::error::ConversionError;
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
 
-                        fn from_str(value: &str) -> ::std::result::Result<Self, self::error::ConversionError> {
-                            ::std::convert::TryFrom::try_from(value)
+                            fn from_str(value: &str) ->
+                                ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                ::std::convert::TryFrom::try_from(value)
+                            }
                         }
-                    }
 
-                }
-            });
+                    }
+                });
+
+                // Construct the inner type from the value. For a String this
+                // is simple; for other types we rely on FromStr.
+                let construct = match typespace.types.get(inner) {
+                    Some(Type::String) => quote! { Ok(Self(value.to_string())) },
+                    _ => quote! {
+                        value.parse().map(Self).map_err(|e| {
+                            ::std::string::ToString::to_string(&e).into()
+                        })
+                    },
+                };
+
                 // TYPIFY COMPAT: typify 1 writes no Display for a
                 // constrained string newtype.
                 let display_impl = (traits.remove(TypespaceTrait::Display)
@@ -2645,7 +2687,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             #max
                             #min
                             #pat
-                            Ok(Self(value.to_string()))
+                            #construct
                         }
                     }
                     impl ::std::convert::TryFrom<::std::string::String> for #name_ident {

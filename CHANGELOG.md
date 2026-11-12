@@ -2,6 +2,9 @@
 
 ## Next
 
+* Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type
+* A string-constrained newtype whose inner type is neither `String` nor
+  `FromStr` is rejected at `finalize` rather than in the consumer's build
 * Schemas for tuple structs with a direct standard `Vec` remainder now describe
   each trailing element instead of the vector container. This changes schema
   validation without changing the generated Rust representation or Serde behavior.
