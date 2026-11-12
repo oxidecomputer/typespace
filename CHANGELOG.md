@@ -3,6 +3,8 @@
 ## Next
 
 * Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type
+* A string-constrained newtype whose inner type is neither `String` nor
+  `FromStr` is rejected at `finalize` rather than in the consumer's build
 
 ## [0.1.0] - 2026-11-07
 

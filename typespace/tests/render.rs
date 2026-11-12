@@ -6781,6 +6781,51 @@ fn array_constraints_need_a_sequence_inner_type() {
     );
 }
 
+// A string constraint checks a `&str` and then constructs the inner value
+// from it, which takes `String` or `FromStr`. A native that declares
+// neither is rejected at finalize rather than in the consumer's build.
+#[test]
+fn string_constraints_need_a_string_or_from_str_inner_type() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert(
+            "::some::Opaque".to_string(),
+            Type::Native(Native::new(
+                "::some::Opaque",
+                TypespaceTraitSet::empty(),
+                vec![],
+            )),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "Anchored".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("::some::Opaque".to_string())
+                    .name("Anchored")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec!["^https://".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("a string constraint over a native without FromStr is rejected");
+    };
+    assert!(
+        matches!(
+            &err,
+            Error::InvalidConstraints { name, kind, reason }
+                if name == "Anchored" && *kind == "string"
+                    && reason.contains("`FromStr`")
+        ),
+        "expected InvalidConstraints, got: {err}"
+    );
+}
+
 // A bound of 300 over a `u8` renders `300_u8`, which the consumer's
 // build refuses. The multiple is checked the same way.
 #[test]

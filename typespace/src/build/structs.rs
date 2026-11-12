@@ -11,9 +11,10 @@ use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, 
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
-use crate::settings::GeneratedCrate;
+use crate::settings::{GeneratedCrate, Settings};
 use crate::{
-    DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer, TypespaceTrait,
+    DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer,
+    TypespaceTrait, has_trait,
 };
 
 /// A struct with named fields.
@@ -1636,12 +1637,18 @@ impl<Id> NewtypeStruct<Id> {
 
     /// Check the constraints against the type the newtype wraps.
     ///
-    /// A length constraint calls `len()`, so the inner type has to be a
-    /// sequence. An integer or float constraint compares the wrapped value
-    /// against literals, so the inner type has to be an integer or a float and
-    /// every bound has to fit it: a maximum of 300 for a `u8` would render as
-    /// `300_u8` which is invalid.
-    pub(crate) fn check_constraints(&self, types: &BTreeMap<Id, Type<Id>>) -> Result<(), Error<Id>>
+    /// A string constraint checks a `&str` and then constructs the inner
+    /// value from it, so the inner type has to be `String` or implement
+    /// `FromStr`. A length constraint calls `len()`, so the inner type has
+    /// to be a sequence. An integer or float constraint compares the
+    /// wrapped value against literals, so the inner type has to be an
+    /// integer or a float and every bound has to fit it: a maximum of 300
+    /// for a `u8` would render as `300_u8` which is invalid.
+    pub(crate) fn check_constraints(
+        &self,
+        types: &BTreeMap<Id, Type<Id>>,
+        settings: &Settings,
+    ) -> Result<(), Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
@@ -1656,6 +1663,24 @@ impl<Id> NewtypeStruct<Id> {
             .expect("every reference resolves before this runs");
 
         match &self.constraints {
+            NewtypeConstraints::String { .. } => match inner {
+                Type::String => Ok(()),
+                _ if has_trait(
+                    types,
+                    settings,
+                    &self.inner,
+                    TypespaceTrait::FromStr,
+                    &mut BTreeSet::new(),
+                ) =>
+                {
+                    Ok(())
+                }
+                _ => Err(invalid(
+                    "string",
+                    "the inner type is neither `String` nor `FromStr`".to_string(),
+                )),
+            },
+
             NewtypeConstraints::Array { .. } => match inner {
                 Type::Vec(_) | Type::Set(_) | Type::Array(..) => Ok(()),
                 _ => Err(invalid(

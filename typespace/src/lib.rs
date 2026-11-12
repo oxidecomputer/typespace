@@ -894,10 +894,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
     fn check_type_structure(&self) -> Result<(), Error<Id>> {
         for typ in self.types.values() {
             // A newtype's constraints render as checks on the wrapped value: a
-            // length against a sequence, a bound against a number. The inner
-            // type has to match.
+            // pattern against a `&str`, a length against a sequence, a bound
+            // against a number. The inner type has to match.
             if let Type::NewtypeStruct(newtype) = typ {
-                newtype.check_constraints(&self.types)?;
+                newtype.check_constraints(&self.types, &self.settings)?;
             }
 
             // A struct-style variant's fields are properties like a
