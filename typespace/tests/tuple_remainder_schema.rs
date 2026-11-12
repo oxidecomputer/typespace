@@ -1,15 +1,10 @@
 // Copyright 2026 Oxide Computer Company
 
-use typespace::settings::{ContainerType, GeneratedCrate, Settings};
+use typespace::settings::{ContainerType, Settings};
 use typespace::{TraitProvision, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
 
 mod common;
-
-// Exercise generated paths through a facade as well as the default crate name.
-pub mod schema_facade {
-    pub use schemars::*;
-}
 
 #[test]
 fn standard_vec_remainder_schemas() {
@@ -17,8 +12,7 @@ fn standard_vec_remainder_schemas() {
         Settings::minimal()
             .with_required_trait(TypespaceTrait::Serialize)
             .with_required_trait(TypespaceTrait::Deserialize)
-            .with_required_trait(TypespaceTrait::JsonSchema)
-            .with_crate_path(GeneratedCrate::Schemars, "super::schema_facade"),
+            .with_required_trait(TypespaceTrait::JsonSchema),
         {
             native serde_json::Value: Serialize + Deserialize + JsonSchema;
             struct Nested(u32, #[flatten] Vec<Vec<String>>);

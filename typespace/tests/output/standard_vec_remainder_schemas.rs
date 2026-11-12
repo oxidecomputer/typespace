@@ -1,4 +1,4 @@
-#[derive(::serde::Deserialize, ::serde::Serialize, super::schema_facade::JsonSchema)]
+#[derive(::serde::Deserialize, ::serde::Serialize, schemars::JsonSchema)]
 pub struct Element {
     pub text: ::std::string::String,
 }
@@ -48,31 +48,29 @@ impl<'de> ::serde::Deserialize<'de> for Nested {
         deserializer.deserialize_seq(Visitor)
     }
 }
-impl super::schema_facade::JsonSchema for Nested {
+impl ::schemars::JsonSchema for Nested {
     fn schema_name() -> ::std::string::String {
         "Nested".to_string()
     }
     fn json_schema(
-        g: &mut super::schema_facade::r#gen::SchemaGenerator,
-    ) -> super::schema_facade::schema::Schema {
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
         let fields = [g.subschema_for::<u32>()].into_iter().collect();
-        super::schema_facade::schema::SchemaObject {
+        ::schemars::schema::SchemaObject {
             metadata: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::Metadata {
+                ::std::boxed::Box::new(::schemars::schema::Metadata {
                     title: Some("Nested".to_string()),
                     ..::std::default::Default::default()
                 }),
             ),
             instance_type: Some(
-                super::schema_facade::schema::SingleOrVec::Single(
-                    ::std::boxed::Box::new(
-                        super::schema_facade::schema::InstanceType::Array,
-                    ),
+                ::schemars::schema::SingleOrVec::Single(
+                    ::std::boxed::Box::new(::schemars::schema::InstanceType::Array),
                 ),
             ),
             array: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::ArrayValidation {
-                    items: Some(super::schema_facade::schema::SingleOrVec::Vec(fields)),
+                ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
+                    items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
                         ::std::boxed::Box::new(
                             g.subschema_for::<::std::vec::Vec<::std::string::String>>(),
@@ -87,7 +85,7 @@ impl super::schema_facade::JsonSchema for Nested {
             .into()
     }
 }
-#[derive(::serde::Deserialize, ::serde::Serialize, super::schema_facade::JsonSchema)]
+#[derive(::serde::Deserialize, ::serde::Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Ordinary(pub ::std::vec::Vec<::std::string::String>);
 impl ::std::ops::Deref for Ordinary {
@@ -152,31 +150,29 @@ impl<'de> ::serde::Deserialize<'de> for Referenced {
         deserializer.deserialize_seq(Visitor)
     }
 }
-impl super::schema_facade::JsonSchema for Referenced {
+impl ::schemars::JsonSchema for Referenced {
     fn schema_name() -> ::std::string::String {
         "Referenced".to_string()
     }
     fn json_schema(
-        g: &mut super::schema_facade::r#gen::SchemaGenerator,
-    ) -> super::schema_facade::schema::Schema {
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
         let fields = [g.subschema_for::<u32>()].into_iter().collect();
-        super::schema_facade::schema::SchemaObject {
+        ::schemars::schema::SchemaObject {
             metadata: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::Metadata {
+                ::std::boxed::Box::new(::schemars::schema::Metadata {
                     title: Some("Referenced".to_string()),
                     ..::std::default::Default::default()
                 }),
             ),
             instance_type: Some(
-                super::schema_facade::schema::SingleOrVec::Single(
-                    ::std::boxed::Box::new(
-                        super::schema_facade::schema::InstanceType::Array,
-                    ),
+                ::schemars::schema::SingleOrVec::Single(
+                    ::std::boxed::Box::new(::schemars::schema::InstanceType::Array),
                 ),
             ),
             array: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::ArrayValidation {
-                    items: Some(super::schema_facade::schema::SingleOrVec::Vec(fields)),
+                ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
+                    items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
                         ::std::boxed::Box::new(g.subschema_for::<Element>()),
                     ),
@@ -235,31 +231,29 @@ impl<'de> ::serde::Deserialize<'de> for Unconstrained {
         deserializer.deserialize_seq(Visitor)
     }
 }
-impl super::schema_facade::JsonSchema for Unconstrained {
+impl ::schemars::JsonSchema for Unconstrained {
     fn schema_name() -> ::std::string::String {
         "Unconstrained".to_string()
     }
     fn json_schema(
-        g: &mut super::schema_facade::r#gen::SchemaGenerator,
-    ) -> super::schema_facade::schema::Schema {
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
         let fields = [g.subschema_for::<u32>()].into_iter().collect();
-        super::schema_facade::schema::SchemaObject {
+        ::schemars::schema::SchemaObject {
             metadata: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::Metadata {
+                ::std::boxed::Box::new(::schemars::schema::Metadata {
                     title: Some("Unconstrained".to_string()),
                     ..::std::default::Default::default()
                 }),
             ),
             instance_type: Some(
-                super::schema_facade::schema::SingleOrVec::Single(
-                    ::std::boxed::Box::new(
-                        super::schema_facade::schema::InstanceType::Array,
-                    ),
+                ::schemars::schema::SingleOrVec::Single(
+                    ::std::boxed::Box::new(::schemars::schema::InstanceType::Array),
                 ),
             ),
             array: Some(
-                ::std::boxed::Box::new(super::schema_facade::schema::ArrayValidation {
-                    items: Some(super::schema_facade::schema::SingleOrVec::Vec(fields)),
+                ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
+                    items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
                         ::std::boxed::Box::new(g.subschema_for::<serde_json::Value>()),
                     ),
