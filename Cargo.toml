@@ -25,3 +25,4 @@ strum = { version = "0.28.0", features = ["derive"] }
 syn = { version = "3.0.3", features = ["full"] }
 thiserror = "2.0.17"
 trybuild = "1.0"
+url = "2.5.8"

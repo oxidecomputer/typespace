@@ -5136,6 +5136,63 @@ fn test_render_constrained_newtype_string() {
     }
 }
 
+// A string constraint over a native that is string-like (it implements
+// `Display` and `FromStr` the way `String` does, such as `::url::Url`)
+// has an inner type other than `String`. The generated `TryFrom<&str>`
+// must construct the inner type, not assume it can end with
+// `Ok(Self(value.to_string()))`.
+#[test]
+fn string_constraint_over_string_like_native() {
+    let mut builder = TypespaceBuilder::new(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::FromStr),
+    );
+
+    builder
+        .insert(
+            "::url::Url".to_string(),
+            Type::Native(Native::new_string_like("::url::Url")),
+        )
+        .unwrap();
+
+    builder
+        .insert(
+            "AnchoredUrl".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("::url::Url".to_string())
+                    .name("AnchoredUrl")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec!["^https://".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = common::codespace(&ts).into_stream();
+
+    #[check_and_include("tests/output/string_constraint_over_string_like_native.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let anchored = AnchoredUrl::try_from("https://example.com/").unwrap();
+        assert_eq!(anchored.to_string(), "https://example.com/");
+
+        assert!(
+            AnchoredUrl::try_from("http://example.com/").is_err(),
+            "pattern rejects http"
+        );
+        assert!(
+            AnchoredUrl::try_from("https://not a url").is_err(),
+            "not a valid URL"
+        );
+    }
+}
+
 // A length-constrained newtype over a `Vec`: the checks run on
 // `len()`, and the reported schema carries the length keywords.
 #[test]
