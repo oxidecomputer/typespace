@@ -89,7 +89,7 @@ impl ::schemars::JsonSchema for MyTupleStruct {
                 ::std::boxed::Box::new(::schemars::schema::ArrayValidation {
                     items: Some(::schemars::schema::SingleOrVec::Vec(fields)),
                     additional_items: Some(
-                        ::std::boxed::Box::new(g.subschema_for::<Vec<String>>()),
+                        ::std::boxed::Box::new(g.subschema_for::<String>()),
                     ),
                     min_items: Some(2u32),
                     ..::std::default::Default::default()
