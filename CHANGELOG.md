@@ -3,6 +3,9 @@
 ## Next
 
 * Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type
+* A string constraint's patterns are compiled with the ECMA-262 `u` flag, as
+  JSON Schema specifies, so `\p{..}` and `\u{..}` escapes work; a pattern with
+  an identity escape the `u` flag forbids now fails in the consumer's build
 * A string-constrained newtype whose inner type is neither `String` nor
   `FromStr` is rejected at `finalize` rather than in the consumer's build
 * Schemas for tuple structs with a direct standard `Vec` remainder now describe

@@ -26,7 +26,7 @@ impl ::std::convert::TryFrom<&str> for AnchoredUrl {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
-        { ::regress::Regex::new("^https://").unwrap() });
+        { ::regress::Regex::with_flags("^https://", "u").unwrap() });
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^https://\"".into());
         }
