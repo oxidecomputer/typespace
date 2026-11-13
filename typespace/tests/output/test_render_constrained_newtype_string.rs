@@ -49,14 +49,14 @@ impl ::std::convert::TryFrom<&str> for ConstrainedString {
         }
         {
             static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
-            { ::regress::Regex::new("^a").unwrap() });
+            { ::regress::Regex::with_flags("^a", "u").unwrap() });
             if PATTERN.find(value).is_none() {
                 return Err("doesn't match pattern \"^a\"".into());
             }
         }
         {
             static PATTERN: ::std::sync::LazyLock<::regress::Regex> = ::std::sync::LazyLock::new(||
-            { ::regress::Regex::new("k$").unwrap() });
+            { ::regress::Regex::with_flags("k$", "u").unwrap() });
             if PATTERN.find(value).is_none() {
                 return Err("doesn't match pattern \"k$\"".into());
             }

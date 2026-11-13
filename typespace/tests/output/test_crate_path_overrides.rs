@@ -18,7 +18,7 @@ impl ::std::convert::TryFrom<&str> for Code {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         static PATTERN: ::std::sync::LazyLock<super::regex_engine::Regex> = ::std::sync::LazyLock::new(||
-        { super::regex_engine::Regex::new("^x").unwrap() });
+        { super::regex_engine::Regex::with_flags("^x", "u").unwrap() });
         if PATTERN.find(value).is_none() {
             return Err("doesn't match pattern \"^x\"".into());
         }

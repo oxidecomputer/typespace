@@ -6801,6 +6801,52 @@ fn array_constraints_need_a_sequence_inner_type() {
     );
 }
 
+// JSON Schema patterns carry ECMA-262 unicode semantics (the `u` flag),
+// so a unicode property escape matches characters, not bytes, and a
+// `\u{..}` escape names a code point.
+#[test]
+fn string_constraint_patterns_have_unicode_semantics() {
+    let mut builder = TypespaceBuilder::new(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize),
+    );
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "Word".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Word")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec![r"^\p{Letter}+\u{1F354}?$".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = common::codespace(&ts).into_stream();
+
+    #[check_and_include(
+        "tests/output/string_constraint_patterns_have_unicode_semantics.rs",
+        out
+    )]
+    fn inner() {
+        use import::*;
+
+        assert!(Word::try_from("h\u{e9}llo").is_ok());
+        assert!(Word::try_from("h\u{e9}llo\u{1F354}").is_ok());
+        assert!(Word::try_from("123").is_err());
+        assert!(
+            Word::try_from("\u{1F354}").is_err(),
+            "the letters are required"
+        );
+    }
+}
+
 // A string constraint checks a `&str` and then constructs the inner value
 // from it, which takes `String` or `FromStr`. A native that declares
 // neither is rejected at finalize rather than in the consumer's build.
