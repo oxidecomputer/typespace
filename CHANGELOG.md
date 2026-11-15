@@ -2,6 +2,8 @@
 
 ## Next
 
+## [0.1.1] - 2026-11-15
+
 * Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type
 * A string constraint's patterns are compiled with the ECMA-262 `u` flag, as
   JSON Schema specifies, so `\p{..}` and `\u{..}` escapes work; a pattern with
@@ -65,6 +67,7 @@
 
 * Initial release
 
+[0.1.1]: https://github.com/oxidecomputer/typespace/releases/v0.1.1
 [0.1.0]: https://github.com/oxidecomputer/typespace/releases/v0.1.0
 [0.0.1-alpha.4]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.4
 [0.0.1-alpha.3]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.3
