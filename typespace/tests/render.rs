@@ -8127,8 +8127,8 @@ fn test_crate_path_overrides() {
 }
 
 // Deny lists reject values through a nested `not`/`enum` schema. Verify that
-// nested JSON survives structural construction through a custom serde_json path,
-// without runtime parsing.
+// nested JSON survives structural construction through a custom serde_json
+// path, without runtime parsing.
 #[test]
 fn test_render_constrained_newtype_deny_list() {
     let settings = Settings::minimal()
