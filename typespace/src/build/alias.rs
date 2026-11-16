@@ -103,6 +103,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
 
     pub(crate) fn render(
         &self,
+        id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
     ) -> TokenStream {
@@ -119,7 +120,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypeAlias<Id> {
             target: type_id,
         } = self;
         let name = name.as_deref().expect("validated type has a name");
-        let description = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
+        let description = typespace.render_type_docs(description.as_deref(), id);
         let name_ident = format_ident!("{name}");
 
         let target_ident = typespace.render_ident(type_id, out);

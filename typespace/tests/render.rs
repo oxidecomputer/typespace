@@ -20,6 +20,138 @@ mod common;
 
 use serde_json as json_values;
 
+fn doc_strings(attrs: &[syn::Attribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .map(|attr| {
+            let syn::Meta::NameValue(meta) = &attr.meta else {
+                panic!("expected doc string")
+            };
+            let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(text),
+                ..
+            }) = &meta.value
+            else {
+                panic!("expected doc string")
+            };
+            text.value()
+        })
+        .collect()
+}
+
+#[test]
+fn test_type_id_docs() {
+    fn render(settings: Settings) -> syn::File {
+        let builder = typespace_builder!(settings, {
+            /// A record.
+            struct Record {
+                /// A collection.
+                values: Vec<Box<String>>,
+            }
+
+            /// A choice.
+            enum Choice {
+                /// One variant.
+                Only(String),
+            }
+
+            #[json = null]
+            struct Marker;
+
+            /// Two values.
+            struct Pair(String, String);
+
+            /// A wrapped value.
+            struct Wrapped(String);
+
+            type Alias = String;
+        });
+        let ts = builder.finalize(no_cycles).unwrap();
+        syn::parse2(common::codespace(&ts).into_stream()).unwrap()
+    }
+
+    let original = render(Settings::typical());
+    assert_eq!(
+        prettyplease::unparse(&original),
+        prettyplease::unparse(&render(Settings::typical().with_annotate_type_ids(false)))
+    );
+    let mut annotated = render(Settings::typical().with_annotate_type_ids(true));
+    assert_eq!(original.items.len(), annotated.items.len());
+    let mut count = 0;
+    for (original, annotated) in original.items.iter().zip(&mut annotated.items) {
+        let (name, original_attrs, annotated_attrs) = match (original, annotated) {
+            (syn::Item::Struct(a), syn::Item::Struct(b)) => (&a.ident, &a.attrs, &mut b.attrs),
+            (syn::Item::Enum(a), syn::Item::Enum(b)) => (&a.ident, &a.attrs, &mut b.attrs),
+            (syn::Item::Type(a), syn::Item::Type(b)) => (&a.ident, &a.attrs, &mut b.attrs),
+            _ => continue,
+        };
+        let mut expected = doc_strings(original_attrs);
+        if !expected.is_empty() {
+            expected.push(String::new());
+        }
+        expected.push(format!(" Type ID: {name}"));
+        assert_eq!(doc_strings(annotated_attrs), expected, "{name}");
+        *annotated_attrs = original_attrs.clone();
+        count += 1;
+    }
+    assert_eq!(count, 6);
+    // Removing the six type annotations leaves all other output unchanged,
+    // including field, variant, builder, and helper documentation.
+    assert_eq!(
+        prettyplease::unparse(&annotated),
+        prettyplease::unparse(&original)
+    );
+}
+
+#[test]
+fn test_type_id_docs_use_display_and_escape_ids() {
+    #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+    struct SourceId(u32);
+
+    impl std::fmt::Display for SourceId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "#/schemas/\"{}\"\\path\nnext", self.0)
+        }
+    }
+
+    let mut builder = TypespaceBuilder::new(Settings::minimal().with_annotate_type_ids(true));
+    builder
+        .insert(
+            SourceId(42),
+            typespace::build::UnitStruct::new(serde_json::Value::Null)
+                .name("Renamed")
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+    assert_eq!(
+        doc_strings(common::attrs_of(&file, "Renamed")),
+        [" Type ID: #/schemas/\"42\"\\path\nnext"]
+    );
+}
+
+#[test]
+fn test_type_id_docs_settings() {
+    for settings in [
+        Settings::minimal(),
+        Settings::typical(),
+        Settings::maximal(),
+    ] {
+        assert!(!settings.annotate_type_ids);
+    }
+    for (json, expected) in [
+        ("{}", false),
+        (r#"{"annotate_type_ids":false}"#, false),
+        (r#"{"annotate_type_ids":true}"#, true),
+    ] {
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.annotate_type_ids, expected);
+    }
+}
+
 // Stub for the user-provided type referenced by OptionalNullable::CustomType.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]

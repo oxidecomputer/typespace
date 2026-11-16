@@ -248,7 +248,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = typespace.render_type_docs(description.as_deref(), id);
         let name_ident = format_ident!("{name}");
 
         let mut traits = traits.clone();
@@ -788,6 +788,7 @@ impl UnitStruct {
 
     pub(crate) fn render<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display>(
         &self,
+        id: &Id,
         typespace: &TypespaceRenderer<'_, Id>,
         out: &mut Outputspace,
     ) -> proc_macro2::TokenStream {
@@ -811,7 +812,7 @@ impl UnitStruct {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
+        let rustdoc = typespace.render_type_docs(description.as_deref(), id);
         let name_ident = format_ident!("{name}");
 
         let repr_string = serde_json::to_string(repr).unwrap();
@@ -1072,7 +1073,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             unreachable!()
         };
         let name = name.as_deref().expect("validated type has a name");
-        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = typespace.render_type_docs(description.as_deref(), id);
 
         let name_ident = format_ident!("{name}");
 
@@ -2278,7 +2279,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
         let mut traits = traits.clone();
 
         let name = name.as_deref().expect("validated type has a name");
-        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc ]});
+        let rustdoc = typespace.render_type_docs(description.as_deref(), id);
         let name_ident = format_ident!("{name}");
 
         let inner_ident = typespace.render_ident(inner, out);

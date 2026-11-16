@@ -1411,7 +1411,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::UnitStruct(u) => {
                     let name = u.common.built_name().to_string();
-                    let tokens = u.render(self, &mut out);
+                    let tokens = u.render(id, self, &mut out);
                     out.cs().add_item(name, tokens);
                 }
                 Type::TupleStruct(t) => {
@@ -1426,7 +1426,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 }
                 Type::TypeAlias(a) => {
                     let name = a.common.built_name().to_string();
-                    let tokens = a.render(self, &mut out);
+                    let tokens = a.render(id, self, &mut out);
                     out.cs().add_item(name, tokens);
                 }
                 _ => {}
@@ -1441,6 +1441,22 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         }
 
         out.into_codespace()
+    }
+
+    pub(crate) fn render_type_docs(&self, description: Option<&str>, id: &Id) -> TokenStream {
+        let description = description.map(|text| quote! { #[doc = #text] });
+        let id_doc = self.settings.annotate_type_ids.then(|| {
+            let separator = description.as_ref().map(|_| quote! { #[doc = ""] });
+            let text = format!(" Type ID: {id}");
+            quote! {
+                #separator
+                #[doc = #text]
+            }
+        });
+        quote! {
+            #description
+            #id_doc
+        }
     }
 
     pub(crate) fn add_error_mod(&self, out: &mut Outputspace) {

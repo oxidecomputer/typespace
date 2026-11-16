@@ -337,7 +337,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Enum<Id> {
         };
         let name = name.as_deref().expect("validated type has a name");
         let tag_type = tag_type.as_ref().expect("validated enum has a tag type");
-        let rustdoc = description.as_ref().map(|desc| quote! { #[doc = #desc] });
+        let rustdoc = typespace.render_type_docs(description.as_deref(), id);
 
         let name_ident = format_ident!("{name}");
 

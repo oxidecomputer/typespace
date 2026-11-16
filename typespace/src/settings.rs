@@ -78,6 +78,11 @@ pub struct Settings {
     #[serde(default)]
     pub struct_builder: bool,
 
+    /// Append each generated type's source ID to its documentation.
+    /// Disabled by default.
+    #[serde(default)]
+    pub annotate_type_ids: bool,
+
     /// Overriding paths for the crates that generated code references; see
     /// [`GeneratedCrate`]. A crate with no entry uses its canonical path, e.g.
     /// `::serde_json`.
@@ -178,6 +183,7 @@ impl Settings {
             extra_derives: Default::default(),
             extra_attrs: Default::default(),
             struct_builder: false,
+            annotate_type_ids: false,
             crate_paths: Default::default(),
             typify_compat: false,
         }
@@ -380,6 +386,13 @@ impl Settings {
     /// Specify whether struct types should include an associated builder.
     pub fn with_struct_builder(mut self, struct_builder: bool) -> Self {
         self.struct_builder = struct_builder;
+        self
+    }
+
+    /// Append each generated type's source ID, formatted with `Display`, as a
+    /// separate paragraph after its description. Disabled by default.
+    pub fn with_annotate_type_ids(mut self, annotate_type_ids: bool) -> Self {
+        self.annotate_type_ids = annotate_type_ids;
         self
     }
 
