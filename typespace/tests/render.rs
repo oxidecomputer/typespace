@@ -13,7 +13,7 @@ use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOri
 use typespace::settings::{
     ContainerType, ForeignTrait, GeneratedCrate, OptionalNullable, Settings, Std,
 };
-use typespace::{TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
+use typespace::{TraitProvision, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
 
 mod common;
@@ -58,6 +58,36 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for OptionField<T> {
         false
     }
 }
+
+/// A native sequence whose elements no schema can name.
+pub struct Opaque(pub Vec<u32>);
+
+impl schemars::JsonSchema for Opaque {
+    fn schema_name() -> String {
+        "Opaque".to_string()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::Schema::Bool(true)
+    }
+}
+
+/// A vec container with a schema of its own, independent of its
+/// element type.
+pub struct OpaqueVec<T>(pub Vec<T>);
+
+impl<T> schemars::JsonSchema for OpaqueVec<T> {
+    fn schema_name() -> String {
+        "OpaqueVec".to_string()
+    }
+
+    fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::Schema::Bool(true)
+    }
+}
+
+/// An element type with no schema.
+pub struct NoSchema;
 
 #[test]
 fn test_struct_field_serde() {
@@ -7622,9 +7652,8 @@ fn test_tuple_struct_rest_cycles_through_a_box() {
     assert!(!rendered.contains("max_items"));
 }
 
-// A remainder contributes its own element count to the tuple's bounds:
-// a fixed-length array contributes exactly, and a tuple struct
-// contributes its fields plus its own remainder.
+// A rest contributes its own element count to the tuple's bounds: a
+// fixed-length array contributes exactly.
 #[test]
 fn test_tuple_struct_rest_bounds() {
     let builder = typespace_builder!(
@@ -7633,7 +7662,6 @@ fn test_tuple_struct_rest_bounds() {
             .with_required_trait(TypespaceTrait::JsonSchema),
         {
             struct Fixed(u32, #[flatten] [u32; 3]);
-            struct Nested(String, #[flatten] Fixed);
         }
     );
     let ts = builder.finalize(no_cycles).expect("finalize typespace");
@@ -7646,10 +7674,251 @@ fn test_tuple_struct_rest_bounds() {
         let array = schemars::schema_for!(import::Fixed).schema.array.unwrap();
         assert_eq!(array.min_items, Some(4));
         assert_eq!(array.max_items, Some(4));
+    }
+}
 
-        let array = schemars::schema_for!(import::Nested).schema.array.unwrap();
-        assert_eq!(array.min_items, Some(5));
-        assert_eq!(array.max_items, Some(5));
+// A rest is a sequence of one element type: it is spliced in one element
+// at a time and one `additionalItems` schema describes it. A tuple or a
+// tuple struct of mixed types is positional, a unit struct's constant
+// has to be an array, and a struct is not an array; each is refused at
+// finalize.
+#[test]
+fn test_tuple_struct_rest_must_be_a_sequence() {
+    for (name, builder) in [
+        (
+            "Labeled",
+            typespace_builder!(Settings::minimal(), {
+                struct Labeled(u32, #[flatten] (String, bool));
+            }),
+        ),
+        (
+            "Nested",
+            typespace_builder!(Settings::minimal(), {
+                struct Mixed(String, u32);
+                struct Nested(String, #[flatten] Mixed);
+            }),
+        ),
+        (
+            "Tagged",
+            typespace_builder!(Settings::minimal(), {
+                #[json = "x"]
+                struct Lone;
+                struct Tagged(u32, #[flatten] Lone);
+            }),
+        ),
+        (
+            "Keyed",
+            typespace_builder!(Settings::minimal(), {
+                struct Point {
+                    x: u32,
+                }
+                struct Keyed(u32, #[flatten] Point);
+            }),
+        ),
+    ] {
+        let Err(err) = builder.finalize(no_cycles) else {
+            panic!("{name}: a rest that is not a sequence is rejected");
+        };
+        assert!(
+            matches!(&err, Error::InvalidRest { name: offender } if offender == name),
+            "{name}: {err}"
+        );
+    }
+}
+
+// A rest's element type is `additionalItems`, whatever sequence holds
+// it and through any alias or newtype over that sequence. Each schema
+// accepts the serializer's own output and rejects a rest of the wrong
+// form, in particular the rest written as one nested array.
+#[test]
+fn test_tuple_struct_rest_items() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_std(Std::Unqualified)
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::JsonSchema),
+        {
+            struct Tags(u32, #[flatten] Set<String>);
+            struct Pair(u32, #[flatten] [bool; 2]);
+            struct Rows(u32, #[flatten] Vec<Vec<String>>);
+            struct Element {
+                text: String,
+            }
+            struct Referenced(u32, #[flatten] Vec<Element>);
+            struct Twice(u32, #[flatten] (String, String));
+            struct Flags(bool, bool);
+            struct Nested(u32, #[flatten] Flags);
+            type Names = Vec<String>;
+            struct Aliased(u32, #[flatten] Names);
+            struct Wrapper(Vec<String>);
+            struct Wrapped(u32, #[flatten] Wrapper);
+        }
+    );
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_tuple_struct_rest_items.rs",
+        common::codespace(&ts).into_stream()
+    )]
+    fn inner() {
+        // The schema accepts what the serializer writes, the value round
+        // trips, and each invalid form is refused by both the schema and
+        // the deserializer. Evaluates to the schema for further checks.
+        macro_rules! schema_accepts {
+            ($ty:ty, $value:expr, [$($invalid:tt),* $(,)?]) => {{
+                let schema = serde_json::to_value(schemars::schema_for!($ty)).unwrap();
+                let validator = jsonschema::draft7::new(&schema).unwrap();
+                let json = serde_json::to_value(&$value).unwrap();
+                assert!(validator.is_valid(&json), "{json}");
+                let _: $ty = serde_json::from_value(json).unwrap();
+                $(
+                    let invalid = serde_json::json!($invalid);
+                    assert!(!validator.is_valid(&invalid), "{invalid}");
+                    assert!(serde_json::from_value::<$ty>(invalid).is_err());
+                )*
+                schema
+            }};
+        }
+
+        let schema = schema_accepts!(
+            import::Tags,
+            import::Tags(1, ["a".to_string(), "b".to_string()].into_iter().collect()),
+            [[1, ["a"]], [1, 2]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "string" })
+        );
+        assert_eq!(schema["minItems"], 1);
+        assert!(schema.get("maxItems").is_none());
+
+        let schema = schema_accepts!(
+            import::Pair,
+            import::Pair(1, [true, false]),
+            [[1, true], [1, [true, false]], [1, true, false, true]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "boolean" })
+        );
+        assert_eq!(schema["minItems"], 3);
+        assert_eq!(schema["maxItems"], 3);
+
+        let schema = schema_accepts!(
+            import::Rows,
+            import::Rows(1, vec![vec!["a".to_string()], vec![]]),
+            [[1, "a"], [1, [["a"]]]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "array", "items": { "type": "string" } })
+        );
+
+        let schema = schema_accepts!(
+            import::Referenced,
+            import::Referenced(
+                1,
+                vec![import::Element {
+                    text: "a".to_string()
+                }]
+            ),
+            [[1, { "text": 1 }], [1, [{ "text": "a" }]]]
+        );
+        assert_eq!(schema["additionalItems"]["$ref"], "#/definitions/Element");
+
+        // A tuple or a tuple struct of one element type is that type a
+        // fixed number of times.
+        let schema = schema_accepts!(
+            import::Twice,
+            import::Twice(1, ("a".to_string(), "b".to_string())),
+            [[1, "a"], [1, ["a", "b"]], [1, "a", "b", "c"], [1, "a", 2]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "string" })
+        );
+        assert_eq!(schema["minItems"], 3);
+        assert_eq!(schema["maxItems"], 3);
+
+        let schema = schema_accepts!(
+            import::Nested,
+            import::Nested(1, import::Flags(true, false)),
+            [[1, true], [1, [true, false]], [1, true, 2]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "boolean" })
+        );
+        assert_eq!(schema["minItems"], 3);
+        assert_eq!(schema["maxItems"], 3);
+
+        let schema = schema_accepts!(
+            import::Aliased,
+            import::Aliased(1, vec!["a".to_string()]),
+            [[1, ["a"]]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "string" })
+        );
+
+        let schema = schema_accepts!(
+            import::Wrapped,
+            import::Wrapped(1, import::Wrapper(vec!["a".to_string()])),
+            [[1, ["a"]]]
+        );
+        assert_eq!(
+            schema["additionalItems"],
+            serde_json::json!({ "type": "string" })
+        );
+    }
+}
+
+// A rest the walk cannot see into leaves `additionalItems`
+// unconstrained rather than wrong: a native type hides its elements, a
+// container with a schema of its own may hold an element type with
+// none, which no schema could name, and a unit struct's constant array
+// holds values rather than types, though its length is exact.
+#[test]
+fn test_tuple_struct_rest_unknown_items() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::JsonSchema)
+            .with_vec_type(
+                ContainerType::new("super::OpaqueVec", [TypespaceTraitSet::empty()])
+                    .with_provision(TypespaceTrait::JsonSchema, TraitProvision::Always),
+            ),
+        {
+            native super::Opaque: JsonSchema;
+            native super::NoSchema: !JsonSchema;
+            struct Behind(u32, #[flatten] super::Opaque);
+            struct Elementless(u32, #[flatten] Vec<super::NoSchema>);
+            #[json = ["x", 2]]
+            struct Tail;
+            struct Constant(u32, #[flatten] Tail);
+        }
+    );
+    let ts = builder.finalize(no_cycles).expect("finalize typespace");
+
+    #[check_and_include(
+        "tests/output/test_tuple_struct_rest_unknown_items.rs",
+        common::codespace(&ts).into_stream()
+    )]
+    fn inner() {
+        for schema in [
+            serde_json::to_value(schemars::schema_for!(import::Behind)).unwrap(),
+            serde_json::to_value(schemars::schema_for!(import::Elementless)).unwrap(),
+        ] {
+            assert_eq!(schema["additionalItems"], serde_json::json!(true));
+            assert_eq!(schema["minItems"], 1);
+            assert!(schema.get("maxItems").is_none());
+        }
+
+        let schema = serde_json::to_value(schemars::schema_for!(import::Constant)).unwrap();
+        assert_eq!(schema["additionalItems"], serde_json::json!(true));
+        assert_eq!(schema["minItems"], 3);
+        assert_eq!(schema["maxItems"], 3);
     }
 }
 

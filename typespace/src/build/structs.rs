@@ -11,10 +11,10 @@ use crate::build::{JsonValue, Type, TypeCommon, TypeCommonBuilt, integer_width, 
 use crate::error::{Error, NameAxis};
 use crate::output::Outputspace;
 use crate::serde_attrs::SerdeDerives;
-use crate::settings::{GeneratedCrate, Settings, path_text};
+use crate::settings::{GeneratedCrate, Settings};
 use crate::{
-    DefaultConstructor, RenderedStructProperty, TraitProvision, TypespaceBuilder,
-    TypespaceRenderer, TypespaceTrait, has_trait,
+    ArrayElements, DefaultConstructor, RenderedStructProperty, TypespaceBuilder, TypespaceRenderer,
+    TypespaceTrait, has_trait,
 };
 
 /// A struct with named fields.
@@ -1199,63 +1199,63 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
         // on the side of more generated and less derive impls?
         let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
             let schemars = out.crate_path(GeneratedCrate::Schemars);
-            let (additional_items, min_items, max_items) = if let Some(rest_id) = rest.as_ref() {
-                // For a direct standard Vec remainder, each trailing item uses
-                // the element's schema. IfParameters establishes trait availability;
-                // it does not establish how a custom container represents its items.
-                // Restrict this correction to the known standard Vec case. Custom
-                // containers (including transparent Vec wrappers or aliases) and
-                // other remainder shapes retain their existing schema behavior,
-                // which may still describe an extra array level.
-                let vec_type = &typespace.settings.vec_type;
-                let additional_item_id = match typespace.types.get(rest_id) {
-                    Some(Type::Vec(element_id))
-                        if path_text(vec_type.path()) == "::std::vec::Vec"
-                            && vec_type.provision(TypespaceTrait::JsonSchema)
-                                == TraitProvision::IfParameters =>
-                    {
-                        element_id
-                    }
-                    _ => rest_id,
-                };
-                let additional_item_ident = typespace.render_ident(additional_item_id, out);
-                let additional_items = quote! {
-                    additional_items: Some(::std::boxed::Box::new(
-                        g.subschema_for::<#additional_item_ident>()
-                    )),
-                };
+            let len = fields.len();
 
-                let array_bounds = typespace.array_bounds(rest_id);
-                let len = fields.len();
+            // The rest's elements are what the schema can say about the
+            // items past the fixed fields: their type is `additionalItems`
+            // when the walk names it and it has a schema. Elements the
+            // walk cannot describe are left unconstrained rather than
+            // described wrongly.
+            let (additional_items, min, max) = match rest.as_ref() {
+                None => (TokenStream::new(), len, Some(len)),
+                Some(rest_id) => {
+                    let elements = typespace
+                        .array_elements(rest_id)
+                        .expect("finalize checked that the rest is a sequence");
+                    let (rest_min, rest_max) = elements.bounds();
+                    let additional_items = match elements {
+                        ArrayElements::Of { element, .. }
+                            if has_trait(
+                                typespace.types,
+                                typespace.settings,
+                                element,
+                                TypespaceTrait::JsonSchema,
+                                &mut BTreeSet::new(),
+                            ) =>
+                        {
+                            let element_ident = typespace.render_ident(element, out);
+                            quote! {
+                                additional_items: Some(::std::boxed::Box::new(
+                                    g.subschema_for::<#element_ident>()
+                                )),
+                            }
+                        }
 
-                let min = match array_bounds {
-                    Some((min, _)) => len + min,
-                    _ => len,
-                } as u32;
-                let max = match array_bounds {
-                    Some((_, Some(max))) => Some((len + max) as u32),
-                    _ => None,
-                };
-
-                let max_items = if let Some(max) = max {
-                    quote! { max_items: Some(#max), }
-                } else {
-                    TokenStream::new()
-                };
-
-                (
-                    additional_items,
-                    quote! { min_items: Some(#min), },
-                    max_items,
-                )
-            } else {
-                let len = fields.len() as u32;
-                (
-                    TokenStream::new(),
-                    quote! { min_items: Some(#len), },
-                    quote! { max_items: Some(#len), },
-                )
+                        ArrayElements::Of { .. } | ArrayElements::Unknown { .. } => {
+                            // We know there's something there, but we don't
+                            // really know what...
+                            quote! {
+                                additional_items: Some(::std::boxed::Box::new(
+                                    #schemars::schema::Schema::Bool(true)
+                                )),
+                            }
+                        }
+                    };
+                    (
+                        additional_items,
+                        len + rest_min,
+                        rest_max.map(|max| len + max),
+                    )
+                }
             };
+            let min = min as u32;
+            let min_items = quote! { min_items: Some(#min), };
+            let max_items = max
+                .map(|max| {
+                    let max = max as u32;
+                    quote! { max_items: Some(#max), }
+                })
+                .unwrap_or_default();
             let schema_description = description.as_ref().map(|desc| {
                 quote! {
                     description: Some(#desc.to_string()),

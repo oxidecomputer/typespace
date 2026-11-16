@@ -5,6 +5,12 @@
 * The default set container is a plain `Vec` with no element obligation. A
   set whose elements cannot be compared no longer fails at `finalize` unless
   the settings name a real set container such as `BTreeSet` or `HashSet`
+* A tuple struct's schema describes its rest's elements as `additionalItems`
+  for a `Vec`, `Set`, fixed array, or one-type tuple or tuple struct rest,
+  through any alias, newtype, or `Box`; elements it cannot describe are left
+  unconstrained
+* A tuple struct whose rest is not a sequence of one element type is rejected
+  at `finalize` (`Error::InvalidRest`)
 
 ## [0.1.1] - 2026-11-15
 
