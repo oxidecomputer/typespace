@@ -2609,15 +2609,15 @@ fn test_never_under_container_display_conflict() {
         panic!("expected finalize to fail with trait conflicts");
     };
 
-    // Box declines Display along with the other containers, so the
-    // conflict is reported at the box and never reaches the unit leaf.
+    // Box forwards Display, so the conflict reaches the unit leaf.
     assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
     let conflict = &conflicts[0];
     assert_eq!(conflict.required, TypespaceTrait::Display);
+    assert_eq!(conflict.offender, "()");
     assert!(matches!(conflict.origin, RequirementOrigin::GlobalSettings));
     assert!(matches!(
         &conflict.reason,
-        OffenderReason::Primitive { type_name } if type_name == "Box"
+        OffenderReason::Primitive { type_name } if type_name == "()"
     ));
 
     let vectored = typespace_builder!(
@@ -3263,7 +3263,7 @@ fn test_string_default_skip_withheld_under_typify_compat() {
 // Neither a Box nor a serde_json::Value is Copy, whatever it holds, so
 // a desired Copy drops at a type holding either; under typify_compat a
 // desired Display and FromStr are withheld from a JsonValue newtype
-// the same way, which the impls_of assertions pin. Clone is required
+// the same way, while Box still forwards Display. Clone is required
 // directly, as in the String case above, so a surviving derive
 // distinguishes "Copy dropped" from "nothing was granted at all".
 #[test]
@@ -3292,7 +3292,10 @@ fn test_box_and_json_value_drop_desired_traits() {
     assert_eq!(common::derives_of(&file, "Blob"), ["Clone"]);
     assert_eq!(common::derives_of(&file, "Blob2"), ["Clone"]);
 
-    assert_eq!(common::impls_of(&file, "Boxed"), ["Deref", "From<Box>"]);
+    assert_eq!(
+        common::impls_of(&file, "Boxed"),
+        ["Deref", "From<Box>", "Display"]
+    );
     assert!(common::impls_of(&file, "Blob").is_empty());
     assert_eq!(common::impls_of(&file, "Blob2"), ["Deref", "From<Value>"]);
 }
