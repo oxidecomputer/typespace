@@ -1805,13 +1805,14 @@ fn test_invalid_derive() {
     ));
 }
 
-// The acceptance test for conflict path rendering: a set whose elements are
-// structs containing Vec<f64>. The comparison requirements imposed on set
-// elements propagate through the struct and the vec to the float, and the
-// reported chain names every hop.
+// The acceptance test for conflict path rendering: a BTreeSet whose elements
+// are structs containing Vec<f64>. The comparison requirements the set
+// imposes on its elements propagate through the struct and the vec to the
+// float, and the reported chain names every hop.
 #[test]
 fn test_set_element_float_path() {
-    let mut builder = TypespaceBuilder::default();
+    let mut builder =
+        TypespaceBuilder::new(Settings::minimal().with_set_type(ContainerType::btree_set()));
 
     let float_id = "float".to_string();
     builder

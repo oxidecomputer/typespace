@@ -858,19 +858,38 @@ fn vec_element_obligation_is_imposed() {
     );
 }
 
+// The default set container is a Vec and demands nothing of its element:
+// a set of floats, which no comparison trait reaches, finalizes and
+// renders as the vec it is.
+#[test]
+fn default_set_demands_nothing_of_its_element() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        type Readings = Set<f64>;
+    });
+
+    let typespace = builder.finalize(no_cycles).unwrap();
+    let rendered = common::codespace(&typespace).into_stream().to_string();
+    assert!(
+        rendered.contains(":: std :: vec :: Vec < f64 >"),
+        "expected a Vec<f64> in {rendered}"
+    );
+}
+
 // Filtering the forwarded set can leave a subtrait without the
 // supertraits it rests on, so a container re-closes what it forwards.
 #[test]
 fn a_forwarded_set_stays_closed() {
-    // The set demands the ordering traits of its element, the map. The map
-    // claims PartialEq unconditionally, so PartialEq is not forwarded,
-    // and without the re-closure the map's value would absorb Eq, Ord,
-    // and PartialOrd with no PartialEq and derive code that does not
-    // compile.
-    let settings = Settings::minimal().with_map_type(
-        ContainerType::btree_map()
-            .with_provision(TypespaceTrait::PartialEq, TraitProvision::Always),
-    );
+    // The BTreeSet demands the ordering traits of its element, the map.
+    // The map claims PartialEq unconditionally, so PartialEq is not
+    // forwarded, and without the re-closure the map's value would absorb
+    // Eq, Ord, and PartialOrd with no PartialEq and derive code that does
+    // not compile.
+    let settings = Settings::minimal()
+        .with_set_type(ContainerType::btree_set())
+        .with_map_type(
+            ContainerType::btree_map()
+                .with_provision(TypespaceTrait::PartialEq, TraitProvision::Always),
+        );
     let builder = typespace_builder!(settings, {
         struct Value {
             n: u32,

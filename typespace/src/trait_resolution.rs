@@ -2246,11 +2246,12 @@ mod tests {
     }
 
     /// A trait an Option genuinely provides still passes through to the
-    /// element and is satisfied there: the default set-element traits reach
+    /// element and is satisfied there: a BTreeSet's element traits reach
     /// Color through the Option and land on it.
     #[test]
     fn option_forwards_supported_trait_to_element() {
-        let builder = typespace_builder!(Settings::minimal(), {
+        let settings = Settings::minimal().with_set_type(ContainerType::btree_set());
+        let builder = typespace_builder!(settings, {
             enum Color {
                 Red,
                 Green,
