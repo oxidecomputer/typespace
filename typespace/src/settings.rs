@@ -149,7 +149,7 @@ impl Settings {
 
     /// Default container set.
     fn default_set_type() -> ContainerType {
-        ContainerType::vec().with_obligations([ordered_lookup_traits()])
+        ContainerType::vec()
     }
 
     /// Default container vec.
@@ -283,10 +283,13 @@ impl Settings {
     /// Set the container type used to render
     /// [`Type::Set`](crate::build::Type).
     ///
-    /// The default is a `Vec`, which does not enforce deduplication but still
-    /// demands `Eq`, `PartialEq`, `Ord`, and `PartialOrd` of its elements.
-    /// Finalization imposes the container's element obligation on every set
-    /// element.
+    /// The default is a `Vec`, which demands nothing of its elements and
+    /// does not enforce deduplication: a set in the type graph records
+    /// that the source promised distinct elements, not that the element
+    /// type can be compared. A real set container such as
+    /// [`ContainerType::btree_set`] or [`ContainerType::hash_set`] carries
+    /// the obligation its element type must meet, and finalization imposes
+    /// it on every set element.
     ///
     /// The path is emitted verbatim with the element type as its single
     /// generic argument, so it must take one parameter and have an
@@ -612,9 +615,7 @@ impl ContainerType {
     /// follows the element, with `Default` unconditional.
     ///
     /// This is the container the set position renders by default as
-    /// well; the ordered-lookup obligation the default set carries is
-    /// deduplication policy, not the container's need, and is stated
-    /// with [`with_obligations`](Self::with_obligations).
+    /// well; see [`Settings::with_set_type`].
     pub fn vec() -> Self {
         Self::new("::std::vec::Vec", [TypespaceTraitSet::empty()])
             .with_provisions(&[TypespaceTrait::Default], &OWNING_NEVER)

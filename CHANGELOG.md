@@ -2,6 +2,10 @@
 
 ## Next
 
+* The default set container is a plain `Vec` with no element obligation. A
+  set whose elements cannot be compared no longer fails at `finalize` unless
+  the settings name a real set container such as `BTreeSet` or `HashSet`
+
 ## [0.1.1] - 2026-11-15
 
 * Fixes `TryFrom<&str>` for a string-constrained newtype over a string-like native type

@@ -44,13 +44,10 @@ fn provisions(container: &ContainerType) -> Vec<(TypespaceTrait, TraitProvision)
 }
 
 // An unconfigured Settings declares the containers typespace renders on
-// its own: a BTreeMap for maps, a Vec for both the set and the vec
-// position, and the ordered-lookup demand on set elements that
-// deduplication policy--not the Vec--imposes.
+// its own: a BTreeMap for maps and a Vec for both the set and the vec
+// position, the set demanding nothing of its elements.
 #[test]
 fn defaults_declare_the_std_containers() {
-    let default_set = ContainerType::vec().with_obligations([ordered_lookup()]);
-
     for settings in [
         Settings::minimal(),
         Settings::typical(),
@@ -59,7 +56,8 @@ fn defaults_declare_the_std_containers() {
     ] {
         assert_eq!(&settings.map_type, &ContainerType::btree_map());
         assert_eq!(settings.map_type.obligations(), [ordered_lookup(), set([])]);
-        assert_eq!(&settings.set_type, &default_set);
+        assert_eq!(&settings.set_type, &ContainerType::vec());
+        assert_eq!(settings.set_type.obligations(), [set([])]);
         assert_eq!(&settings.vec_type, &ContainerType::vec());
         assert_eq!(settings.vec_type.obligations(), [set([])]);
     }
