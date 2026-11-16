@@ -2444,9 +2444,7 @@ fn array_elements_seen<'a, Id: Ord>(
                 });
             }
 
-            // A tuple is positional, but one whose elements all have the
-            // same type is also a fixed count of that type; which form
-            // the input took is the input's business.
+            // A tuple whose elements all have the same type works fine here.
             Type::Tuple(items) => {
                 return homogeneous(items).map(|element| ArrayElements::Of {
                     element,
@@ -2455,9 +2453,8 @@ fn array_elements_seen<'a, Id: Ord>(
                 });
             }
 
-            // A tuple struct likewise, with its own remainder counted in
-            // when that remainder is of the same element type (or of a
-            // type the walk cannot name).
+            // A tuple struct likewise works if all its elements (and its
+            // remainder, if any) have the same type.
             Type::TupleStruct(tuple_struct) => {
                 let element = homogeneous(&tuple_struct.fields)?;
                 let fixed = tuple_struct.fields.len();
@@ -2486,9 +2483,9 @@ fn array_elements_seen<'a, Id: Ord>(
                 };
             }
 
-            // A unit struct serializes as its constant. When that is an
-            // array its length is exact, but its elements are JSON
-            // values, not types the schema could name.
+            // A unit struct serializes as a constant. When that is an array we
+            // know its length. We could also inspect the contents, but that
+            // seems like... an uncommon case we would care about here.
             Type::UnitStruct(unit_struct) => {
                 return match &unit_struct.repr {
                     serde_json::Value::Array(items) => Some(ArrayElements::Unknown {

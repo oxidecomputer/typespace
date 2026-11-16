@@ -1206,8 +1206,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
             // when the walk names it and it has a schema. Elements the
             // walk cannot describe are left unconstrained rather than
             // described wrongly.
-            let (additional_items, (min, max)) = match rest.as_ref() {
-                None => (TokenStream::new(), (len, Some(len))),
+            let (additional_items, min, max) = match rest.as_ref() {
+                None => (TokenStream::new(), len, Some(len)),
                 Some(rest_id) => {
                     let elements = typespace
                         .array_elements(rest_id)
@@ -1230,15 +1230,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
                                 )),
                             }
                         }
-                        ArrayElements::Of { .. } | ArrayElements::Unknown { .. } => quote! {
-                            additional_items: Some(::std::boxed::Box::new(
-                                #schemars::schema::Schema::Bool(true)
-                            )),
-                        },
+
+                        ArrayElements::Of { .. } | ArrayElements::Unknown { .. } => {
+                            // We know there's something there, but we don't
+                            // really know what...
+                            quote! {
+                                additional_items: Some(::std::boxed::Box::new(
+                                    #schemars::schema::Schema::Bool(true)
+                                )),
+                            }
+                        }
                     };
                     (
                         additional_items,
-                        (len + rest_min, rest_max.map(|max| len + max)),
+                        len + rest_min,
+                        rest_max.map(|max| len + max),
                     )
                 }
             };

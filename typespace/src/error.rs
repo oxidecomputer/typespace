@@ -135,14 +135,13 @@ where
 
     /// A tuple struct's "rest" is not a sequence of a single element type.
     ///
-    /// The rest is appended into the tuple's array one element at a time
-    /// through `FlattenedSequenceSerializer`, and its schema is one
-    /// `additionalItems` describing every element past the fixed fields, so
-    /// the rest has to serialize as a sequence of one element type: a `Vec`, a
-    /// `Set`, or a fixed-size array, through any stack of aliases, boxes, and
-    /// newtype structs, or a native type (which we can't see into so just hope
-    /// for the best). A tuple or a tuple struct is positional, and a scalar, a
-    /// struct, an enum, or a map is not an array at all.
+    /// The rest is appended into the tuple's array serialization through
+    /// `FlattenedSequenceSerializer`, and its schema is one `additionalItems`
+    /// describing every element past the fixed fields, so the rest has to
+    /// serialize as a sequence of a single element type: a `Vec`, a `Set`, or
+    /// a fixed-size array, through any stack of aliases, boxes, and newtype
+    /// structs, or a native type (which we can't see into so just hope for the
+    /// best).
     #[error(
         "the tuple struct `{name}` has a rest type that does not \
          serialize as a sequence of one element type"
