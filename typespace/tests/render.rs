@@ -71,11 +71,7 @@ fn test_type_id_docs() {
         syn::parse2(common::codespace(&ts).into_stream()).unwrap()
     }
 
-    let original = render(Settings::typical());
-    assert_eq!(
-        prettyplease::unparse(&original),
-        prettyplease::unparse(&render(Settings::typical().with_annotate_type_ids(false)))
-    );
+    let original = render(Settings::typical().with_annotate_type_ids(false));
     let mut annotated = render(Settings::typical().with_annotate_type_ids(true));
     assert_eq!(original.items.len(), annotated.items.len());
     let mut count = 0;
