@@ -2,6 +2,8 @@
 
 ## Next
 
+## [0.1.2] - 2026-11-16
+
 * The default set container is a plain `Vec` with no element obligation. A
   set whose elements cannot be compared no longer fails at `finalize` unless
   the settings name a real set container such as `BTreeSet` or `HashSet`
@@ -77,6 +79,7 @@
 
 * Initial release
 
+[0.1.2]: https://github.com/oxidecomputer/typespace/releases/v0.1.2
 [0.1.1]: https://github.com/oxidecomputer/typespace/releases/v0.1.1
 [0.1.0]: https://github.com/oxidecomputer/typespace/releases/v0.1.0
 [0.0.1-alpha.4]: https://github.com/oxidecomputer/typespace/releases/v0.0.1-alpha.4
