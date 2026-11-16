@@ -176,9 +176,10 @@ fn vec_matches_std() {
 // Option and Box are not consumer-configurable: their answers live in
 // trait_resolution's own arms, and nothing installs a declaration for
 // them. Stating those answers in the declaration vocabulary anyway lets
-// the same checks drive them--neither has Display or FromStr, Option
-// has Default whatever it holds, Option forwards Copy but Box never has
-// it (a box heap-allocates), and everything else follows the parameter.
+// the same checks drive them. Neither has FromStr; Option also lacks
+// Display but has Default whatever it holds. Option forwards Copy,
+// while Box never has it, and Box forwards Display. Everything else
+// follows the parameter.
 fn option_rules() -> ContainerType {
     ContainerType::option()
 }
@@ -187,6 +188,7 @@ fn box_rules() -> ContainerType {
     ContainerType::vec()
         .with_path("::std::boxed::Box")
         .with_provision(TypespaceTrait::Default, TraitProvision::IfParameters)
+        .with_provision(TypespaceTrait::Display, TraitProvision::IfParameters)
 }
 
 #[test]
@@ -207,20 +209,35 @@ fn option_rules_match_std() {
 #[test]
 fn box_rules_match_std() {
     let (with_parameter, without_parameter) = claimed(&box_rules());
-    // Box does forward Display, which typespace does not claim; that
-    // divergence is pinned as known_gaps::box_provides_display, and
-    // dropping Display from both sides here is what leaves it the only
-    // one.
     assert_eq!(
-        without(
-            &crate::implemented_traits!(::std::boxed::Box<String>),
-            &[TypespaceTrait::Display]
-        ),
-        without(&with_parameter, &[TypespaceTrait::Display])
+        crate::implemented_traits!(::std::boxed::Box<String>),
+        with_parameter
     );
     assert_eq!(
         crate::implemented_traits!(::std::boxed::Box<Nothing>),
         without_parameter
+    );
+}
+
+// Box forwards Display when its inner type implements it. A newtype
+// wrapping Box<String> can therefore print its inner value.
+#[test]
+fn box_provides_display() {
+    let settings = Settings::minimal().with_desired_trait(TypespaceTrait::Display);
+    let builder = typespace_builder!(settings, {
+        struct Wrapper(Box<String>);
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    assert!(
+        ts.get_type(&"Box<String>".to_string())
+            .has_impl(TypespaceTrait::Display)
+    );
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "Display", "Wrapper"),
+        "Display was not granted through a Box, which forwards it"
     );
 }
 

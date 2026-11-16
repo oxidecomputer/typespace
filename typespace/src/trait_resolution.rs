@@ -1487,13 +1487,9 @@ fn unnamed_provision<Id>(
         Type::Array(..) | Type::Tuple(_) => TraitProvision::IfParameters,
 
         // The utility of Box is primarily to break containment cycles.
-        // We treat it like a container with regard to trait
-        // forwarding, except for Copy: a box heap-allocates and is
-        // never Copy no matter what it holds.
-        Type::Box(_)
-            if trait_name == TypespaceTrait::Copy
-                || CONTAINER_UNSUPPORTED.contains(&trait_name) =>
-        {
+        // Box never implements Copy or FromStr, but forwards Display
+        // and the other supported traits when its inner type has them.
+        Type::Box(_) if matches!(trait_name, TypespaceTrait::Copy | TypespaceTrait::FromStr) => {
             TraitProvision::Never
         }
         Type::Box(_) => TraitProvision::IfParameters,
@@ -2219,11 +2215,12 @@ mod tests {
         ));
     }
 
-    /// The same as `required_display_on_option_conflicts`, for a Box.
+    /// A required FromStr conflicts at Box rather than passing to String,
+    /// which implements it.
     #[test]
-    fn required_display_on_box_conflicts() {
+    fn required_fromstr_on_box_conflicts() {
         let builder = typespace_builder!(
-            Settings::minimal().with_required_trait(TypespaceTrait::Display),
+            Settings::minimal().with_required_trait(TypespaceTrait::FromStr),
             {
                 struct Wrapper(Box<String>);
             }
@@ -2238,7 +2235,8 @@ mod tests {
 
         assert_eq!(conflicts.len(), 1, "conflicts: {conflicts:#?}");
         let conflict = &conflicts[0];
-        assert_eq!(conflict.required, TypespaceTrait::Display);
+        assert_eq!(conflict.required, TypespaceTrait::FromStr);
+        assert_eq!(conflict.offender, "Box<String>");
         assert!(matches!(
             &conflict.reason,
             OffenderReason::Primitive { type_name } if type_name == "Box"
@@ -3862,9 +3860,9 @@ mod tests {
         );
     }
 
-    /// `Box<T>` has no `Display` and no `FromStr`, whatever `T` has.
+    /// `Box<T>` forwards `Display`, but not `FromStr`.
     #[test]
-    fn box_has_no_display_or_from_str() {
+    fn box_forwards_display_but_not_from_str() {
         let builder = typespace_builder!(
             minimal_with_desired([
                 TypespaceTrait::Clone,
@@ -3880,7 +3878,7 @@ mod tests {
 
         assert_eq!(
             built_traits(&typespace, "Wrapper"),
-            trait_set([TypespaceTrait::Clone])
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Display])
         );
     }
 
@@ -4830,8 +4828,8 @@ mod tests {
         }
     }
 
-    /// self-referential untagged enum through Box loses Display,
-    /// terminates.
+    /// A self-referential untagged enum through Box retains Display,
+    /// and trait resolution terminates.
     #[test]
     fn probe_untagged_self_cycle_display() {
         let builder = typespace_builder!(
@@ -4845,7 +4843,10 @@ mod tests {
             }
         );
         let ts = builder.finalize(no_cycles).unwrap();
-        assert_eq!(built_traits(&ts, "U"), trait_set([TypespaceTrait::Clone]));
+        assert_eq!(
+            built_traits(&ts, "U"),
+            trait_set([TypespaceTrait::Clone, TypespaceTrait::Display])
+        );
     }
 
     /// a phase-1 grant on a map key supports desired Eq at another
