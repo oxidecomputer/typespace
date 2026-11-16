@@ -794,13 +794,7 @@ where
             }
             Type::JsonValue => {
                 let serde_json = self.crate_path(state, GeneratedCrate::SerdeJson);
-                let text = value.to_string();
-                Ok(self.generate(|| {
-                    quote! {
-                        #serde_json::from_str::<#serde_json::Value>(#text)
-                            .expect("invalid default provided")
-                    }
-                }))
+                Ok(self.generate(|| crate::value_tokens::value_tokens(value, &serde_json)))
             }
             Type::Never => Err(Error::InvalidDefault {
                 value: value.clone(),
@@ -1832,7 +1826,7 @@ mod tests {
         );
     }
 
-    /// A JSON value's default is its compact text, deserialized.
+    /// A JSON value's default constructs the value directly.
     #[test]
     fn test_json_value() {
         let mut types = BTreeMap::new();
@@ -1843,8 +1837,11 @@ mod tests {
         assert_eq!(
             walk(&types, &settings, "any", &value),
             quote! {
-                ::serde_json::from_str::<::serde_json::Value>("[8,6,7]")
-                    .expect("invalid default provided")
+                ::serde_json::Value::Array(vec![
+                    ::serde_json::Value::Number(::serde_json::Number::from(8i64)),
+                    ::serde_json::Value::Number(::serde_json::Number::from(6i64)),
+                    ::serde_json::Value::Number(::serde_json::Number::from(7i64))
+                ])
             }
             .to_string()
         );

@@ -1264,8 +1264,8 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TupleStruct<Id> {
 
             let default = default.as_ref().map(|JsonValue(value)| {
                 let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
-                let as_str = value.to_string();
-                quote! { default: Some(#serde_json::from_str(#as_str).unwrap()), }
+                let value = crate::value_tokens::value_tokens(value, &serde_json);
+                quote! { default: Some(#value), }
             });
 
             quote! {
@@ -2442,10 +2442,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     .map(|value| typespace.generate_default(&value.0, inner, out))
                     .collect::<Vec<_>>();
 
-                let value_string = values
-                    .iter()
-                    .map(|value| serde_json::to_string(&value.0).unwrap());
-
                 let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
                     let serde = out.crate_path(GeneratedCrate::Serde);
                     quote! {
@@ -2475,13 +2471,12 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
                     let serde_json = out.crate_path(GeneratedCrate::SerdeJson);
                     let schemars = out.crate_path(GeneratedCrate::Schemars);
-                    // TODO 9/7/2026
-                    // I'm really not sure why typify 1 did this `from_str` stuff
-                    // when we--I think--already have serde_json::Value tokens
-                    // ready to go... but we can look into that later.
+                    let value_tokens = values
+                        .iter()
+                        .map(|value| crate::value_tokens::value_tokens(&value.0, &serde_json));
                     let enum_values = quote! {
                         ::std::option::Option::Some([
-                            #( #serde_json::from_str(#value_string).unwrap(), )*
+                            #( #value_tokens, )*
                         ].into_iter().collect())
                     };
 

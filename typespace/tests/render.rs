@@ -18,6 +18,8 @@ use typespace_test_macro::{check_and_include, typespace_builder};
 
 mod common;
 
+use serde_json as json_values;
+
 // Stub for the user-provided type referenced by OptionalNullable::CustomType.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
@@ -5710,6 +5712,12 @@ fn test_render_constrained_newtype_allow_list() {
             tomax
         );
         serde_json::from_str::<ConstrainedString>("\"zartan\"").expect_err("not on the list");
+
+        let schema = schemars::schema_for!(ConstrainedString);
+        assert_eq!(
+            schema.schema.enum_values,
+            Some(vec![serde_json::json!("tomax"), serde_json::json!("xamot")])
+        );
     }
 }
 
@@ -8118,5 +8126,40 @@ fn test_crate_path_overrides() {
         // Pattern validation runs through the facade regress path.
         let _ = Code::try_from("xyz").unwrap();
         let _ = Code::try_from("yz").unwrap_err();
+    }
+}
+
+// Deny lists reject values through a nested `not`/`enum` schema. Verify that
+// nested JSON survives structural construction through a custom serde_json
+// path, without runtime parsing.
+#[test]
+fn test_render_constrained_newtype_deny_list() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::JsonSchema)
+        .with_crate_path(GeneratedCrate::SerdeJson, "super::json_values");
+    let value = serde_json::json!({
+        "a": [-7, u64::MAX, 1.5, "quote\"\n", true, false, null, {}, []]
+    });
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("json".to_string(), Type::JsonValue).unwrap();
+    builder
+        .insert(
+            "denied".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("json".to_string())
+                    .name("DeniedJson")
+                    .constraints(NewtypeConstraints::DenyList(vec![JsonValue(value.clone())])),
+            ),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = common::codespace(&ts).into_stream();
+    assert!(!out.to_string().contains("from_str"));
+
+    #[check_and_include("tests/output/test_render_constrained_newtype_deny_list.rs", out)]
+    fn inner() {
+        let schema = schemars::schema_for!(import::DeniedJson);
+        let not = schema.schema.subschemas.unwrap().not.unwrap().into_object();
+        assert_eq!(not.enum_values, Some(vec![value]));
     }
 }
