@@ -62,8 +62,20 @@ pub mod defaults {
             .expect("invalid default provided")
     }
     pub(super) fn property_defaults_blob() -> ::serde_json::Value {
-        ::serde_json::from_str::<::serde_json::Value>("{\"a\":[8,6,7]}")
-            .expect("invalid default provided")
+        ::serde_json::Value::Object(
+            ::serde_json::Map::from_iter([
+                (
+                    "a".to_string(),
+                    ::serde_json::Value::Array(
+                        vec![
+                            ::serde_json::Value::Number(::serde_json::Number::from(8i64)),
+                            ::serde_json::Value::Number(::serde_json::Number::from(6i64)),
+                            ::serde_json::Value::Number(::serde_json::Number::from(7i64))
+                        ],
+                    ),
+                ),
+            ]),
+        )
     }
     pub(super) fn property_defaults_weight() -> f64 {
         1.5_f64

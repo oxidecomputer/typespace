@@ -75,7 +75,14 @@ impl ::schemars::JsonSchema for MyTupleStruct {
                 ::std::boxed::Box::new(::schemars::schema::Metadata {
                     title: Some("MyTupleStruct".to_string()),
                     default: Some(
-                        ::serde_json::from_str("[\"one\",2,\"three\",\"four\"]").unwrap(),
+                        ::serde_json::Value::Array(
+                            vec![
+                                ::serde_json::Value::String("one".to_string()),
+                                ::serde_json::Value::Number(::serde_json::Number::from(2i64)),
+                                ::serde_json::Value::String("three".to_string()),
+                                ::serde_json::Value::String("four".to_string())
+                            ],
+                        ),
                     ),
                     ..::std::default::Default::default()
                 }),

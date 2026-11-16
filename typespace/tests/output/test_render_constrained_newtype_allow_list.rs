@@ -46,8 +46,8 @@ impl ::schemars::JsonSchema for ConstrainedString {
             .into_object();
         schema.enum_values = ::std::option::Option::Some(
             [
-                ::serde_json::from_str("\"tomax\"").unwrap(),
-                ::serde_json::from_str("\"xamot\"").unwrap(),
+                ::serde_json::Value::String("tomax".to_string()),
+                ::serde_json::Value::String("xamot".to_string()),
             ]
                 .into_iter()
                 .collect(),
