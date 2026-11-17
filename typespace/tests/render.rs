@@ -8163,3 +8163,48 @@ fn test_render_constrained_newtype_deny_list() {
         assert_eq!(not.enum_values, Some(vec![value]));
     }
 }
+
+// A unit-typed property is initialized with `Ok(())` in both the
+// builder's Default impl and its From impl. Passing a unit value to
+// `Ok(..)` through `Default::default()` or `value.nothing` trips
+// clippy's unit_arg lint in every consumer. The property carries
+// #[default] because only a property with a default has the builder's
+// Default impl construct a value for it; a required one starts as Err.
+#[test]
+fn test_builder_unit_property() {
+    let settings = Settings::minimal()
+        .with_struct_builder(true)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize);
+
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            #[default]
+            nothing: (),
+            name: String,
+        }
+    });
+
+    let ts = builder.finalize(no_cycles).unwrap();
+    let rendered = common::codespace(&ts).into_stream().to_string();
+
+    // The rendered initializer of the unit field, up to the next comma.
+    let initializers = rendered
+        .match_indices("nothing : Ok (")
+        .map(|(start, _)| {
+            let rest = &rendered[start..];
+            rest[..rest.find(',').unwrap_or(rest.len())]
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+
+    // One in the Default impl and one in the From impl.
+    assert_eq!(initializers.len(), 2, "initializers: {initializers:#?}");
+    for initializer in &initializers {
+        assert_eq!(
+            initializer, "nothing : Ok (())",
+            "unit property should be Ok(()), all initializers: {initializers:#?}"
+        );
+    }
+}
