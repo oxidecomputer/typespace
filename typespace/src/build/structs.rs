@@ -295,6 +295,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 |RenderedStructProperty {
                      rust_name_ident,
                      default,
+                     is_unit,
                      ..
                  }| match default {
                     DefaultConstructor::None => {
@@ -303,9 +304,40 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                             Err(#msg.to_string())
                         }
                     }
+                    // This case is to avoid the clippy::unit_arg lint.
+                    DefaultConstructor::Default if *is_unit => quote! { Ok(()) },
                     DefaultConstructor::Default => quote! { Ok(Default::default()) },
                     DefaultConstructor::Generated(default_expr) => {
                         quote! { Ok(super::#default_expr) }
+                    }
+                },
+            );
+
+            let try_from_value = if prop_ident.is_empty() {
+                quote! { _value }
+            } else {
+                quote! { value }
+            };
+            let from_value = if rendered_properties
+                .iter()
+                .all(|RenderedStructProperty { is_unit, .. }| *is_unit)
+            {
+                quote! { _value }
+            } else {
+                quote! { value }
+            };
+
+            let prop_from_value = rendered_properties.iter().map(
+                |RenderedStructProperty {
+                     rust_name_ident,
+                     is_unit,
+                     ..
+                 }| {
+                    if *is_unit {
+                        // This case is to avoid the clippy::unit_arg lint.
+                        quote! { Ok(()) }
+                    } else {
+                        quote! { Ok(value.#rust_name_ident) }
                     }
                 },
             );
@@ -314,12 +346,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
             // item order under its own item key: decl, Default, setters,
             // TryFrom<Builder> for Type, From<Type> for Builder. It is
             // BUILDER_ORDER in tests/item_order.rs.
-            let value_ident = if prop_ident.is_empty() {
-                quote! { _value }
-            } else {
-                quote! { value }
-            };
-
             let builder = quote! {
                 #[derive(Clone, Debug)]
                 pub struct #name_ident {
@@ -360,7 +386,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 {
                     type Error = super::error::ConversionError;
 
-                    fn try_from(#value_ident: #name_ident)
+                    fn try_from(#try_from_value: #name_ident)
                         -> ::std::result::Result<Self, super::error::ConversionError>
                     {
                         Ok(Self {
@@ -372,10 +398,10 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> Struct<Id> {
                 }
 
                 impl ::std::convert::From<super::#name_ident> for #name_ident {
-                    fn from(#value_ident: super::#name_ident) -> Self {
+                    fn from(#from_value: super::#name_ident) -> Self {
                         Self {
                             #(
-                                #prop_ident: Ok(value.#prop_ident),
+                                #prop_ident: #prop_from_value,
                             )*
                         }
                     }

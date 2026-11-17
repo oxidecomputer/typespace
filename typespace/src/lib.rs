@@ -2166,6 +2166,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             prop_ty_ident,
             prop_ty_ident_scoped,
             default,
+            is_unit: matches!(ty, Type::Unit),
         }
     }
 
@@ -2534,6 +2535,7 @@ pub(crate) struct RenderedStructProperty {
     pub prop_ty_ident: TokenStream,
     pub prop_ty_ident_scoped: TokenStream,
     pub default: DefaultConstructor,
+    pub is_unit: bool,
 }
 
 impl ToTokens for RenderedStructProperty {
@@ -2546,6 +2548,7 @@ impl ToTokens for RenderedStructProperty {
             prop_ty_ident,
             prop_ty_ident_scoped: _,
             default: _,
+            is_unit: _,
         } = self;
         let vis_pub = vis_pub.then(|| quote! { pub });
         tokens.extend(quote! {
