@@ -41,7 +41,8 @@ fn integer_domain(itype: &str) -> Option<(i128, i128, bool)> {
         "i8" => (i8::MIN as i128, i8::MAX as i128),
         "i16" => (i16::MIN as i128, i16::MAX as i128),
         "i32" => (i32::MIN as i128, i32::MAX as i128),
-        "i64" | "i128" | "isize" => (i64::MIN as i128, i64::MAX as i128),
+        "i64" | "isize" => (i64::MIN as i128, i64::MAX as i128),
+        "i128" => (i64::MIN as i128, u64::MAX as i128),
         _ => return None,
     };
 
@@ -1875,6 +1876,11 @@ mod tests {
             reject(&types, &settings, "f", &serde_json::json! { "1.5" }),
             Error::InvalidDefault { .. }
         ));
+    }
+
+    #[test]
+    fn test_i128_accepts_u64_max() {
+        check_integer_value(&serde_json::json!(u64::MAX), "i128", &"i128").unwrap();
     }
 
     /// A `NonZero` integer is built through `new`, not written as a literal.
