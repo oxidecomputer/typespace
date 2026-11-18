@@ -4592,6 +4592,291 @@ fn native_default_value_requires_deserialize() {
     ));
 }
 
+/// A default on a constrained newtype has to satisfy the constraints, or
+/// finalize rejects it with `InvalidDefault`. The generated default
+/// constructs the value directly, so this is the only check it gets.
+#[test]
+fn test_default_value_newtype_constraints() {
+    use serde_json::json;
+
+    // Finalize a struct with one property, a newtype over `inner` with the
+    // given constraints, where the property's default value is `default`.
+    fn finalize(
+        inner: Type<String>,
+        constraints: NewtypeConstraints,
+        default: serde_json::Value,
+    ) -> Result<(), Error<String>> {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert("number".to_string(), Type::Float("f64".to_string()))
+            .unwrap();
+        builder.insert("inner".to_string(), inner).unwrap();
+        builder
+            .insert(
+                "Constrained".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("inner".to_string())
+                        .name("Constrained")
+                        .constraints(constraints),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Holder".to_string(),
+                Struct::new()
+                    .name("Holder")
+                    .properties(vec![
+                        StructProperty::new("value", "Constrained".to_string())
+                            .with_state(StructPropertyState::DefaultValue(JsonValue(default))),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder.finalize(no_cycles).map(|_| ())
+    }
+
+    let string = |min, max, patterns: &[&str]| NewtypeConstraints::String {
+        min,
+        max,
+        patterns: patterns.iter().map(|p| p.to_string()).collect(),
+    };
+    let list = |values: &[serde_json::Value]| values.iter().cloned().map(JsonValue).collect();
+
+    // (inner type, constraints, defaults that satisfy them, defaults that
+    // violate them, one per bound)
+    let cases = [
+        (
+            Type::String,
+            string(None, None, &["^[0-9]+$"]),
+            vec![json!("123")],
+            vec![json!("xyz")],
+        ),
+        // The limit counts characters, not bytes.
+        (
+            Type::String,
+            string(Some(2), Some(2), &[]),
+            vec![json!("ok"), json!("\u{e9}\u{e9}")],
+            vec![json!("o"), json!("too")],
+        ),
+        (
+            Type::String,
+            NewtypeConstraints::AllowList(list(&[json!("a"), json!("b")])),
+            vec![json!("a")],
+            vec![json!("c")],
+        ),
+        (
+            Type::String,
+            NewtypeConstraints::DenyList(list(&[json!("x")])),
+            vec![json!("y")],
+            vec![json!("x")],
+        ),
+        // A listed number matches by value, not by JSON form, and an integer
+        // matches exactly even past f64's precision.
+        (
+            Type::Float("f64".to_string()),
+            NewtypeConstraints::DenyList(list(&[json!(1.0)])),
+            vec![json!(2)],
+            vec![json!(1)],
+        ),
+        (
+            Type::Integer("u64".to_string()),
+            NewtypeConstraints::AllowList(list(&[json!(9007199254740993u64)])),
+            vec![json!(9007199254740993u64)],
+            vec![json!(9007199254740992u64)],
+        ),
+        (
+            Type::Vec("number".to_string()),
+            NewtypeConstraints::AllowList(list(&[json!([1.0])])),
+            vec![json!([1])],
+            vec![json!([2])],
+        ),
+        (
+            Type::Integer("u32".to_string()),
+            NewtypeConstraints::Integer {
+                min: Some(2),
+                max: Some(10),
+                multiple_of: Some(2),
+            },
+            vec![json!(2), json!(10)],
+            vec![json!(0), json!(12), json!(3)],
+        ),
+        (
+            Type::Float("f64".to_string()),
+            NewtypeConstraints::Float {
+                min: Some(FloatConstraint::Exclusive(0.0)),
+                max: Some(FloatConstraint::Inclusive(1.0)),
+                multiple_of: Some(0.1),
+            },
+            vec![json!(0.3), json!(1.0)],
+            vec![json!(0.0), json!(1.1), json!(0.35)],
+        ),
+        (
+            Type::Float("f64".to_string()),
+            NewtypeConstraints::Float {
+                min: None,
+                max: Some(FloatConstraint::Exclusive(1.0)),
+                multiple_of: None,
+            },
+            vec![json!(0.5)],
+            vec![json!(1.0)],
+        ),
+        (
+            Type::Float("f32".to_string()),
+            NewtypeConstraints::Float {
+                min: None,
+                max: None,
+                multiple_of: Some(0.1),
+            },
+            vec![json!(0.3)],
+            vec![json!(0.35)],
+        ),
+        // An f32 bound compares in f32, where 0.99999999 rounds to 1.0.
+        (
+            Type::Float("f32".to_string()),
+            NewtypeConstraints::Float {
+                min: Some(FloatConstraint::Inclusive(0.1)),
+                max: Some(FloatConstraint::Exclusive(1.0)),
+                multiple_of: None,
+            },
+            vec![json!(0.5), json!(0.09999999999)],
+            vec![json!(0.99999999)],
+        ),
+        (
+            Type::Vec("string".to_string()),
+            NewtypeConstraints::Array {
+                min: Some(1),
+                max: Some(2),
+            },
+            vec![json!(["a"]), json!(["a", "b"])],
+            vec![json!([]), json!(["a", "b", "c"])],
+        ),
+    ];
+    for (inner, constraints, satisfying, violating) in cases {
+        for value in satisfying {
+            finalize(inner.clone(), constraints.clone(), value.clone())
+                .unwrap_or_else(|e| panic!("{value} satisfies {constraints:?}: {e}"));
+        }
+        for value in violating {
+            let err = finalize(inner.clone(), constraints.clone(), value.clone())
+                .expect_err(&format!("{value} violates {constraints:?}"));
+            assert!(
+                matches!(&err, Error::InvalidDefault { value: got, .. } if *got == value),
+                "{constraints:?}: {err}"
+            );
+        }
+    }
+}
+
+/// The check applies at every newtype the default's type reaches, and to a
+/// whole-type default on the newtype itself.
+#[test]
+fn test_default_value_nested_newtype_constraints() {
+    let pattern = || NewtypeConstraints::String {
+        min: None,
+        max: None,
+        patterns: vec!["^[0-9]+$".to_string()],
+    };
+
+    // `Holder.value` is an unconstrained newtype over a constrained one.
+    let through_outer = |default: &str| {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "Inner".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("Inner")
+                        .constraints(pattern()),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Outer".to_string(),
+                Type::NewtypeStruct(NewtypeStruct::new("Inner".to_string()).name("Outer")),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Holder".to_string(),
+                Struct::new()
+                    .name("Holder")
+                    .properties(vec![
+                        StructProperty::new("value", "Outer".to_string()).with_state(
+                            StructPropertyState::DefaultValue(JsonValue(serde_json::json!(
+                                default
+                            ))),
+                        ),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder.finalize(no_cycles).map(|_| ())
+    };
+    through_outer("123").expect("\"123\" matches Inner's pattern");
+    let err = through_outer("xyz").expect_err("\"xyz\" violates Inner's pattern");
+    assert!(
+        matches!(&err, Error::InvalidDefault { id, .. } if id == "Inner"),
+        "{err}"
+    );
+
+    // The newtype's own default value.
+    let whole_type = |default: &str| {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "Code".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("Code")
+                        .constraints(pattern())
+                        .default(serde_json::json!(default)),
+                ),
+            )
+            .unwrap();
+        builder.finalize(no_cycles).map(|_| ())
+    };
+    whole_type("123").expect("\"123\" matches the pattern");
+    let err = whole_type("xyz").expect_err("\"xyz\" violates the pattern");
+    assert!(matches!(&err, Error::InvalidDefault { .. }), "{err}");
+}
+
+/// A pattern that does not compile is a constraint error at finalize,
+/// whether or not a default value exercises it.
+#[test]
+fn test_newtype_pattern_must_compile() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "Broken".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Broken")
+                    .constraints(NewtypeConstraints::String {
+                        min: None,
+                        max: None,
+                        patterns: vec!["(".to_string()],
+                    }),
+            ),
+        )
+        .unwrap();
+    let err = builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect_err("\"(\" is not a pattern");
+    assert!(
+        matches!(&err, Error::InvalidConstraints { name, kind, .. } if name == "Broken" && *kind == "string"),
+        "{err}"
+    );
+}
+
 /// A float rejects a value that is not a number.
 #[test]
 fn test_default_value_float_rejects_non_number() {
