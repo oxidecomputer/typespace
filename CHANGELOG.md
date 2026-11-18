@@ -3,10 +3,7 @@
 ## Next
 
 * An allow-list or deny-list newtype whose inner type implements `FromStr`
-  implements it too, parsing the inner value and then applying the list;
-  `Display` forwards to the inner type. Previously trait resolution granted
-  both traits and the renderer wrote neither impl, so `has_impl` reported an
-  impl that did not exist
+  implements it too; `Display` forwards to the inner type.
 
 ## [0.1.2] - 2026-11-16
 

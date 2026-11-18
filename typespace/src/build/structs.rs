@@ -2561,10 +2561,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // TODO if the sub_type is a string we could probably impl
-                // TryFrom<&str> as well and FromStr. But we don't want to for
-                // non-strings where the vibe of FromStr is more "parse me".
-
                 // Trait resolution grants FromStr only when the inner type
                 // implements it, so the impl parses the inner value and
                 // then applies the list through the TryFrom impl below.
@@ -2602,6 +2598,9 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                 let not =
                     matches!(constraints, NewtypeConstraints::AllowList(_)).then(|| quote! { ! });
                 typespace.add_error_mod(out);
+
+                // TODO if the sub_type is a string we could probably impl
+                // TryFrom<&str>.
 
                 quote! {
                         #display_impl
