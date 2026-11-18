@@ -2582,6 +2582,150 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
 
             NewtypeConstraints::String { min, max, patterns } => {
                 typespace.add_error_mod(out);
+
+                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
+                    let serde = out.crate_path(GeneratedCrate::Serde);
+                    quote! {
+                        impl<'de> #serde::Deserialize<'de> for #name_ident {
+                            fn deserialize<D>(
+                                deserializer: D,
+                            ) -> ::std::result::Result<Self, D::Error>
+                            where
+                                D: #serde::Deserializer<'de>,
+                            {
+                                ::std::convert::TryFrom::try_from(
+                                    ::std::string::String::deserialize(
+                                        deserializer
+                                    )?
+                                )
+                                .map_err(|e: self::error::ConversionError| {
+                                    <D::Error as #serde::de::Error>::custom(
+                                        e.to_string(),
+                                    )
+                                })
+                            }
+                        }
+                    }
+                });
+
+                let json_schema_impl = traits.remove(TypespaceTrait::JsonSchema).then(|| {
+                    let schemars = out.crate_path(GeneratedCrate::Schemars);
+                    let min_length = min.map(|v| {
+                        let v = v as u32;
+                        quote! {
+                            schema.string().min_length = ::std::option::Option::Some(#v);
+                        }
+                    });
+                    let max_length = max.map(|v| {
+                        let v = v as u32;
+                        quote! {
+                            schema.string().max_length = ::std::option::Option::Some(#v);
+                        }
+                    });
+
+                    let pattern_info = match patterns.as_slice() {
+                        [] => TokenStream::new(),
+
+                        [solo] => {
+                            // For a single pattern, we can simply set the
+                            // pattern field.
+                            quote! {
+                                schema.string().pattern =
+                                    ::std::option::Option::Some(#solo.to_string());
+                            }
+                        }
+
+                        many => {
+                            // With multiple patterns, we need to put each in a
+                            // subschema within an allOf.
+                            let pattern_subschema = many.iter().map(|p| {
+                                quote! {
+                                    #schemars::schema::SchemaObject {
+                                        string: ::std::option::Option::Some(
+                                            ::std::boxed::Box::new(
+                                                #schemars::schema::StringValidation {
+                                                    pattern: ::std::option::Option::Some(
+                                                        #p.to_string()
+                                                    ),
+                                                    ..::std::default::Default::default()
+                                                }
+                                            )
+                                        ),
+                                        ..::std::default::Default::default()
+                                    }.into()
+                                }
+                            });
+                            quote! {
+                                schema.subschemas().all_of = ::std::option::Option::Some(
+                                    [
+                                        #( #pattern_subschema, )*
+                                    ].into_iter().collect()
+                                );
+                            }
+                        }
+                    };
+                    quote! {
+                        impl #schemars::JsonSchema for #name_ident {
+                            fn schema_name() -> ::std::string::String {
+                                #name.to_string()
+                            }
+
+                            fn json_schema(
+                                g: &mut #schemars::r#gen::SchemaGenerator
+                            ) -> #schemars::schema::Schema {
+                                let mut schema =
+                                    <#inner_ident as #schemars::JsonSchema>
+                                        ::json_schema(g)
+                                        .into_object();
+                                #min_length
+                                #max_length
+                                #pattern_info
+                                schema.into()
+                            }
+                        }
+                    }
+                });
+
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
+
+                            fn from_str(value: &str) ->
+                                ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                ::std::convert::TryFrom::try_from(value)
+                            }
+                        }
+
+                    }
+                });
+
+                // Construct the inner type from the value. For a String this
+                // is simple; for other types we rely on FromStr.
+                let construct = match typespace.types.get(inner) {
+                    Some(Type::String) => quote! { Ok(Self(value.to_string())) },
+                    _ => quote! {
+                        value.parse().map(Self).map_err(|e| {
+                            ::std::string::ToString::to_string(&e).into()
+                        })
+                    },
+                };
+
+                // TYPIFY COMPAT: typify 1 writes no Display for a
+                // constrained string newtype.
+                let display_impl = (traits.remove(TypespaceTrait::Display)
+                && !typespace.settings.typify_compat)
+                .then(|| {
+                    quote! {
+                        impl ::std::fmt::Display for #name_ident {
+                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                self.0.fmt(f)
+                            }
+                        }
+                    }
+                });
+
                 let max = max.map(|v| {
                     let err = format!("longer than {} characters", v);
                     quote! {
@@ -2630,71 +2774,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     },
                 };
 
-                let deserialize_impl = traits.remove(TypespaceTrait::Deserialize).then(|| {
-                    let serde = out.crate_path(GeneratedCrate::Serde);
-                    quote! {
-                        impl<'de> #serde::Deserialize<'de> for #name_ident {
-                            fn deserialize<D>(
-                                deserializer: D,
-                            ) -> ::std::result::Result<Self, D::Error>
-                            where
-                                D: #serde::Deserializer<'de>,
-                            {
-                                ::std::convert::TryFrom::try_from(
-                                    ::std::string::String::deserialize(
-                                        deserializer
-                                    )?
-                                )
-                                .map_err(|e: self::error::ConversionError| {
-                                    <D::Error as #serde::de::Error>::custom(
-                                        e.to_string(),
-                                    )
-                                })
-                            }
-                        }
-                    }
-                });
-
-                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
-                    quote! {
-                        impl ::std::str::FromStr for #name_ident {
-                            type Err = self::error::ConversionError;
-
-                            fn from_str(value: &str) ->
-                                ::std::result::Result<Self, self::error::ConversionError>
-                            {
-                                ::std::convert::TryFrom::try_from(value)
-                            }
-                        }
-
-                    }
-                });
-
-                // Construct the inner type from the value. For a String this
-                // is simple; for other types we rely on FromStr.
-                let construct = match typespace.types.get(inner) {
-                    Some(Type::String) => quote! { Ok(Self(value.to_string())) },
-                    _ => quote! {
-                        value.parse().map(Self).map_err(|e| {
-                            ::std::string::ToString::to_string(&e).into()
-                        })
-                    },
-                };
-
-                // TYPIFY COMPAT: typify 1 writes no Display for a
-                // constrained string newtype.
-                let display_impl = (traits.remove(TypespaceTrait::Display)
-                && !typespace.settings.typify_compat)
-                .then(|| {
-                    quote! {
-                        impl ::std::fmt::Display for #name_ident {
-                            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                                self.0.fmt(f)
-                            }
-                        }
-                    }
-                });
-
                 quote! {
                     #display_impl
                     #from_str_impl
@@ -2722,6 +2801,7 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
 
                     #deserialize_impl
+                    #json_schema_impl
                 }
             }
             NewtypeConstraints::Array { min, max } => {

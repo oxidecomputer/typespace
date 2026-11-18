@@ -7,8 +7,7 @@
     Hash,
     Ord,
     PartialEq,
-    PartialOrd,
-    schemars::JsonSchema
+    PartialOrd
 )]
 #[serde(transparent)]
 pub struct ConstrainedString(::std::string::String);
@@ -83,6 +82,48 @@ impl<'de> ::serde::Deserialize<'de> for ConstrainedString {
             .map_err(|e: self::error::ConversionError| {
                 <D::Error as ::serde::de::Error>::custom(e.to_string())
             })
+    }
+}
+impl ::schemars::JsonSchema for ConstrainedString {
+    fn schema_name() -> ::std::string::String {
+        "ConstrainedString".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <::std::string::String as ::schemars::JsonSchema>::json_schema(
+                g,
+            )
+            .into_object();
+        schema.string().min_length = ::std::option::Option::Some(1u32);
+        schema.string().max_length = ::std::option::Option::Some(64u32);
+        schema.subschemas().all_of = ::std::option::Option::Some(
+            [
+                ::schemars::schema::SchemaObject {
+                    string: ::std::option::Option::Some(
+                        ::std::boxed::Box::new(::schemars::schema::StringValidation {
+                            pattern: ::std::option::Option::Some("^a".to_string()),
+                            ..::std::default::Default::default()
+                        }),
+                    ),
+                    ..::std::default::Default::default()
+                }
+                    .into(),
+                ::schemars::schema::SchemaObject {
+                    string: ::std::option::Option::Some(
+                        ::std::boxed::Box::new(::schemars::schema::StringValidation {
+                            pattern: ::std::option::Option::Some("k$".to_string()),
+                            ..::std::default::Default::default()
+                        }),
+                    ),
+                    ..::std::default::Default::default()
+                }
+                    .into(),
+            ]
+                .into_iter()
+                .collect(),
+        );
+        schema.into()
     }
 }
 /// Error types.
