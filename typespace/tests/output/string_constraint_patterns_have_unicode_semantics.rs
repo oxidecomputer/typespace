@@ -1,4 +1,4 @@
-#[derive(::serde::Serialize)]
+#[derive(::serde::Serialize, Debug)]
 #[serde(transparent)]
 pub struct Word(::std::string::String);
 impl ::std::ops::Deref for Word {
@@ -44,6 +44,23 @@ impl<'de> ::serde::Deserialize<'de> for Word {
             .map_err(|e: self::error::ConversionError| {
                 <D::Error as ::serde::de::Error>::custom(e.to_string())
             })
+    }
+}
+impl ::schemars::JsonSchema for Word {
+    fn schema_name() -> ::std::string::String {
+        "Word".to_string()
+    }
+    fn json_schema(
+        g: &mut ::schemars::r#gen::SchemaGenerator,
+    ) -> ::schemars::schema::Schema {
+        let mut schema = <::std::string::String as ::schemars::JsonSchema>::json_schema(
+                g,
+            )
+            .into_object();
+        schema.string().pattern = ::std::option::Option::Some(
+            "^\\p{Letter}+\\u{1F354}?$".to_string(),
+        );
+        schema.into()
     }
 }
 /// Error types.

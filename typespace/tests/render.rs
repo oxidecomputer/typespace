@@ -5180,13 +5180,38 @@ fn test_render_constrained_newtype_string() {
     fn inner() {
         use import::*;
 
-        let _x = ConstrainedString::try_from("ask").unwrap();
-        let _x = ConstrainedString::try_from("").expect_err("nope");
-        // Longer than the 64-character max.
-        let _x = ConstrainedString::try_from("a".repeat(65) + "k").expect_err("nope");
-        // Matches "k$" but not "^a".
-        let _x = ConstrainedString::try_from("tick").expect_err("nope");
+        // Check both the conversion constructor and validation against the
+        // generated schema.
 
+        let schema = schemars::schema_for!(ConstrainedString);
+        let compiled_schema =
+            jsonschema::validator_for(&serde_json::to_value(&schema).unwrap()).unwrap();
+
+        let valid = |s: &str| {
+            let _x = ConstrainedString::try_from(s).unwrap();
+            let instance = serde_json::Value::String(s.to_string());
+            assert!(
+                compiled_schema.validate(&instance).is_ok(),
+                "value does not validate against schema"
+            );
+        };
+        let invalid = |s: &str| {
+            let _x = ConstrainedString::try_from(s).expect_err("nope");
+            let instance = serde_json::Value::String(s.to_string());
+            assert!(
+                compiled_schema.validate(&instance).is_err(),
+                "value should not validate against schema"
+            );
+        };
+
+        valid("ask");
+        valid(&("a".repeat(63) + "k"));
+        invalid(&("a".repeat(64) + "k"));
+        invalid("");
+        invalid("a".repeat(65).as_str());
+        invalid("tick");
+
+        // Test the round-trip
         let x: ConstrainedString = "alack".parse().unwrap();
         assert_eq!(x.to_string(), "alack");
     }
@@ -6850,8 +6875,10 @@ fn array_constraints_need_a_sequence_inner_type() {
 fn string_constraint_patterns_have_unicode_semantics() {
     let mut builder = TypespaceBuilder::new(
         Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
             .with_required_trait(TypespaceTrait::Serialize)
-            .with_required_trait(TypespaceTrait::Deserialize),
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_required_trait(TypespaceTrait::JsonSchema),
     );
     builder.insert("string".to_string(), Type::String).unwrap();
     builder
@@ -6879,13 +6906,31 @@ fn string_constraint_patterns_have_unicode_semantics() {
     fn inner() {
         use import::*;
 
-        assert!(Word::try_from("h\u{e9}llo").is_ok());
-        assert!(Word::try_from("h\u{e9}llo\u{1F354}").is_ok());
-        assert!(Word::try_from("123").is_err());
-        assert!(
-            Word::try_from("\u{1F354}").is_err(),
-            "the letters are required"
-        );
+        let schema = schemars::schema_for!(Word);
+        let compiled_schema =
+            jsonschema::validator_for(&serde_json::to_value(&schema).unwrap()).unwrap();
+
+        let valid = |s: &str| {
+            let _x = Word::try_from(s).unwrap();
+            let instance = serde_json::Value::String(s.to_string());
+            assert!(
+                compiled_schema.validate(&instance).is_ok(),
+                "value does not validate against schema"
+            );
+        };
+        let invalid = |s: &str| {
+            let _x = Word::try_from(s).expect_err("nope");
+            let instance = serde_json::Value::String(s.to_string());
+            assert!(
+                compiled_schema.validate(&instance).is_err(),
+                "value should not validate against schema"
+            );
+        };
+
+        valid("h\u{e9}llo");
+        valid("h\u{e9}llo\u{1F354}");
+        invalid("123");
+        invalid("\u{1F354}");
     }
 }
 
