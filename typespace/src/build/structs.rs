@@ -655,16 +655,15 @@ impl<Id> StructProperty<Id> {
         };
 
         // A property's own default value renders as a generated function in
-        // the defaults `mod` that only a deserialize path calls, so what the
-        // value obliges applies only if the owner deserializes: `Deserialize`
-        // of any native the value initializes, and `Default` of any
-        // Default-state property the value leaves out of a struct it
-        // constructs, which the generated function fills with
-        // `Default::default()`. Trait resolution charges both when
-        // `Deserialize` reaches the owner.
+        // the defaults mod that only a deserialize path calls. The obligations
+        // therefore only apply if the owner deserializes: `Deserialize` of any
+        // native the value initializes, and `Default` of any Default-state
+        // property the value leaves out of a struct it constructs, which the
+        // generated function fills with `Default::default()`. Trait resolution
+        // applies both when `Deserialize` reaches the owner.
         //
-        // The walk's paths start at the property's type; each gains the hop
-        // from the owner so a conflict traces from a type the consumer named.
+        // The walk's paths start at the property's type. We track the path so
+        // that conflicts can identify the source of the obligation.
         Ok(typespace
             .check_default(value, &self.type_id)?
             .into_iter()

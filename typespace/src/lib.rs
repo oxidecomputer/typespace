@@ -582,32 +582,24 @@ pub(crate) struct Obligation<Id> {
     pub(crate) target: Id,
 }
 
-/// What checking every attached default value, and every value on a
-/// newtype's allow or deny list, learned.
-///
-/// The first two halves hold requirements that apply only if the owner
-/// renders the value. They differ in which trait makes it render. `whole_type`
-/// is conditional on `Default`, since the value lives inside a
-/// `Default` impl, so `feasibility` evaluates its obligations when it
-/// answers for that trait. `property_values` is conditional on
-/// `Deserialize`, since a property's own value renders as a
-/// `defaults::` function that only a deserialize path calls; trait
-/// resolution charges those obligations when `Deserialize` reaches
-/// the owner, and refuses the desired grant when one is unmet.
+/// The results of checking every attached default value and every value on a
+/// newtype's allow or deny list.
 #[derive(Debug)]
 pub(crate) struct DefaultChecks<Id> {
-    /// Per type carrying a whole-type default, what rendering that
-    /// value obliges, with each obligation's path running from the
-    /// type named by the key to its target.
+    /// For each type carrying a whole-type default, the obligations rendering
+    /// that value imposes on other types. These are applied contingent on the
+    /// type implementing the Default trait.
     pub(crate) whole_type: BTreeMap<Id, Vec<Obligation<Id>>>,
-    /// Per type with property-level default values, what rendering
-    /// them obliges, with each obligation's path running from the
-    /// type named by the key through the property to its target.
+    /// For each struct whose properties carry default values, the obligations
+    /// rendering those values imposes on other types. A property default
+    /// renders as a `defaults::` function that only a deserialize path calls,
+    /// so these apply when the owner deserializes. These are applied
+    /// contingent on the type implementing the Deserialize trait.
     pub(crate) property_values: BTreeMap<Id, Vec<Obligation<Id>>>,
-    /// Each native a newtype's allow or deny list value reaches, against
-    /// the newtype. The list renders inside the `TryFrom` impl, which
-    /// generated code always carries, so unlike the two halves above
-    /// these are requirements outright.
+    /// The native types mapped to a newtype whose allow or deny list
+    /// references them (transitively). Note that the value is *any* such
+    /// newtype; it doesn't matter which one since this is a non-contingent
+    /// requirement. The native type must always implement Deserialize.
     pub(crate) list_values: BTreeMap<Id, Id>,
 }
 
@@ -833,22 +825,20 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
-    /// Check every attached default value, and collect what rendering
-    /// each one obliges.
+    /// Check every attached default value, and collect what rendering each one
+    /// obliges.
     ///
-    /// Neither half seeds requirements directly, because neither
-    /// renders unconditionally. A whole-type value renders inside the
-    /// `Default` impl, which trait resolution may never grant, so
-    /// `feasibility` weighs `whole_type` when it answers for that
-    /// trait. A property-level value renders as a `defaults::`
-    /// function that only a deserialize path calls, so trait
-    /// resolution charges `property_values` when `Deserialize`
+    /// Neither seeds requirements directly, because neither renders
+    /// unconditionally. A whole-type value renders inside the `Default` impl,
+    /// which trait resolution may never grant, so `feasibility` weighs
+    /// `whole_type` when it evaluates that trait. A property-level value
+    /// renders as a `defaults::` function that only a deserialize path calls,
+    /// so trait resolution charges `property_values` when `Deserialize`
     /// reaches the owner.
     ///
-    /// A newtype's allow or deny list values are checked the same way,
-    /// and the natives they reach go in `list_values`: the `TryFrom`
-    /// impl that renders the list is always carried, so those are
-    /// seeded as requirements outright.
+    /// A newtype's allow or deny list values are checked the same way, and the
+    /// natives they reach go in `list_values`: the `TryFrom` impl that renders
+    /// the list is always present, so those are unconditional requirements.
     fn check_type_defaults(&self) -> Result<DefaultChecks<Id>, Error<Id>> {
         let mut checks = DefaultChecks::default();
         for (type_id, typ) in &self.types {
