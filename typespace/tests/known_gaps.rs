@@ -8,7 +8,13 @@
 //! behavior and drop the attribute.
 
 use typespace::{
-    TypespaceTrait, no_cycles,
+    TypespaceBuilder, TypespaceTrait,
+    build::{
+        JsonValue, NewtypeConstraints, NewtypeStruct, Struct, StructProperty, StructPropertyState,
+        Type,
+    },
+    error::Error,
+    no_cycles,
     settings::{ContainerType, Settings},
 };
 use typespace_test_macro::typespace_builder;
@@ -139,4 +145,92 @@ fn flattened_property_may_not_be_an_option() {
         .finalize(no_cycles)
         .map(|_| ())
         .expect_err("a flattened property's type may not be an Option");
+
+// A property default on a constrained newtype is constructed directly
+// in the generated `defaults::` function, as `Holder`'s `code` default
+// becomes `super::Code("xyz".to_string())`, without going through the
+// newtype's `TryFrom`. So a value the constraints refuse is accepted at
+// finalize and baked into the output, where it can never be produced by
+// deserializing. This is typify issue 902, typespace issue 61.
+//
+// The graph, roughly:
+//
+//     struct Code(String)  // pattern ^[0-9]+$
+//     struct Short(String) // at most 2 characters
+//     struct Holder { #[default = "xyz"] code: Code,
+//                     #[default = "toolong"] short: Short }
+//
+// The check belongs in the `NewtypeStruct` arm of default.rs's
+// `default_impl`, which carries a TODO for it. A default that does not
+// fit the base type already fails with `Error::InvalidDefault`; one that
+// fits the base type and fails the constraints should too. The controls
+// show that a default that satisfies the constraints still finalizes.
+#[test]
+#[ignore = "finalize does not check a property default against its newtype's constraints"]
+fn default_violating_newtype_constraints_is_rejected() {
+    let build = |constraints: NewtypeConstraints, default: &str| {
+        let mut builder = TypespaceBuilder::new(Settings::minimal());
+        builder.insert("string".to_string(), Type::String).unwrap();
+        builder
+            .insert(
+                "Constrained".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("string".to_string())
+                        .name("Constrained")
+                        .constraints(constraints),
+                ),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Holder".to_string(),
+                Struct::new()
+                    .name("Holder")
+                    .properties(vec![
+                        StructProperty::new("value", "Constrained".to_string()).with_state(
+                            StructPropertyState::DefaultValue(JsonValue(serde_json::json!(
+                                default
+                            ))),
+                        ),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+    };
+
+    let pattern = || NewtypeConstraints::String {
+        min: None,
+        max: None,
+        patterns: vec!["^[0-9]+$".to_string()],
+    };
+    let max_two = || NewtypeConstraints::String {
+        min: None,
+        max: Some(2),
+        patterns: vec![],
+    };
+
+    // Controls: defaults that satisfy the constraints finalize.
+    build(pattern(), "123")
+        .finalize(no_cycles)
+        .expect("\"123\" matches the pattern");
+    build(max_two(), "ok")
+        .finalize(no_cycles)
+        .expect("\"ok\" fits in two characters");
+
+    let failures = [(pattern(), "xyz"), (max_two(), "toolong")]
+        .into_iter()
+        .filter(|(constraints, default)| {
+            !matches!(
+                build(constraints.clone(), default).finalize(no_cycles),
+                Err(Error::InvalidDefault { value, .. }) if value == serde_json::json!(default)
+            )
+        })
+        .map(|(_, default)| default)
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "finalize accepted defaults that violate the constraints: {failures:?}"
+    );
 }
