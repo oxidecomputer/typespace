@@ -8,9 +8,7 @@
 //! behavior and drop the attribute.
 
 use typespace::{
-    TypespaceBuilder, TypespaceTrait,
-    build::{JsonValue, NewtypeConstraints, NewtypeStruct, Type},
-    no_cycles,
+    TypespaceTrait, no_cycles,
     settings::{ContainerType, Settings},
 };
 use typespace_test_macro::typespace_builder;
@@ -102,62 +100,6 @@ fn json_value_property_in_default_state_renders() {
             .iter()
             .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == "Blob")),
         "Blob missing from output"
-    );
-}
-
-// An allow-list or deny-list newtype is granted FromStr and Display but
-// gets neither impl.
-//
-// `feasibility` in `trait_resolution.rs` answers
-// `IfSomeChildren(vec![])` for both traits on any constrained
-// newtype: a constrained newtype's FromStr parses the inner value and
-// then validates it, so the inner type owes nothing. The allow/deny arm
-// of `render_constraint_impl` in `build/structs.rs` then writes
-// `traits.remove(FromStr).then(|| quote! {})` and the same for Display,
-// consuming each trait and rendering an empty token stream for it.
-//
-// The result is silent: the trait never reaches `render_derives`, so
-// nothing panics and the output still compiles. It turns into a compile
-// error as soon as such a newtype is an untagged enum's payload, since
-// the enum's forwarding impls call the payload's FromStr and Display.
-//
-// The fix is to write the two impls, the way the String arm of the same
-// function already does.
-#[test]
-#[ignore = "the allow/deny arm of render_constraint_impl writes neither impl"]
-fn allow_list_newtype_renders_from_str_and_display() {
-    let settings = Settings::minimal()
-        .with_required_trait(TypespaceTrait::Display)
-        .with_required_trait(TypespaceTrait::FromStr);
-    let mut builder = TypespaceBuilder::new(settings);
-
-    builder.insert("string".to_string(), Type::String).unwrap();
-    builder
-        .insert(
-            "constrained string".to_string(),
-            Type::NewtypeStruct(
-                NewtypeStruct::new("string".to_string())
-                    .name("ConstrainedString")
-                    .constraints(NewtypeConstraints::AllowList(vec![
-                        JsonValue(serde_json::json! { "tomax" }),
-                        JsonValue(serde_json::json! { "xamot" }),
-                    ])),
-            ),
-        )
-        .unwrap();
-
-    let ts = builder
-        .finalize(no_cycles)
-        .expect("a constrained newtype realizes both traits itself");
-    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
-
-    assert!(
-        common::has_impl(&file, "FromStr", "ConstrainedString"),
-        "no FromStr impl for an allow-list newtype granted the trait"
-    );
-    assert!(
-        common::has_impl(&file, "Display", "ConstrainedString"),
-        "no Display impl for an allow-list newtype granted the trait"
     );
 }
 

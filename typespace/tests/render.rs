@@ -5746,6 +5746,179 @@ fn test_render_constrained_newtype_allow_list() {
     }
 }
 
+// A list newtype's FromStr parses the inner type and then applies the
+// list through the TryFrom constructor, so a value off the list and a
+// value that is not an i64 both fail with a ConversionError. The newtype
+// has no TryFrom<&str>: parsing is FromStr alone.
+#[test]
+fn test_list_newtype_from_str_integer() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::Display)
+        .with_required_trait(TypespaceTrait::FromStr);
+    let mut builder = TypespaceBuilder::new(settings);
+    builder
+        .insert("i64".to_string(), Type::Integer("i64".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "block size".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("i64".to_string())
+                    .name("BlockSize")
+                    .constraints(NewtypeConstraints::AllowList(vec![
+                        JsonValue(serde_json::json!(512)),
+                        JsonValue(serde_json::json!(2048)),
+                        JsonValue(serde_json::json!(4096)),
+                    ])),
+            ),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = common::codespace(&ts).into_stream();
+
+    #[check_and_include("tests/output/test_list_newtype_from_str_integer.rs", out)]
+    fn inner() {
+        use import::*;
+
+        let size = "512".parse::<BlockSize>().unwrap();
+        assert_eq!(size.to_string(), "512");
+        let err = "513".parse::<BlockSize>().expect_err("not on the list");
+        assert_eq!(err.to_string(), "invalid value");
+        "many".parse::<BlockSize>().expect_err("not an i64");
+    }
+}
+
+// A deny list over a String rejects the listed values through FromStr
+// the same way it does through TryFrom<String>.
+#[test]
+fn test_list_newtype_from_str_string_deny_list() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::FromStr);
+    let mut builder = TypespaceBuilder::new(settings);
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "username".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("Username")
+                    .constraints(NewtypeConstraints::DenyList(vec![
+                        JsonValue(serde_json::json!("root")),
+                        JsonValue(serde_json::json!("admin")),
+                    ])),
+            ),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+    let out = common::codespace(&ts).into_stream();
+
+    #[check_and_include("tests/output/test_list_newtype_from_str_string_deny_list.rs", out)]
+    fn inner() {
+        use import::*;
+
+        "alice".parse::<Username>().unwrap();
+        "root".parse::<Username>().expect_err("on the deny list");
+        Username::try_from("admin".to_string()).expect_err("on the deny list");
+    }
+}
+
+// A list newtype's FromStr delegates to the inner type's FromStr, so
+// the view reports the trait only where the inner type implements it,
+// and the rendered output agrees with the view.
+#[test]
+fn list_newtype_has_from_str_only_over_a_from_str_inner() {
+    let mut builder = typespace_builder!(
+        Settings::minimal().with_desired_trait(TypespaceTrait::FromStr),
+        {
+            struct Point {
+                x: u32,
+            }
+        }
+    );
+    builder
+        .insert("i64".to_string(), Type::Integer("i64".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "size".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("i64".to_string())
+                    .name("Size")
+                    .constraints(NewtypeConstraints::AllowList(vec![JsonValue(
+                        serde_json::json!(512),
+                    )])),
+            ),
+        )
+        .unwrap();
+    builder
+        .insert(
+            "origin".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("Point".to_string())
+                    .name("Origin")
+                    .constraints(NewtypeConstraints::AllowList(vec![JsonValue(
+                        serde_json::json!({ "x": 0 }),
+                    )])),
+            ),
+        )
+        .unwrap();
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    assert!(
+        ts.get_type(&"size".to_string())
+            .has_impl(TypespaceTrait::FromStr)
+    );
+    assert!(
+        !ts.get_type(&"origin".to_string())
+            .has_impl(TypespaceTrait::FromStr)
+    );
+
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+    assert!(common::has_impl(&file, "FromStr", "Size"));
+    assert!(!common::has_impl(&file, "FromStr", "Origin"));
+}
+
+// An allow-list newtype granted FromStr and Display renders both impls,
+// so an untagged enum whose payload it is can forward to them.
+#[test]
+fn allow_list_newtype_renders_from_str_and_display() {
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Display)
+        .with_required_trait(TypespaceTrait::FromStr);
+    let mut builder = TypespaceBuilder::new(settings);
+
+    builder.insert("string".to_string(), Type::String).unwrap();
+    builder
+        .insert(
+            "constrained string".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("string".to_string())
+                    .name("ConstrainedString")
+                    .constraints(NewtypeConstraints::AllowList(vec![
+                        JsonValue(serde_json::json! { "tomax" }),
+                        JsonValue(serde_json::json! { "xamot" }),
+                    ])),
+            ),
+        )
+        .unwrap();
+
+    let ts = builder
+        .finalize(no_cycles)
+        .expect("a constrained newtype realizes both traits itself");
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+
+    assert!(
+        common::has_impl(&file, "FromStr", "ConstrainedString"),
+        "no FromStr impl for an allow-list newtype granted the trait"
+    );
+    assert!(
+        common::has_impl(&file, "Display", "ConstrainedString"),
+        "no Display impl for an allow-list newtype granted the trait"
+    );
+}
+
 // The fallback constraint. `Coords` renders the part of the source
 // schema typespace can state, and the schema itself carries the rest
 // (`multipleOf`), checked at run time against the serialized value. Both

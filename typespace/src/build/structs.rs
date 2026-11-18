@@ -2561,18 +2561,51 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                     }
                 });
 
-                // TODO if the sub_type is a string we could probably impl
-                // TryFrom<&str> as well and FromStr. But we don't want to for
-                // non-strings where the vibe of FromStr is more "parse me".
+                // Trait resolution grants FromStr only when the inner type
+                // implements it, so the impl parses the inner value and
+                // then applies the list through the TryFrom impl below.
+                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| {
+                    quote! {
+                        impl ::std::str::FromStr for #name_ident {
+                            type Err = self::error::ConversionError;
 
-                let from_str_impl = traits.remove(TypespaceTrait::FromStr).then(|| quote! {});
-                let display_impl = traits.remove(TypespaceTrait::Display).then(|| quote! {});
+                            fn from_str(value: &str) ->
+                                ::std::result::Result<Self, self::error::ConversionError>
+                            {
+                                value
+                                    .parse::<#inner_ident>()
+                                    .map_err(|e| ::std::string::ToString::to_string(&e).into())
+                                    .and_then(Self::try_from)
+                            }
+                        }
+                    }
+                });
+
+                // TYPIFY COMPAT: typify 1 writes no Display for an allow or
+                // deny list newtype.
+                let display_impl = (traits.remove(TypespaceTrait::Display)
+                    && !typespace.settings.typify_compat)
+                    .then(|| {
+                        quote! {
+                            impl ::std::fmt::Display for #name_ident {
+                                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                                    self.0.fmt(f)
+                                }
+                            }
+                        }
+                    });
 
                 let not =
                     matches!(constraints, NewtypeConstraints::AllowList(_)).then(|| quote! { ! });
                 typespace.add_error_mod(out);
 
+                // TODO if the sub_type is a string we could probably impl
+                // TryFrom<&str>.
+
                 quote! {
+                        #display_impl
+                        #from_str_impl
+
                         // This is effectively the constructor for this type.
                         impl ::std::convert::TryFrom<#inner_ident> for #name_ident {
                             type Error = self::error::ConversionError;
@@ -2591,9 +2624,6 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> NewtypeStruct<Id> {
                             }
                         }
 
-
-                        #display_impl
-                        #from_str_impl
                         #deserialize_impl
                         #json_schema_impl
 

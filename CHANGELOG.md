@@ -2,6 +2,9 @@
 
 ## Next
 
+* An allow-list or deny-list newtype whose inner type implements `FromStr`
+  implements it too; `Display` forwards to the inner type.
+
 ## [0.1.2] - 2026-11-16
 
 * The default set container is a plain `Vec` with no element obligation. A
