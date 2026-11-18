@@ -2,8 +2,22 @@
 
 ## Next
 
+## [0.1.3] - 2026-11-18
+
+* String-constrained newtypes gets hand-written `JsonSchema` impls
 * An allow-list or deny-list newtype whose inner type implements `FromStr`
   implements it too; `Display` forwards to the inner type.
+* `#[serde(default)]` properties and property default values put their
+  `Default` and `Deserialize` requirements on other types only when the owning
+  type itself deserializes. A type nothing deserializes no longer fails
+  `finalize` over them
+* `Box<T>` implements `Display` when `T` does, so a newtype that contains a
+  `Box` can satisfy that requirement.
+* Default values and allow/deny list values are constructed directly rather
+  than deserialized at runtime.
+* An `i128` default value accepts anything up to `u64::MAX`.
+* Generated code for a struct fields of type `()` no longer trip
+  `clippy::unit_arg`
 
 ## [0.1.2] - 2026-11-16
 
@@ -82,6 +96,7 @@
 
 * Initial release
 
+[0.1.3]: https://github.com/oxidecomputer/typespace/releases/v0.1.3
 [0.1.2]: https://github.com/oxidecomputer/typespace/releases/v0.1.2
 [0.1.1]: https://github.com/oxidecomputer/typespace/releases/v0.1.1
 [0.1.0]: https://github.com/oxidecomputer/typespace/releases/v0.1.0
