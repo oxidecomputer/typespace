@@ -39,21 +39,21 @@
 //!   anything).
 //! - the inner type of a newtype whose constraint is a JSON schema; the
 //!   check serializes the inner value and validates the result, so that type
-//!   demands `Serialize` whatever the consumer asked for.
-//! - the natives an allow or deny list value reaches; the `TryFrom` impl that
-//!   renders the list constructs them by deserializing, and is always
-//!   carried, so they demand `Deserialize` whatever the consumer asked for.
+//!   must implement `Serialize`.
+//! - the native types reached by a newtype's allow or deny list values; the
+//!   `TryFrom` impl constructs them by deserializing and is always rendered,
+//!   so they must implement `Deserialize`.
 //!
-//! Two more requirements spawn mid-traversal, when `Deserialize` reaches a
-//! named type, because both describe code that renders inside its
-//! `Deserialize` impl and nowhere else ([`deserialize_charges`]):
+//! Two more requirements arise during the traversal, when `Deserialize`
+//! reaches a named type, because the code they describe renders only inside
+//! that type's `Deserialize` impl ([`deserialize_charges`]):
 //!
-//! - properties rendered with `#[serde(default)]`; these are populated via a
-//!   call to `Default::default()` so their types must implement `Default`.
-//! - what a property-level default value obliges; its generated `defaults::`
-//!   function constructs native types by deserializing them and fills each
-//!   `#[serde(default)]` property the value leaves out of a struct it
-//!   constructs from that property type's `Default`.
+//! - properties rendered with `#[serde(default)]`; serde populates these with
+//!   `Default::default()`, so their types must implement `Default`.
+//! - the obligations of a property-level default value; its generated
+//!   `defaults::` function constructs native types by deserializing them and
+//!   fills any `#[serde(default)]` property the value omits with
+//!   `Default::default()`.
 //!
 //! We descend the type graph with a work queue rather than recursion. Each
 //! item in the work queue represents a required work set, a target type; it
@@ -814,18 +814,17 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
     }
 }
 
-/// What deserializing a named type obliges beyond its children's own
-/// `Deserialize`, paired with the origin a conflict reports.
+/// The requirements that deserializing a named type imposes beyond
+/// `Deserialize` of its children, each paired with the origin a conflict
+/// reports.
 ///
-/// Serde expands `#[serde(default)]` into a call to the property
-/// type's `Default`, and a property-level default value renders as a
-/// `defaults::` function whose obligations the value walk recorded in
-/// `DefaultChecks::property_values`. Both render inside the
-/// `Deserialize` impl and nowhere else, so both phases weigh them
-/// where that trait is: `required_resolution` charges them when it
-/// arrives at the type, and `provides` refuses the grant while one is
-/// unmet. The counterpart, under a `Deserialize` antecedent, of the
-/// whole-type obligations `feasibility` weighs for `Default`.
+/// Serde populates a `#[serde(default)]` property with `Default::default()`,
+/// and a property-level default value renders as a `defaults::` function whose
+/// obligations are recorded in `DefaultChecks::property_values`. Both render
+/// only inside the `Deserialize` impl, so `required_resolution` applies them
+/// when `Deserialize` reaches the type, and `provides` refuses to grant
+/// `Deserialize` while one is unmet. `feasibility` treats whole-type default
+/// values the same way for `Default`.
 fn deserialize_charges<Id>(
     type_id: &Id,
     ty: &Type<Id>,
@@ -897,8 +896,7 @@ where
             }
         }
 
-        /// One charge from [`deserialize_charges`], enqueued because
-        /// `Deserialize` reached the type its origin names.
+        /// A requirement from [`deserialize_charges`].
         fn init_charge(charge: (RequirementOrigin<Id>, Obligation<Id>)) -> Self {
             let (origin, obligation) = charge;
             Self {
@@ -1026,10 +1024,10 @@ where
         }
     }
 
-    // A native-typed position in an allow or deny list value is
-    // constructed in generated code by deserializing it (default.rs's
-    // Type::Native arm), inside a `TryFrom` impl the newtype always
-    // carries, so the value requires Deserialize of the native type.
+    // Generated code constructs each native type in an allow or deny list
+    // value by deserializing it (default.rs, Type::Native). The TryFrom impl
+    // that does so is always rendered, so the native must implement
+    // Deserialize.
     for (native_id, owner_id) in &default_checks.list_values {
         work.push_back(WorkItem::init_deserialize(owner_id, native_id));
     }
@@ -1139,11 +1137,11 @@ where
                     Feasibility::IfAllChildren => {
                         built_traits.add(trait_name);
                         all_children.push(trait_name);
-                        // Deserializing is what renders #[serde(default)]
-                        // and the defaults:: functions, so their charges
-                        // wait for the trait to arrive here rather than
-                        // seeding the queue: a type nothing deserializes
-                        // never pays them.
+                        // #[serde(default)] and the defaults:: functions
+                        // render only inside the Deserialize impl, so their
+                        // requirements are applied when Deserialize reaches
+                        // the type rather than seeded up front. A type that
+                        // nothing deserializes never pays them.
                         if trait_name == TypespaceTrait::Deserialize {
                             work.extend(
                                 deserialize_charges(&target, ty, default_checks)
@@ -1687,9 +1685,9 @@ where
             // A wrapped property edge answers from the declared custom
             // optional-nullable wrapper, exactly as required resolution
             // routes it; every other edge asks the child directly.
-            // Granting Deserialize also needs what #[serde(default)]
-            // and the defaults:: functions call, exactly the charges
-            // the required phase enqueues when the trait arrives.
+            // Granting Deserialize also requires what #[serde(default)] and
+            // the defaults:: functions call: the same requirements the
+            // required phase applies when the trait arrives.
             Feasibility::IfAllChildren => {
                 let charges_met = trait_name != TypespaceTrait::Deserialize
                     || deserialize_charges(type_id, ty, default_checks).iter().all(
