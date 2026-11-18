@@ -127,15 +127,16 @@ impl<Id> Struct<Id> {
     pub(crate) fn check_field_defaults(
         &self,
         typespace: &TypespaceBuilder<Id>,
-    ) -> Result<BTreeSet<Id>, Error<Id>>
+        owner_id: &Id,
+    ) -> Result<Vec<crate::Obligation<Id>>, Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         self.properties
             .iter()
-            .try_fold(BTreeSet::new(), |mut natives, prop| {
-                natives.extend(prop.check_defaults(typespace)?);
-                Ok(natives)
+            .try_fold(Vec::new(), |mut obligations, prop| {
+                obligations.extend(prop.check_defaults(typespace, owner_id)?);
+                Ok(obligations)
             })
     }
 
@@ -644,20 +645,39 @@ impl<Id> StructProperty<Id> {
     pub(crate) fn check_defaults(
         &self,
         typespace: &TypespaceBuilder<Id>,
-    ) -> Result<BTreeSet<Id>, Error<Id>>
+        owner_id: &Id,
+    ) -> Result<Vec<crate::Obligation<Id>>, Error<Id>>
     where
         Id: Clone + Ord + std::fmt::Debug + std::fmt::Display,
     {
         let StructPropertyState::DefaultValue(JsonValue(value)) = &self.state else {
-            return Ok(BTreeSet::new());
+            return Ok(Vec::new());
         };
 
         // A property's own default value renders as a generated function in
-        // the defaults `mod` that only a deserialize path calls. Any native
-        // types initialized by that default value must implement `Deserialize`.
-        Ok(deserialized_natives(
-            typespace.check_default(value, &self.type_id)?,
-        ))
+        // the defaults mod that only a deserialize path calls. The obligations
+        // therefore only apply if the owner deserializes: `Deserialize` of any
+        // native the value initializes, and `Default` of any Default-state
+        // property the value leaves out of a struct it constructs, which the
+        // generated function fills with `Default::default()`. Trait resolution
+        // applies both when `Deserialize` reaches the owner.
+        //
+        // The walk's paths start at the property's type. We track the path so
+        // that conflicts can identify the source of the obligation.
+        Ok(typespace
+            .check_default(value, &self.type_id)?
+            .into_iter()
+            .map(|mut obligation| {
+                obligation.path.insert(
+                    0,
+                    crate::error::PathStep {
+                        type_id: owner_id.clone(),
+                        relation: crate::error::Relation::Field(self.rust_name.clone()),
+                    },
+                );
+                obligation
+            })
+            .collect::<Vec<_>>())
     }
 }
 

@@ -1,12 +1,15 @@
 // Copyright 2026 Oxide Computer Company
 
 //! Tests pinning which properties a `Default` impl obligates, for
-//! `Type::Struct` in `typespace/src/trait_resolution.rs`.
+//! `Type::Struct` in `typespace/src/trait_resolution.rs`, and which
+//! charges a `Deserialize` impl creates.
 //!
-//! An obligation exists exactly where the rendered `Default` impl
-//! calls `Default::default()` on a property's type. Each test below
-//! asserts the outcome that follows from that rule, so a change that
-//! widens or narrows the obligation set fails here.
+//! An obligation exists exactly where rendered code makes the call:
+//! the `Default` impl calling `Default::default()` on a property's
+//! type, or the `Deserialize` path calling what `#[serde(default)]`
+//! and the `defaults::` functions need. Each test below asserts the
+//! outcome that follows from that rule, so a change that widens or
+//! narrows the obligation set fails here.
 
 use typespace::{TypespaceTrait, no_cycles, settings::Settings};
 use typespace_test_macro::typespace_builder;
@@ -78,14 +81,17 @@ fn whole_type_default_fills_absent_default_state_property() {
 
 /// A generated property default asks nothing of the property's type.
 ///
-/// `Outer.inner` is `#[serde(default)]`, so `Inner` is required to
-/// implement `Default`. `Inner` can: its only property has its own
-/// default value, so the impl is `color: defaults::inner_color()`,
-/// which needs no `Default` from `Color`. Finalization must succeed.
+/// `Outer.inner` is `#[serde(default)]` and `Outer` deserializes, so
+/// `Inner` is required to implement `Default`. `Inner` can: its only
+/// property has its own default value, so the impl is `color:
+/// defaults::inner_color()`, which needs no `Default` from `Color`.
+/// Finalization must succeed.
 #[test]
 fn generated_property_default_needs_nothing_of_its_type() {
     let builder = typespace_builder!(
-        Settings::minimal().with_required_trait(TypespaceTrait::Debug),
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Debug)
+            .with_required_trait(TypespaceTrait::Deserialize),
         {
             enum Color {
                 Red,
@@ -115,6 +121,49 @@ fn generated_property_default_needs_nothing_of_its_type() {
         common::has_impl(&file, "Default", "Inner"),
         "no Default impl for Inner"
     );
+}
+
+/// Serde expands `#[serde(default)]` inside a `Deserialize` impl and
+/// nowhere else, so a property in the `Default` state charges its type
+/// only when the owner deserializes. Nothing here requires
+/// `Deserialize` of `Holder`, so nothing it generates ever calls
+/// `Thing::default()` and the impl `Thing` declines to declare cannot
+/// matter.
+#[test]
+fn serde_default_charges_only_a_type_that_deserializes() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        native ::ext::Thing: Clone + !Default;
+
+        struct Holder {
+            #[default]
+            thing: ::ext::Thing,
+        }
+    });
+
+    builder
+        .finalize(no_cycles)
+        .expect("nothing deserializes Holder, so nothing calls Thing::default()");
+}
+
+/// A property's own default value renders as a `defaults::` function
+/// that only a deserialize path calls, so the natives the value
+/// reaches owe `Deserialize` only when the owner deserializes. Nothing
+/// here requires `Deserialize` of `Holder`, so no `defaults::`
+/// function is emitted and `Thing` is never deserialized.
+#[test]
+fn a_property_default_value_charges_only_a_type_that_deserializes() {
+    let builder = typespace_builder!(Settings::minimal(), {
+        native ::ext::Thing: Clone + !Deserialize;
+
+        struct Holder {
+            #[default = "x"]
+            thing: ::ext::Thing,
+        }
+    });
+
+    builder
+        .finalize(no_cycles)
+        .expect("nothing deserializes Holder, so no defaults:: function is emitted");
 }
 
 // A flattened property's fields render inside the OUTER type's

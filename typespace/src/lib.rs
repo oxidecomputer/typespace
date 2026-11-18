@@ -582,36 +582,33 @@ pub(crate) struct Obligation<Id> {
     pub(crate) target: Id,
 }
 
-/// What checking every attached default value learned.
-///
-/// Both halves hold requirements that apply only if the owner renders
-/// the value. They differ in which trait makes it render. `whole_type`
-/// is conditional on `Default`, since the value lives inside a
-/// `Default` impl, so `feasibility` evaluates its obligations when it
-/// answers for that trait. `deserialized` is conditional on
-/// `Deserialize`, since a property's own value renders as a
-/// `defaults::` function that only a deserialize path calls.
+/// The results of checking every attached default value and every value on a
+/// newtype's allow or deny list.
 #[derive(Debug)]
 pub(crate) struct DefaultChecks<Id> {
-    /// Per type carrying a whole-type default, what rendering that
-    /// value obliges, with each obligation's path running from the
-    /// type named by the key to its target.
+    /// For each type carrying a whole-type default, the obligations rendering
+    /// that value imposes on other types. These are applied contingent on the
+    /// type implementing the Default trait.
     pub(crate) whole_type: BTreeMap<Id, Vec<Obligation<Id>>>,
-    /// Each native type that can be reached transitively; code generation
-    /// assumes they can be deserialized so we propagate that obligation.
-    // TODO 9/12/2026
-    // required_resolution seeds these unconditionally, so a type that
-    // never deserializes still pays for the natives in its property
-    // defaults. They belong with whole_type's obligations, under a
-    // `Deserialize` antecedent in place of `Default`'s.
-    pub(crate) deserialized: BTreeMap<Id, Id>,
+    /// For each struct whose properties carry default values, the obligations
+    /// rendering those values imposes on other types. A property default
+    /// renders as a `defaults::` function that only a deserialize path calls,
+    /// so these apply when the owner deserializes. These are applied
+    /// contingent on the type implementing the Deserialize trait.
+    pub(crate) property_values: BTreeMap<Id, Vec<Obligation<Id>>>,
+    /// The native types mapped to a newtype whose allow or deny list
+    /// references them (transitively). Note that the value is *any* such
+    /// newtype; it doesn't matter which one since this is a non-contingent
+    /// requirement. The native type must always implement Deserialize.
+    pub(crate) list_values: BTreeMap<Id, Id>,
 }
 
 impl<Id> Default for DefaultChecks<Id> {
     fn default() -> Self {
         Self {
             whole_type: BTreeMap::new(),
-            deserialized: BTreeMap::new(),
+            property_values: BTreeMap::new(),
+            list_values: BTreeMap::new(),
         }
     }
 }
@@ -828,21 +825,23 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
         Ok(())
     }
 
-    /// Check every attached default value and every value on a newtype's
-    /// allow or deny list, and collect the natives the values reach.
+    /// Check every attached default value, and collect what rendering each one
+    /// obliges.
     ///
-    /// Generated code constructs a native-typed position of such a value by
-    /// deserializing it, so each collected native must implement
-    /// `Deserialize`. The map records each native against the type whose value
-    /// first reached it; trait resolution seeds the requirement from the map,
-    /// and reports a conflict when the native does not declare the trait.
+    /// Neither seeds requirements directly, because neither renders
+    /// unconditionally. A whole-type value renders inside the `Default` impl,
+    /// which trait resolution may never grant, so `feasibility` weighs
+    /// `whole_type` when it evaluates that trait. A property-level value
+    /// renders as a `defaults::` function that only a deserialize path calls,
+    /// so trait resolution charges `property_values` when `Deserialize`
+    /// reaches the owner.
+    ///
+    /// A newtype's allow or deny list values are checked the same way, and the
+    /// natives they reach go in `list_values`: the `TryFrom` impl that renders
+    /// the list is always present, so those are unconditional requirements.
     fn check_type_defaults(&self) -> Result<DefaultChecks<Id>, Error<Id>> {
         let mut checks = DefaultChecks::default();
         for (type_id, typ) in &self.types {
-            // A whole-type default value renders inside the `Default`
-            // impl, which trait resolution may never grant. What it
-            // obliges is therefore conditional on that grant, so it is
-            // handed to `feasibility` rather than seeded here.
             if let Some(common) = typ.common()
                 && let Some(JsonValue(default)) = &common.default
             {
@@ -852,27 +851,21 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
                 }
             }
 
-            // A property's own default value renders as a `defaults::`
-            // function that only a deserialize path calls. Its natives
-            // are seeded as requirements even so. A newtype's allow or
-            // deny list renders inside its `TryFrom` impl, which is
-            // always carried, so its natives are requirements outright.
-            let mut natives = BTreeSet::new();
-            match typ {
-                Type::Struct(struct_info) => {
-                    natives.extend(struct_info.check_field_defaults(self)?)
-                }
-                Type::Enum(enum_info) => natives.extend(enum_info.check_field_defaults(self)?),
-                Type::NewtypeStruct(newtype) => {
-                    natives.extend(newtype.check_constraint_values(self)?)
-                }
-                _ => (),
+            let obligations = match typ {
+                Type::Struct(struct_info) => struct_info.check_field_defaults(self, type_id)?,
+                Type::Enum(enum_info) => enum_info.check_field_defaults(self, type_id)?,
+                _ => Vec::new(),
+            };
+            if !obligations.is_empty() {
+                checks.property_values.insert(type_id.clone(), obligations);
             }
-            for native in natives {
-                checks
-                    .deserialized
-                    .entry(native)
-                    .or_insert_with(|| type_id.clone());
+            if let Type::NewtypeStruct(newtype) = typ {
+                for native in newtype.check_constraint_values(self)? {
+                    checks
+                        .list_values
+                        .entry(native)
+                        .or_insert_with(|| type_id.clone());
+                }
             }
         }
         Ok(checks)

@@ -658,12 +658,16 @@ pub enum RequirementOrigin<Id> {
         /// [`Relation::Parameter`] for a native.
         relation: Relation,
     },
-    /// The requirement applies to the type of a property of the type
-    /// with this ID, because that property carries `#[serde(default)]`.
+    /// The requirement applies to the type of a property of the type with this
+    /// ID, because that property carries `#[serde(default)]` and the type
+    /// deserializes, so serde's derive calls the property type's `Default`.
     PropertyDefault(Id),
-    /// Generated code constructs native types within defaults by
-    /// deserializing. This imposes the Deserialize requirement on a native
-    /// type. The default value of the given ID has created this requirement.
+    /// Rendering a default value attached to a property of the type with this
+    /// ID creates the requirement. The value renders as a generated
+    /// `defaults::` function, called only when the type deserializes: it
+    /// constructs each native it reaches by deserializing, and fills each
+    /// `#[serde(default)]` property the value leaves out of a struct it
+    /// constructs from that property type's `Default`.
     DefaultValue(Id),
     /// Generated code checks a value against a JSON schema by serializing it.
     /// This imposes the Serialize requirement on the inner type of the newtype
