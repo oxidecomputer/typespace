@@ -17,7 +17,7 @@ pub mod conflated_as_absent {
         pub optional_option: Option<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         pub default_string: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub default_option: Option<String>,
         #[serde(default = "defaults::conflated_as_absent_peanut_string")]
         pub peanut_string: String,
@@ -48,7 +48,7 @@ pub mod conflated_as_null {
         pub optional_option: Option<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         pub default_string: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub default_option: Option<String>,
         #[serde(default = "defaults::conflated_as_null_peanut_string")]
         pub peanut_string: String,
@@ -83,7 +83,7 @@ pub mod custom_type {
         pub optional_option: super::OptionField<String>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         pub default_string: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub default_option: Option<String>,
         #[serde(default = "defaults::custom_type_peanut_string")]
         pub peanut_string: String,
@@ -119,7 +119,7 @@ pub mod double_option {
         pub optional_option: Option<Option<String>>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         pub default_string: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub default_option: Option<String>,
         #[serde(default = "defaults::double_option_peanut_string")]
         pub peanut_string: String,

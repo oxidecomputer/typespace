@@ -196,10 +196,14 @@
 //!   that schema.
 //! - [json-serde](https://crates.io/crates/json-serde): required if
 //!   the output contains any of:
-//!   - a property with [`build::StructPropertyState::Optional`] whose
-//!     type is not an `Option` (deserialized with
+//!   - a keyed property with [`build::StructPropertyState::Optional`]
+//!     whose type is not an `Option` (deserialized with
 //!     `::json_serde::deserialize_some`, which distinguishes an absent
-//!     field from a present one and rejects `null`);
+//!     field from a present one and rejects `null`), unless it is a
+//!     container or the unit type left unwrapped by
+//!     [`settings::OptionalContainer::AbsentAsEmpty`] or
+//!     [`settings::OptionalUnit::AbsentAsUnit`]; a flattened property
+//!     needs nothing;
 //!   - a property with [`build::StructPropertyState::Optional`] whose
 //!     type is an `Option`, when
 //!     [`settings::OptionalNullable::DoubleOption`] is selected
@@ -1986,6 +1990,10 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             // situation. In other cases, we need to know if the type is an
             // Option to add the appropriate serde annotations.
             Option(Id),
+            // A container type: Vec, Set, Map
+            Container,
+            // A unit type
+            Unit,
             // A Never property that's non-required turns into the
             // ::json_serde::Absent type.
             Never,
@@ -1993,14 +2001,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
             Other,
         }
 
+        // Identify the categories of types that require specific handling.
         let type_of_interest = match ty {
             Type::Option(id) => TypeOfInterest::Option(id),
             Type::Never => TypeOfInterest::Never,
+            Type::Vec(_) | Type::Set(_) | Type::Map(..) => TypeOfInterest::Container,
+            Type::Unit => TypeOfInterest::Unit,
             _ => TypeOfInterest::Other,
         };
-
-        let ty_ident = self.render_ident(type_id, out);
-        let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"), out);
 
         let std_opt_type = match &self.settings.std {
             Std::FullyQualified => quote! { ::std::option::Option },
@@ -2009,24 +2017,170 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         let std_opt_type_str = std_opt_type.clone().token_print();
         let std_opt_is_none = format!("{std_opt_type_str}::is_none");
 
-        let (prop_ty_ident, prop_ty_ident_scoped) = match (state, type_of_interest) {
-            // A required field needs no serde annotations.
-            (StructPropertyState::Required, TypeOfInterest::Other) => (ty_ident, ty_ident_scoped),
+        enum Disposition {
+            Unwrapped,
+            OptionWrapped,
+            PlainOption,
+            UnwrappedWithDefault,
+            Custom(TokenStream, TokenStream),
+        }
 
-            // A required field that is an Option<T> needs a custom
-            // deserializer so that the field is mandatory, but may be null;
-            // without this attribute, the default handling is to permit
-            // either.
-            (StructPropertyState::Required, TypeOfInterest::Option(_)) => {
-                let opt_deserialize = format!("{std_opt_type_str}::deserialize");
-                // TODO schemars schema_with?
-                serde_options.push(quote! { deserialize_with = #opt_deserialize });
-                (ty_ident, ty_ident_scoped)
+        // Do a first pass to determine how we render the field while we insert
+        // specific serde options along the way.
+        let disposition = match (json_name, state) {
+            // A flattened property has no key, so the settings for how a keyed
+            // field represents absence do not apply. It renders as its type,
+            // or as an Option of it when Optional, which serde reads as Some
+            // when the leftover keys parse as the type and None otherwise.
+            (StructPropertySerde::Flatten, StructPropertyState::Optional) => {
+                Disposition::PlainOption
             }
+            _ => match (state, type_of_interest) {
+                // A required field that is an Option<T> needs a custom
+                // deserializer so that the field must be present, but may be null;
+                // without this attribute, the default handling is to permit
+                // either.
+                (StructPropertyState::Required, TypeOfInterest::Option(_)) => {
+                    let opt_deserialize = format!("{std_opt_type_str}::deserialize");
+                    // TODO schemars schema_with?
+                    serde_options.push(quote! { deserialize_with = #opt_deserialize });
+                    Disposition::Unwrapped
+                }
 
-            // An optional field that is not an Option<T> may not be null; we
-            // use the json::serde::deserialize_some function to enforce this.
-            (StructPropertyState::Optional, TypeOfInterest::Other) => {
+                (
+                    StructPropertyState::Required,
+                    TypeOfInterest::Container | TypeOfInterest::Unit | TypeOfInterest::Other,
+                ) => Disposition::Unwrapped,
+
+                (StructPropertyState::Optional, TypeOfInterest::Other) => {
+                    Disposition::OptionWrapped
+                }
+
+                // An optional field that is also an Option<T> may be the type
+                // value, null, or absent. Customizable settings determine the
+                // handling of this.
+                (StructPropertyState::Optional, TypeOfInterest::Option(inner_id)) => {
+                    match &self.settings.optional_nullable {
+                        OptionalNullable::ConflateAsAbsent => {
+                            // Unwrapped with an option to skip serializing.
+                            serde_options.push(quote! {
+                                skip_serializing_if = #std_opt_is_none
+                            });
+                            Disposition::Unwrapped
+                        }
+                        OptionalNullable::ConflateAsNull => Disposition::Unwrapped,
+
+                        // Wrap the type (an Option) in another Option.
+                        OptionalNullable::DoubleOption => Disposition::OptionWrapped,
+
+                        // A custom container requires custom handling; note that
+                        // trait resolution's edge classifier also requires special
+                        // handling for this case.
+                        OptionalNullable::CustomType(container) => {
+                            let custom_type_path = out.container(container);
+                            serde_options.push(quote! { default });
+                            let json_serde =
+                                serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
+                            let is_absent = format!("{json_serde}::OptionalNullable::is_absent");
+                            serde_options.push(quote! {
+                                skip_serializing_if = #is_absent
+                            });
+
+                            let inner_ident = self.render_ident(inner_id, out);
+                            let inner_ident_scoped =
+                                self.render_ident_with_scope(inner_id, Some("super"), out);
+
+                            Disposition::Custom(
+                                quote! { #custom_type_path<#inner_ident> },
+                                quote! { #custom_type_path<#inner_ident_scoped> },
+                            )
+                        }
+                    }
+                }
+
+                // A default field that is an Option<T> explicitly conflates
+                // absent and null, so we ignore the optional_nullable setting.
+                (StructPropertyState::Default, TypeOfInterest::Option(_)) => {
+                    // Unwrapped with an option to skip serializing.
+                    serde_options.push(quote! {
+                        skip_serializing_if = #std_opt_is_none
+                    });
+
+                    Disposition::Unwrapped
+                }
+
+                (StructPropertyState::Optional, TypeOfInterest::Container) => {
+                    match &self.settings.optional_container {
+                        settings::OptionalContainer::AbsentAsEmpty => {
+                            Disposition::UnwrappedWithDefault
+                        }
+                        settings::OptionalContainer::AbsentAsNone => Disposition::OptionWrapped,
+                    }
+                }
+
+                (StructPropertyState::Optional, TypeOfInterest::Unit) => {
+                    match &self.settings.optional_unit {
+                        settings::OptionalUnit::AbsentAsUnit => Disposition::UnwrappedWithDefault,
+                        settings::OptionalUnit::AbsentAsNone => Disposition::OptionWrapped,
+                    }
+                }
+
+                (
+                    StructPropertyState::Default,
+                    TypeOfInterest::Container | TypeOfInterest::Unit | TypeOfInterest::Other,
+                ) => Disposition::UnwrappedWithDefault,
+
+                // An explicit default value for when the field is absent. Note
+                // that serialization is not impacted.
+                (
+                    StructPropertyState::DefaultValue(_),
+                    TypeOfInterest::Option(_)
+                    | TypeOfInterest::Container
+                    | TypeOfInterest::Unit
+                    | TypeOfInterest::Other,
+                ) => {
+                    // The default function and its serde attribute are
+                    // settled above; a default value leaves the property's
+                    // type alone.
+                    Disposition::Unwrapped
+                }
+
+                // Convert to the ::json_serde::Absent type. It must have `default`
+                // since it cannot be deserialized, and `skip_serializing_if =
+                // "::json_serde::always"` because it cannot be serialized (and to
+                // work around schemars bugs in all versions).
+                (StructPropertyState::Optional, TypeOfInterest::Never) => {
+                    serde_options.push(quote! { default });
+                    let json_serde = out.crate_path(GeneratedCrate::JsonSerde);
+                    let always = format!(
+                        "{}::always",
+                        serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
+                    );
+                    serde_options.push(quote! {
+                        skip_serializing_if = #always
+                    });
+
+                    Disposition::Custom(
+                        quote! { #json_serde::Absent },
+                        quote! { #json_serde::Absent },
+                    )
+                }
+
+                (
+                    StructPropertyState::Required
+                    | StructPropertyState::Default
+                    | StructPropertyState::DefaultValue(_),
+                    TypeOfInterest::Never,
+                ) => unreachable!("finalization rejects a Never property that requires a value"),
+            },
+        };
+
+        let ty_ident = self.render_ident(type_id, out);
+        let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"), out);
+
+        let (prop_ty_ident, prop_ty_ident_scoped) = match disposition {
+            Disposition::Unwrapped => (ty_ident, ty_ident_scoped),
+            Disposition::OptionWrapped => {
                 serde_options.push(quote! { default });
                 let json_serde = serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
                 let deserialize_some = format!("{json_serde}::deserialize_some");
@@ -2038,67 +2192,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
                 (
                     quote! { #std_opt_type<#ty_ident> },
-                    quote! {#std_opt_type<#ty_ident_scoped>},
+                    quote! { #std_opt_type<#ty_ident_scoped> },
                 )
             }
-
-            // An optional field that is also an Option<T> may be the type
-            // value, null, or absent. Customizable settings determine the
-            // handling of this.
-            (StructPropertyState::Optional, TypeOfInterest::Option(inner_id)) => {
-                match &self.settings.optional_nullable {
-                    OptionalNullable::ConflateAsAbsent => {
-                        serde_options.push(quote! {
-                            skip_serializing_if = #std_opt_is_none
-                        });
-                        (ty_ident, ty_ident_scoped)
-                    }
-                    OptionalNullable::ConflateAsNull => {
-                        // We always serialize--including `None` as `null`--so
-                        // no serde options are necessary.
-                        (ty_ident, ty_ident_scoped)
-                    }
-                    OptionalNullable::DoubleOption => {
-                        serde_options.push(quote! { default });
-                        let json_serde =
-                            serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
-                        let deserialize_some = format!("{json_serde}::deserialize_some");
-                        serde_options.push(quote! {
-                            deserialize_with = #deserialize_some
-                        });
-                        serde_options.push(quote! {
-                            skip_serializing_if = #std_opt_is_none
-                        });
-
-                        (
-                            quote! { #std_opt_type<#ty_ident> },
-                            quote! { #std_opt_type<#ty_ident_scoped> },
-                        )
-                    }
-                    // Trait resolution's edge classifier mirrors this
-                    // condition.
-                    OptionalNullable::CustomType(container) => {
-                        let custom_type_path = out.container(container);
-                        serde_options.push(quote! { default });
-                        let json_serde =
-                            serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
-                        let is_absent = format!("{json_serde}::OptionalNullable::is_absent");
-                        serde_options.push(quote! {
-                            skip_serializing_if = #is_absent
-                        });
-
-                        let inner_ident = self.render_ident(inner_id, out);
-                        let inner_ident_scoped =
-                            self.render_ident_with_scope(inner_id, Some("super"), out);
-
-                        (
-                            quote! { #custom_type_path<#inner_ident> },
-                            quote! { #custom_type_path<#inner_ident_scoped> },
-                        )
-                    }
-                }
-            }
-            (StructPropertyState::Default, TypeOfInterest::Option(_) | TypeOfInterest::Other) => {
+            Disposition::PlainOption => (
+                quote! { #std_opt_type<#ty_ident> },
+                quote! { #std_opt_type<#ty_ident_scoped> },
+            ),
+            Disposition::UnwrappedWithDefault => {
                 serde_options.push(quote! { default });
                 self.render_struct_property_add_skip(
                     &mut serde_options,
@@ -2110,43 +2211,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
                 (ty_ident, ty_ident_scoped)
             }
-            (
-                StructPropertyState::DefaultValue(_),
-                TypeOfInterest::Option(_) | TypeOfInterest::Other,
-            ) => {
-                // The default function and its serde attribute are
-                // settled above; a default value leaves the property's
-                // type alone.
-                (ty_ident, ty_ident_scoped)
-            }
-
-            (StructPropertyState::Optional, TypeOfInterest::Never) => {
-                // Convert to the ::json_serde::Absent type. It must have
-                // `default` since it cannot be deserialized, and
-                // `skip_serializing_if = "::json_serde::always"` because it
-                // cannot be serialized (and to work around schemars bugs in
-                // all versions).
-                serde_options.push(quote! { default });
-                let json_serde = out.crate_path(GeneratedCrate::JsonSerde);
-                let always = format!(
-                    "{}::always",
-                    serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
-                );
-                serde_options.push(quote! {
-                    skip_serializing_if = #always
-                });
-
-                (
-                    quote! { #json_serde::Absent },
-                    quote! { #json_serde::Absent },
-                )
-            }
-            (
-                StructPropertyState::Required
-                | StructPropertyState::Default
-                | StructPropertyState::DefaultValue(_),
-                TypeOfInterest::Never,
-            ) => unreachable!("finalization rejects a Never property that requires a value"),
+            Disposition::Custom(ident, ident_scoped) => (ident, ident_scoped),
         };
 
         let rust_name_ident = format_ident!("{rust_name}");

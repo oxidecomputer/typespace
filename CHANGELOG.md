@@ -2,6 +2,19 @@
 
 ## Next
 
+* An `Optional` whose type is a container (`Vec`, `Set`, `Map`) or the
+  unit type (`()`) have settings (`optional_container` and `optional_unit`--to
+  join `optional_nullable` for `Optional` `Option` types) that govern whether
+  they are rendered as raw types with `#[serde(default)]` or with an `Option`
+  wrapper.
+* `Optional` more formally allows for absent to be distinguished from the
+  default value for the type depending on settings; `Default` or `DefaultValue`
+  for a struct field expressly means that the default value is equivalent to
+  the absence of the field.
+* A flattened property renders as its type, or as a plain `Option` of that type
+  when `Optional`, with `flatten` as its only serde attribute; the settings
+  for absent keyed fields do not apply.
+
 ## [0.1.3] - 2026-11-18
 
 * String-constrained newtypes gets hand-written `JsonSchema` impls

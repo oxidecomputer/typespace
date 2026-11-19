@@ -151,3 +151,35 @@ fn an_unknown_trait_on_a_generic_native_reaches_its_parameters() {
          for HashSet<Wrapper<Inner>> to compile"
     );
 }
+
+fn flatten_settings() -> Settings {
+    Settings::minimal()
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_desired_trait(TypespaceTrait::Default)
+}
+
+// A flattened property has no key of its own, so there is nothing for
+// `null` to attach to: its type may not be an `Option`. Whether the inner
+// keys may be missing is what `Optional` says. Today `flattens_as_object`
+// looks through `Type::Option`, so this shape is accepted and the second
+// `Option` is handed to `optional_nullable`.
+#[test]
+#[ignore = "finalize does not yet refuse an Option-typed flattened property"]
+fn flattened_property_may_not_be_an_option() {
+    let builder = typespace_builder!(flatten_settings(), {
+        struct Inner {
+            a: u32,
+        }
+        struct Outer {
+            #[flatten]
+            inner: Optional<Nullable<Inner>>,
+        }
+    });
+    builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect_err("a flattened property's type may not be an Option");
+}

@@ -207,11 +207,13 @@ use strum::IntoEnumIterator;
 
 use crate::JsonValue;
 use crate::build::{
-    ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
-    TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
+    ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertySerde,
+    StructPropertyState, TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
-use crate::settings::{ContainerType, OptionalNullable, Settings, path_text};
+use crate::settings::{
+    ContainerType, OptionalContainer, OptionalNullable, OptionalUnit, Settings, path_text,
+};
 use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 /// A contained child edge classified against the settings.
@@ -789,13 +791,37 @@ where
     }
 }
 
-/// The properties of `ty` that render with `#[serde(default)]`.
+/// The properties of `ty` that render with `#[serde(default)]`: those in
+/// the `Default` state, and `Optional` containers and units that the
+/// settings leave unwrapped. The `Optional` arms mirror
+/// `render_struct_property`; keep the two in sync.
 ///
 /// A struct's own properties and those of an enum's struct-shaped
 /// variants, which render through the same path.
-fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
-    let is_default =
-        |prop: &&StructProperty<Id>| matches!(prop.state, StructPropertyState::Default);
+fn serde_default_properties<'a, Id: Clone + Ord>(
+    ty: &'a Type<Id>,
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
+) -> Vec<&'a StructProperty<Id>> {
+    let is_default = |prop: &&StructProperty<Id>| {
+        // A flattened property renders no serde attribute but `flatten`.
+        if matches!(prop.json_name, StructPropertySerde::Flatten) {
+            return false;
+        }
+        match (&prop.state, types.get(&prop.type_id).unwrap()) {
+            (StructPropertyState::Default, _) => true,
+            (StructPropertyState::Optional, Type::Vec(_) | Type::Set(_) | Type::Map(..)) => {
+                matches!(
+                    settings.optional_container,
+                    OptionalContainer::AbsentAsEmpty
+                )
+            }
+            (StructPropertyState::Optional, Type::Unit) => {
+                matches!(settings.optional_unit, OptionalUnit::AbsentAsUnit)
+            }
+            _ => false,
+        }
+    };
     match ty {
         Type::Struct(struct_info) => struct_info.properties.iter().filter(is_default).collect(),
         Type::Enum(enum_info) => enum_info
@@ -828,12 +854,14 @@ fn serde_default_properties<Id>(ty: &Type<Id>) -> Vec<&StructProperty<Id>> {
 fn deserialize_charges<Id>(
     type_id: &Id,
     ty: &Type<Id>,
+    types: &BTreeMap<Id, Type<Id>>,
+    settings: &Settings,
     default_checks: &crate::DefaultChecks<Id>,
 ) -> Vec<(RequirementOrigin<Id>, Obligation<Id>)>
 where
     Id: Clone + Ord,
 {
-    serde_default_properties(ty)
+    serde_default_properties(ty, types, settings)
         .into_iter()
         .map(|prop| {
             (
@@ -1144,7 +1172,7 @@ where
                         // nothing deserializes never pays them.
                         if trait_name == TypespaceTrait::Deserialize {
                             work.extend(
-                                deserialize_charges(&target, ty, default_checks)
+                                deserialize_charges(&target, ty, types, settings, default_checks)
                                     .into_iter()
                                     .map(WorkItem::init_charge),
                             );
@@ -1690,17 +1718,19 @@ where
             // required phase applies when the trait arrives.
             Feasibility::IfAllChildren => {
                 let charges_met = trait_name != TypespaceTrait::Deserialize
-                    || deserialize_charges(type_id, ty, default_checks).iter().all(
-                        |(
-                            _,
-                            Obligation {
-                                required, target, ..
+                    || deserialize_charges(type_id, ty, types, settings, default_checks)
+                        .iter()
+                        .all(
+                            |(
+                                _,
+                                Obligation {
+                                    required, target, ..
+                                },
+                            )| {
+                                has.get(target)
+                                    .is_some_and(|traits| traits.contains(required))
                             },
-                        )| {
-                            has.get(target)
-                                .is_some_and(|traits| traits.contains(required))
-                        },
-                    );
+                        );
                 charges_met
                     && classify_edges(ty, types, settings)
                         .into_iter()
