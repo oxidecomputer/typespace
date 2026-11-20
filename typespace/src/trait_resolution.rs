@@ -207,13 +207,12 @@ use strum::IntoEnumIterator;
 
 use crate::JsonValue;
 use crate::build::{
-    ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertySerde,
-    StructPropertyState, TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
+    ContainedChild, Enum, NewtypeConstraints, NewtypeStruct, StructProperty, StructPropertyState,
+    TupleStruct, Type, TypeAlias, VariantDetails, all_named_types,
 };
 use crate::error::{Error, OffenderReason, PathStep, Relation, RequirementOrigin, TraitConflict};
-use crate::settings::{
-    ContainerType, OptionalContainer, OptionalNullable, OptionalUnit, Settings, path_text,
-};
+use crate::repr::PropertyRepr;
+use crate::settings::{ContainerType, OptionalNullable, Settings, path_text};
 use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 
 /// A contained child edge classified against the settings.
@@ -222,9 +221,9 @@ use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// wrapper is `Wrapped`, carrying the declaration, the `Option` node at
 /// the property, and the option's value type; every other edge is
 /// `Plain`. The wrapping condition--the optional property state, an
-/// `Option` type, the `CustomType` setting--mirrors
-/// `render_struct_property`'s optional-`Option` arm; keep the two in
-/// sync.
+/// `Option` type, the `CustomType` setting--is `PropertyRepr::Custom`;
+/// this walk has only the child edge, not the property, so it restates
+/// the condition.
 enum Edge<'a, Id> {
     Plain(Relation, Id),
     Wrapped {
@@ -791,10 +790,7 @@ where
     }
 }
 
-/// The properties of `ty` that render with `#[serde(default)]`: those in
-/// the `Default` state, and `Optional` containers and units that the
-/// settings leave unwrapped. The `Optional` arms mirror
-/// `render_struct_property`; keep the two in sync.
+/// The properties of `ty` that render with `#[serde(default)]`.
 ///
 /// A struct's own properties and those of an enum's struct-shaped
 /// variants, which render through the same path.
@@ -803,25 +799,8 @@ fn serde_default_properties<'a, Id: Clone + Ord>(
     types: &BTreeMap<Id, Type<Id>>,
     settings: &Settings,
 ) -> Vec<&'a StructProperty<Id>> {
-    let is_default = |prop: &&StructProperty<Id>| {
-        // A flattened property renders no serde attribute but `flatten`.
-        if matches!(prop.json_name, StructPropertySerde::Flatten) {
-            return false;
-        }
-        match (&prop.state, types.get(&prop.type_id).unwrap()) {
-            (StructPropertyState::Default, _) => true,
-            (StructPropertyState::Optional, Type::Vec(_) | Type::Set(_) | Type::Map(..)) => {
-                matches!(
-                    settings.optional_container,
-                    OptionalContainer::AbsentAsEmpty
-                )
-            }
-            (StructPropertyState::Optional, Type::Unit) => {
-                matches!(settings.optional_unit, OptionalUnit::AbsentAsUnit)
-            }
-            _ => false,
-        }
-    };
+    let is_default =
+        |prop: &&StructProperty<Id>| PropertyRepr::of(prop, types, settings).has_serde_default();
     match ty {
         Type::Struct(struct_info) => struct_info.properties.iter().filter(is_default).collect(),
         Type::Enum(enum_info) => enum_info
