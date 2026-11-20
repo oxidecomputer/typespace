@@ -958,17 +958,18 @@ where
                     // Optional field; value present.
                     (StructPropertyState::Optional, Some(prop_value)) => {
                         let prop_id = &prop_info.type_id;
-
-                        let value = self.at(state, id, relation.clone(), |state| {
-                            self.default_impl(state, prop_id, prop_value)
-                        });
+                        let walk_value = |state: &mut WalkState<'_, '_, Id>| {
+                            self.at(state, id, relation.clone(), |state| {
+                                self.default_impl(state, prop_id, prop_value)
+                            })
+                        };
 
                         // The value is wrapped the way the field holds it.
                         let prop_default_value =
                             match PropertyRepr::of(prop_info, self.types, self.settings) {
-                                PropertyRepr::Value { .. } => value?,
+                                PropertyRepr::Value { .. } => walk_value(state)?,
                                 PropertyRepr::Strict | PropertyRepr::PlainOption => {
-                                    value?.map(|prop_value| {
+                                    walk_value(state)?.map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
                                     })
