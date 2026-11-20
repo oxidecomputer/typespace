@@ -985,6 +985,24 @@ impl<Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceBuilder<Id>
                         property: prop.rust_name.clone(),
                     });
                 }
+
+                // serde never finds a flattened property missing, so the
+                // Default and DefaultValue states would render an
+                // attribute that never applies. Naming the first such
+                // property in declaration order is enough to locate the
+                // problem.
+                if let Some(prop) = flattened.clone().find(|prop| {
+                    matches!(
+                        prop.state,
+                        StructPropertyState::Default | StructPropertyState::DefaultValue(_)
+                    )
+                }) {
+                    return Err(Error::FlattenWithDefault {
+                        type_name: type_name.to_string(),
+                        variant: variant.map(str::to_string),
+                        property: prop.rust_name.clone(),
+                    });
+                }
             }
         }
         Ok(())

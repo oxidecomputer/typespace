@@ -14,6 +14,9 @@
 * A flattened property renders as its type, or as a plain `Option` of that type
   when `Optional`, with `flatten` as its only serde attribute; the settings
   for absent keyed fields do not apply.
+* A flattened property in the `Default` or `DefaultValue` state is refused at
+  finalize (`Error::FlattenWithDefault`): serde never finds a flattened
+  property missing, so a default would never apply.
 
 ## [0.1.3] - 2026-11-18
 
