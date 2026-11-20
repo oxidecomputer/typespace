@@ -69,6 +69,10 @@ pub(crate) enum PropertyRepr<'a, Id> {
     /// The type itself. `default` is whether the field carries
     /// `#[serde(default)]`; `skip` is the predicate, if any, that leaves the
     /// field out of serialization.
+    ///
+    /// The type may itself be an `Option`, meaning the value is either
+    /// present or `null`. The `Option` variants below are different: they
+    /// wrap the type in an `Option` because the field may be absent.
     Value {
         default: bool,
         skip: Option<Skip<'a, Id>>,
