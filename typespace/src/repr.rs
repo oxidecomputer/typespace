@@ -127,7 +127,9 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                 default: false,
                 skip: None,
             },
-            (StructPropertySerde::Flatten, _, _) => unreachable!(),
+            (StructPropertySerde::Flatten, _, _) => {
+                unreachable!("finalization rejects a flattened property with a default")
+            }
 
             (_, StructPropertyState::Optional, Type::Never) => Self::Absent,
             (
