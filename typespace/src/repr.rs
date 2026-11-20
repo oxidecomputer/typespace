@@ -59,10 +59,6 @@ pub(crate) enum Skip<'a, Id> {
     /// `is_empty` of the type with this id, a container or a string. A
     /// field that holds it in a `Box` names the boxed type here.
     IsEmpty(&'a Id),
-    /// `OptionalNullable::is_absent` of the custom optional-nullable type.
-    IsAbsent,
-    /// The field is never serialized.
-    Always,
 }
 
 /// How a struct property is held in the Rust struct.

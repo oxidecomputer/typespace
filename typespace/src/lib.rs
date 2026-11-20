@@ -2021,9 +2021,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     if default {
                         serde_options.push(quote! { default });
                     }
-                    if let Some(skip) = skip {
-                        let predicate =
-                            self.skip_predicate(skip, &std_opt_type_str, &mut serde_options, out);
+                    let predicate = skip.map(|skip| match skip {
+                        Skip::IsNone => format!("{std_opt_type_str}::is_none"),
+                        Skip::IsEmpty(id) => {
+                            format!("{}::is_empty", self.render_raw_type(id, out).token_print())
+                        }
+                    });
+                    if let Some(predicate) = predicate {
                         serde_options.push(quote! { skip_serializing_if = #predicate });
                     }
                     (ty_ident, ty_ident_scoped)
@@ -2041,12 +2045,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     serde_options.push(quote! {
                         deserialize_with = #deserialize_some
                     });
-                    let is_none = self.skip_predicate(
-                        Skip::IsNone,
-                        &std_opt_type_str,
-                        &mut serde_options,
-                        out,
-                    );
+                    let is_none = format!("{std_opt_type_str}::is_none");
                     serde_options.push(quote! { skip_serializing_if = #is_none });
                     // TODO schemars schema_with
 
@@ -2062,20 +2061,21 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 // A custom container requires custom handling; note that
                 // trait resolution's edge classifier also requires special
                 // handling for this case.
-                PropertyRepr::CustomOption { container, inner } => {
+                PropertyRepr::CustomOption {
+                    container,
+                    inner: inner_id,
+                } => {
                     let custom_type_path = out.container(container);
                     serde_options.push(quote! { default });
-                    let is_absent = self.skip_predicate(
-                        Skip::IsAbsent,
-                        &std_opt_type_str,
-                        &mut serde_options,
-                        out,
-                    );
-                    serde_options.push(quote! { skip_serializing_if = #is_absent });
+                    let json_serde = serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
+                    let is_absent = format!("{json_serde}::OptionalNullable::is_absent");
+                    serde_options.push(quote! {
+                        skip_serializing_if = #is_absent
+                    });
 
-                    let inner_ident = self.render_ident(inner, out);
+                    let inner_ident = self.render_ident(inner_id, out);
                     let inner_ident_scoped =
-                        self.render_ident_with_scope(inner, Some("super"), out);
+                        self.render_ident_with_scope(inner_id, Some("super"), out);
 
                     (
                         quote! { #custom_type_path<#inner_ident> },
@@ -2089,13 +2089,13 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                 PropertyRepr::Absent => {
                     serde_options.push(quote! { default });
                     let json_serde = out.crate_path(GeneratedCrate::JsonSerde);
-                    let always = self.skip_predicate(
-                        Skip::Always,
-                        &std_opt_type_str,
-                        &mut serde_options,
-                        out,
+                    let always = format!(
+                        "{}::always",
+                        serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
                     );
-                    serde_options.push(quote! { skip_serializing_if = #always });
+                    serde_options.push(quote! {
+                        skip_serializing_if = #always
+                    });
 
                     (
                         quote! { #json_serde::Absent },
@@ -2176,32 +2176,6 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
 
                 format!("defaults::{fn_name_str}")
             }
-        }
-    }
-
-    /// The path the `skip_serializing_if` attribute specifies for `skip`.
-    /// A json-serde predicate records that crate as a dependency, as every
-    /// rendered attribute's crate path does.
-    fn skip_predicate(
-        &self,
-        skip: Skip<'_, Id>,
-        std_opt_type_str: &str,
-        serde_options: &mut SerdeAttrs,
-        out: &mut Outputspace,
-    ) -> String {
-        match skip {
-            Skip::IsNone => format!("{std_opt_type_str}::is_none"),
-            Skip::IsEmpty(id) => {
-                format!("{}::is_empty", self.render_raw_type(id, out).token_print())
-            }
-            Skip::IsAbsent => format!(
-                "{}::OptionalNullable::is_absent",
-                serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
-            ),
-            Skip::Always => format!(
-                "{}::always",
-                serde_options.crate_path_text(out, GeneratedCrate::JsonSerde)
-            ),
         }
     }
 
