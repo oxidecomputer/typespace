@@ -2,12 +2,45 @@
 
 //! How a struct property is held in the Rust struct.
 //!
-//! A property's state says whether it may be absent; its type and the
-//! settings say what the field holds when it is, and what serde needs to
-//! know about that. [`PropertyRepr::of`] makes that decision once. The
-//! renderer reads it for the field's type and serde attributes, the default
-//! value walk reads it to wrap a supplied value the way the field holds it,
-//! and trait resolution reads it for the obligations the attributes create.
+//! A property has a state (required, optional, default, or a default
+//! value), a type, and a wire name or `flatten`. Those three, with the
+//! settings, determine the generated field: the type itself or an
+//! `Option` around it, the serde attributes it carries, and what fills it
+//! when the key is absent. [`PropertyRepr::of`] makes that determination
+//! in one place, and the code that depends on it reads the result rather
+//! than repeating the logic.
+//!
+//! Three callers use it. The renderer emits the field's type and
+//! attributes from it. The default value walk wraps a supplied value the
+//! way the field holds it: the value itself for a bare field, `Some` for
+//! an `Option`-wrapped one, the custom container's constructor for a
+//! consumer's optional-nullable type. Trait resolution calls
+//! [`PropertyRepr::fills_from_default`] to find the fields that
+//! `Default::default()` fills when absent, which is both where
+//! `#[serde(default)]` goes and what a generated `Default` impl calls, so
+//! those fields' types must implement `Default`.
+//!
+//! The variants are the distinct ways a field can be held, not the
+//! distinct reasons for holding it that way. A required scalar and an
+//! optional `Option<T>` under `ConflateAsNull` are both `Value` with no
+//! attributes, and no caller distinguishes them. A `Default`-state field
+//! and an optional container under `AbsentAsEmpty` are both `Value` with
+//! `serde(default)` and an `is_empty` skip, and both require `Default` of
+//! their type.
+//!
+//! Two cases are decided before the settings are consulted. A flattened
+//! property has no key, so the settings for how a keyed field represents
+//! absence do not apply; it is its type, or a plain `Option` of it when
+//! optional. A required `Option<T>` names `Option::deserialize`
+//! explicitly, since serde's default handling would also accept an
+//! absent key.
+//!
+//! The skip predicate for a `Default`-state field depends on the type:
+//! containers and strings have `is_empty`, an `Option` has `is_none`,
+//! and named types, natives, arrays, tuples, numbers, and booleans have
+//! nothing a generated attribute can name. [`Skip::for_default`] holds
+//! that per-type table; the typify compatibility cases and the TODOs are
+//! on its arms.
 
 use std::collections::BTreeMap;
 
