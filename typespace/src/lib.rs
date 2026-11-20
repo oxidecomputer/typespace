@@ -2041,7 +2041,9 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     quote! { #std_opt_type<#ty_ident> },
                     quote! { #std_opt_type<#ty_ident_scoped> },
                 ),
-                // Trait resolution's edge classifier mirrors this case.
+                // A custom container requires custom handling; note that
+                // trait resolution's edge classifier also requires special
+                // handling for this case.
                 PropertyRepr::Custom { container, inner } => {
                     let custom_type_path = out.container(container);
                     serde_options.push(quote! { default });
@@ -2160,8 +2162,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
     }
 
     /// The path a `skip_serializing_if` attribute names for `skip`. A
-    /// json-serde predicate is recorded as a dependency only when the
-    /// attribute renders, as every attribute's crate path is.
+    /// json-serde predicate records that crate as a dependency, as every
+    /// rendered attribute's crate path does.
     fn skip_predicate(
         &self,
         skip: Skip<'_, Id>,

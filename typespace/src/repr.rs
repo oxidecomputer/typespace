@@ -130,9 +130,9 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                 skip: None,
             },
 
-            // An explicit default value for when the field is absent. The
-            // renderer names the `defaults` function in the attribute; the
-            // type is left alone and serialization is not impacted.
+            // An explicit default value for when the field is absent. Note
+            // that serialization is not impacted. The renderer names the
+            // `defaults` function in the attribute.
             (_, StructPropertyState::DefaultValue(_), _) => Self::Value {
                 default: false,
                 skip: None,
@@ -237,7 +237,7 @@ impl<'a, Id: Ord> Skip<'a, Id> {
 
             // TYPIFY COMPAT. typify never skips serialization of a
             // default-state String, so imitation withholds the skip;
-            // the attribute below returns when the flag goes.
+            // the skip below returns when the flag goes.
             Type::String if settings.typify_compat => None,
 
             Type::Vec(_) | Type::Map(_, _) | Type::Set(_) | Type::String => Some(Skip::IsEmpty(id)),
