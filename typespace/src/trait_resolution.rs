@@ -221,9 +221,9 @@ use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// wrapper is `Wrapped`, carrying the declaration, the `Option` node at
 /// the property, and the option's value type; every other edge is
 /// `Plain`. The wrapping condition--the optional property state, an
-/// `Option` type, the `CustomType` setting--is `PropertyRepr::CustomOption`;
-/// this walk has only the child edge, not the property, so it restates
-/// the condition.
+/// `Option` type, the `CustomType` setting--is the one that selects
+/// `PropertyRepr::CustomOption`. This walk has the child edge and not the
+/// property, so it restates that condition.
 enum Edge<'a, Id> {
     Plain(Relation, Id),
     Wrapped {
@@ -628,14 +628,15 @@ where
                         // possible.
                         cannot_implement()
                     } else {
-                        // A property that fills from Default::default()
-                        // when absent needs its type to implement it.
+                        // A property assigned Default::default() when
+                        // absent requires that its type implement Default.
                         // serde_default_properties seeds the same
                         // requirement for serde's #[serde(default)]; this
                         // records it again because the impl calls it in
-                        // its own right. The other properties hold an
-                        // Option, which is Default whatever it holds, or
-                        // fill from a generated function.
+                        // its own right. Every other property is rendered
+                        // as an Option, which implements Default for any
+                        // type parameter, or is assigned a value by a
+                        // generated function.
                         let obligations = struct_info
                             .properties
                             .iter()

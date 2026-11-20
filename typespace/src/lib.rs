@@ -1995,8 +1995,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         let ty_ident = self.render_ident(type_id, out);
         let ty_ident_scoped = self.render_ident_with_scope(type_id, Some("super"), out);
 
-        // How the field holds the value decides its type and the serde
-        // attributes that go with it.
+        // The representation determines the field's type and its serde
+        // attributes.
         let (prop_ty_ident, prop_ty_ident_scoped) =
             match PropertyRepr::of(prop, self.types, self.settings) {
                 PropertyRepr::Value { default, skip } => {
@@ -2161,8 +2161,8 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
         }
     }
 
-    /// The path a `skip_serializing_if` attribute names for `skip`. A
-    /// json-serde predicate records that crate as a dependency, as every
+    /// The path the `skip_serializing_if` attribute specifies for `skip`.
+    /// A json-serde predicate records that crate as a dependency, as every
     /// rendered attribute's crate path does.
     fn skip_predicate(
         &self,

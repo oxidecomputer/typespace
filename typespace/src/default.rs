@@ -906,9 +906,8 @@ where
                     // optional-nullable settings).
                     (StructPropertyState::Optional, None)
                     | (StructPropertyState::Default, None) => {
-                        // A field filled with Default::default() requires
-                        // a Default implementation for the type of the
-                        // field.
+                        // A field assigned Default::default() requires a
+                        // Default implementation for the type of the field.
                         if self.mode == Mode::Check
                             && PropertyRepr::of(prop_info, self.types, self.settings)
                                 .fills_from_default()
@@ -965,7 +964,8 @@ where
                             })
                         };
 
-                        // The value is wrapped the way the field holds it.
+                        // Render the value as the field's representation
+                        // requires.
                         let prop_default_value =
                             match PropertyRepr::of(prop_info, self.types, self.settings) {
                                 PropertyRepr::Value { .. } => walk_value(state)?,
