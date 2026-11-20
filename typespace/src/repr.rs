@@ -1,39 +1,41 @@
 // Copyright 2026 Oxide Computer Company
 
-//! How a struct property is held in the Rust struct.
+//! How a struct property is rendered in a Rust struct.
 //!
-//! A property has a state (required, optional, default, or a default
+//! Each property has a state (required, optional, default, or a default
 //! value), a type, and a wire name or `flatten`. Those three, with the
-//! settings, determine the generated field: the type itself or an
-//! `Option` around it, the serde attributes it carries, and what fills it
-//! when the key is absent. [`PropertyRepr::of`] makes that determination
-//! in one place, and the code that depends on it reads the result rather
-//! than repeating the logic.
+//! settings, determine how the field is rendered: the type itself or an
+//! `Option` around it, the associated serde attributes, and how it is assigned a value
+//! when the key is absent. [`PropertyRepr::of`] makes this determination
+//! in a single place, and the various code paths that depend on it process the result.
 //!
-//! Three callers use it. The renderer emits the field's type and
-//! attributes from it. The default value walk wraps a supplied value the
-//! way the field holds it: the value itself for a bare field, `Some` for
-//! an `Option`-wrapped one, the custom container's constructor for a
-//! consumer's optional-nullable type. Trait resolution calls
-//! [`PropertyRepr::fills_from_default`] to find the fields that
-//! `Default::default()` fills when absent, which is both where
-//! `#[serde(default)]` goes and what a generated `Default` impl calls, so
-//! those fields' types must implement `Default`.
+//! Three callers use it:
+//! - The renderer emits the field's type and attributes from it.
+//! - The default value walk renders a supplied value in order to construct a
+//!   corresponding instance of the generated type: the value itself for a bare
+//!   field, `Some` for an `Option`-wrapped one, the custom container's
+//!   constructor for a consumer's optional-nullable type.
+//! - Trait resolution calls [`PropertyRepr::fills_from_default`] to find the
+//!   fields that `Default::default()` fills when absent. This is both where
+//!   `#[serde(default)]` goes and what a generated `Default` impl calls, so
+//!   the types for those fields must implement the `Default` trait.
 //!
-//! The variants are the distinct ways a field can be held, not the
-//! distinct reasons for holding it that way. A required scalar and an
-//! optional `Option<T>` under `ConflateAsNull` are both `Value` with no
-//! attributes, and no caller distinguishes them. A `Default`-state field
-//! and an optional container under `AbsentAsEmpty` are both `Value` with
-//! `serde(default)` and an `is_empty` skip, and both require `Default` of
-//! their type.
+//! Each variant is a distinct way a field can be rendered. The confluence
+//! of state, type, and name (and settings) determine the appropriate variant;
+//! the same variant may be reached via different combinations.
+//! - A required scalar and an optional `Option<T>` under `ConflateAsNull` are
+//!   both `Value` with no attributes, and no caller distinguishes them.
+//! - A `Default`-state field and an optional container under `AbsentAsEmpty`
+//!   are both `Value` with `serde(default)` and an `is_empty` skip, and both
+//!   require `Default` of their type.
 //!
-//! Two cases are decided before the settings are consulted. A flattened
-//! property has no key, so the settings for how a keyed field represents
-//! absence do not apply; it is its type, or a plain `Option` of it when
-//! optional. A required `Option<T>` names `Option::deserialize`
-//! explicitly, since serde's default handling would also accept an
-//! absent key.
+//! Two cases are decided before the settings are consulted.
+//! - A flattened property has no key, so the settings for how a keyed field
+//!   represents absence do not apply. A flattened property translates to
+//!   either Value of its type, or FlattenedOption when optional.
+//! - A required `Option<T>` (i.e. a field that *may* be `null` but *must* be
+//!   present) specifies `Option::deserialize` explicitly, since serde's default
+//!   handling would also accept an absent key.
 //!
 //! The skip predicate for a `Default`-state field depends on the type:
 //! containers and strings have `is_empty`, an `Option` has `is_none`,
@@ -66,20 +68,20 @@ pub(crate) enum Skip<'a, Id> {
 /// How a struct property is held in the Rust struct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PropertyRepr<'a, Id> {
-    /// The type itself. `default` is whether the field carries
-    /// `#[serde(default)]`; `skip` is the predicate, if any, that leaves the
-    /// field out of serialization.
+    /// The type itself. `default` is whether the `#[serde(default)]` attribute
+    /// is present; `skip` is the predicate, if any, that leaves the field out
+    /// of serialization.
     ///
     /// The type may itself be an `Option`, meaning the value is either
-    /// present or `null`. The `Option` variants below are different: they
-    /// wrap the type in an `Option` because the field may be absent.
+    /// present or `null`. The `Option` variants below wrap a type in an
+    /// `Option` because the field may be absent.
     Value {
         default: bool,
         skip: Option<Skip<'a, Id>>,
     },
     /// The type, an `Option`, which must be present but may be `null`:
     /// `deserialize_with = Option::deserialize`, since without it serde
-    /// accepts an absent field too.
+    /// accepts an absent field.
     RequiredOption,
     /// `Option<T>` with `default`, `deserialize_some`, and the `is_none`
     /// skip: absent is `None` and `null` is an error.
@@ -91,18 +93,18 @@ pub(crate) enum PropertyRepr<'a, Id> {
     // setting exists.
     //
     // NullableOption,
-    /// `Option<T>` with no attribute, for a flattened property: serde reads
-    /// it as `Some` when the leftover keys parse as `T` and `None`
-    /// otherwise, and writes `None` as no keys.
+    /// `Option<T>` with no attribute, for a flattened property only: serde
+    /// reads it as `Some` when the leftover keys parse as `T` and `None`
+    /// otherwise, and serializes `None` as no additional keys.
     FlattenedOption,
-    /// The consumer's optional-nullable `container` around `inner`, with
-    /// `default` and the `is_absent` skip.
+    /// The consumer's optional-nullable `container` specified by
+    /// [`Settings::optional_nullable`].
     CustomOption {
         container: &'a ContainerType,
         inner: &'a Id,
     },
-    /// `::json_serde::Absent`: a `Never` that may be absent. It has
-    /// `default`, since it cannot be deserialized, and is never serialized.
+    /// `::json_serde::Absent`: a `Never` that may be absent (and, in fact,
+    /// *must* be absent).
     Absent,
 }
 
@@ -117,12 +119,17 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
         let ty = types.get(&prop.type_id).unwrap();
         match (&prop.json_name, &prop.state, ty) {
             // A flattened property has no key, so the settings for how a keyed
-            // field represents absence do not apply. It renders as its type,
-            // or as an Option of it when Optional.
+            // field represents absence do not apply.
             (StructPropertySerde::Flatten, StructPropertyState::Optional, _) => {
                 Self::FlattenedOption
             }
+            (StructPropertySerde::Flatten, StructPropertyState::Required, _) => Self::Value {
+                default: false,
+                skip: None,
+            },
+            (StructPropertySerde::Flatten, _, _) => unreachable!(),
 
+            (_, StructPropertyState::Optional, Type::Never) => Self::Absent,
             (
                 _,
                 StructPropertyState::Required
@@ -132,9 +139,7 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
             ) => unreachable!("finalization rejects a Never property that requires a value"),
 
             // A required field that is an Option<T> needs a custom
-            // deserializer so that the field must be present, but may be null;
-            // without this attribute, the default handling is to permit
-            // either.
+            // deserializer so that the field must be present, but may be null.
             (_, StructPropertyState::Required, Type::Option(_)) => Self::RequiredOption,
 
             // A required field has no serde annotations.
@@ -144,16 +149,16 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
             },
 
             // An explicit default value for when the field is absent. Note
-            // that serialization is not impacted. The renderer names the
+            // that serialization is not impacted. The renderer specifies the
             // `defaults` function in the attribute.
             (_, StructPropertyState::DefaultValue(_), _) => Self::Value {
                 default: false,
                 skip: None,
             },
 
-            // A default field that is an Option<T> explicitly conflates
-            // absent and null, so we ignore the optional_nullable setting.
-            // Note that #[serde(default)] is a no-op for Option<T>.
+            // A default field that is an Option<T> explicitly conflates absent
+            // and null, so we ignore the optional_nullable setting. Note that
+            // #[serde(default)] is a no-op for Option<T> so we omit it.
             (_, StructPropertyState::Default, Type::Option(_)) => Self::Value {
                 default: false,
                 skip: Some(Skip::IsNone),
@@ -167,8 +172,8 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
             },
 
             // An optional field that is also an Option<T> may be the type
-            // value, null, or absent. Customizable settings determine the
-            // handling of this.
+            // value, null, or absent. The settings determine its handling.
+            // As above, default is a no-op for Option<T>.
             (_, StructPropertyState::Optional, Type::Option(inner)) => {
                 match &settings.optional_nullable {
                     OptionalNullable::ConflateAsAbsent => Self::Value {
@@ -187,6 +192,7 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                 }
             }
 
+            // For optional containers, settings specify the handling.
             (_, StructPropertyState::Optional, Type::Vec(_) | Type::Set(_) | Type::Map(..)) => {
                 match settings.optional_container {
                     OptionalContainer::AbsentAsEmpty => Self::Value {
@@ -197,6 +203,7 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                 }
             }
 
+            // For an optional unit, settings specify the handling.
             (_, StructPropertyState::Optional, Type::Unit) => match settings.optional_unit {
                 OptionalUnit::AbsentAsUnit => Self::Value {
                     default: true,
@@ -204,8 +211,6 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                 },
                 OptionalUnit::AbsentAsNone => Self::NonNullOption,
             },
-
-            (_, StructPropertyState::Optional, Type::Never) => Self::Absent,
 
             // An optional typed field may not be null; we use the
             // json_serde::deserialize_some function to enforce this.
