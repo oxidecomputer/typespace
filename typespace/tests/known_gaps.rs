@@ -60,49 +60,6 @@ fn desired_eq_not_granted_over_unknown_hash_key() {
     );
 }
 
-// Trait resolution accepts the graph: the `#[serde(default)]` seeding
-// requires Default of the property's type, and the `Type::JsonValue`
-// arm in `required_resolution` conflicts only over Ord and PartialOrd
-// (`serde_json::Value` does implement Default; its default is `Null`).
-// Rendering then calls `render_struct_property_add_skip` in `lib.rs`,
-// whose JsonValue arm is `panic!("Default value for JsonValue is not
-// supported")`.
-//
-// The panic message describes a different situation (a default value
-// there is no way to compare against), and the correct output needs
-// nothing exotic: emit `#[serde(default)]` with no
-// `skip_serializing_if`, exactly as the integer and float arms do. So
-// finalize accepts a graph that render refuses, and the refusal guards
-// nothing.
-#[test]
-#[ignore = "independent and cheap; nobody is blocking on it"]
-fn json_value_property_in_default_state_renders() {
-    let builder = typespace_builder!(
-        Settings::minimal()
-            .with_required_trait(TypespaceTrait::Debug)
-            .with_required_trait(TypespaceTrait::Serialize)
-            .with_required_trait(TypespaceTrait::Deserialize),
-        {
-            struct Blob {
-                #[default]
-                data: JsonValue,
-            }
-        }
-    );
-    let ts = builder
-        .finalize(no_cycles)
-        .expect("Value implements Default; resolution accepts this graph");
-    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream())
-        .expect("rendered output parses as a Rust file");
-
-    assert!(
-        file.items
-            .iter()
-            .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == "Blob")),
-        "Blob missing from output"
-    );
-}
-
 // A requirement that reaches a generic native stops there when the
 // native's declaration cannot answer for the trait, so a generated
 // type sitting in its parameter is never asked for an impl it would

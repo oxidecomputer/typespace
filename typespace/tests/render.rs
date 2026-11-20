@@ -1121,6 +1121,42 @@ fn test_default_boxed_option() {
     }
 }
 
+// A Default-state JsonValue property renders with `default` and no skip:
+// serde_json::Value implements Default (Null), and there is no predicate to
+// compare against it.
+#[test]
+fn test_default_json_value() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_std(Std::Unqualified),
+        {
+            struct Blob {
+                #[default]
+                data: JsonValue,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_default_json_value.rs", common::codespace(&ts).into_stream())]
+    fn inner() {
+        let v: import::Blob = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(v.data, serde_json::Value::Null);
+        let v: import::Blob = serde_json::from_value(serde_json::json!({"data": [1, 2]})).unwrap();
+        assert_eq!(v.data, serde_json::json!([1, 2]));
+        assert_eq!(
+            serde_json::to_value(import::Blob {
+                data: serde_json::Value::Null
+            })
+            .unwrap(),
+            serde_json::json!({"data": null})
+        );
+    }
+}
+
 // A map whose key is a struct containing a float cannot satisfy the Ord and Eq
 // constraints required of BTreeMap keys; finalize should return Err.
 #[test]

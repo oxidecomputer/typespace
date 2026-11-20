@@ -291,9 +291,9 @@ impl<'a, Id: Ord> Skip<'a, Id> {
             // There isn't an "is_zero()" so... we'll just leave it be.
             Type::Integer(_) | Type::Float(_) => None,
 
-            // This isn't a runtime error that could be handled; it's a
-            // programming error.
-            Type::JsonValue => panic!("Default value for JsonValue is not supported"),
+            // serde_json::Value implements Default (Null), and there is no
+            // predicate to compare against it.
+            Type::JsonValue => None,
 
             // A Never property reaches this function in no state:
             // finalization rejects every state that would, and the
