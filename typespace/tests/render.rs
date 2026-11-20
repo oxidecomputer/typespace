@@ -1083,6 +1083,44 @@ fn test_compound_field_types() {
     }
 }
 
+// A Default-state Box<Option<T>> takes its skip from the Option inside the
+// Box and keeps `default`: serde's handling of a missing Option field does
+// not see through the Box, so without `default` an absent key is an error.
+#[test]
+fn test_default_boxed_option() {
+    let builder = typespace_builder!(
+        Settings::minimal()
+            .with_required_trait(TypespaceTrait::Serialize)
+            .with_required_trait(TypespaceTrait::Deserialize)
+            .with_std(Std::Unqualified),
+        {
+            struct Holder {
+                #[default]
+                boxed: Box<Nullable<u32>>,
+            }
+        }
+    );
+
+    let ts = builder.finalize(no_cycles).unwrap();
+
+    #[check_and_include("tests/output/test_default_boxed_option.rs", common::codespace(&ts).into_stream())]
+    fn inner() {
+        let v: import::Holder = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(*v.boxed, None);
+        let v: import::Holder = serde_json::from_value(serde_json::json!({"boxed": null})).unwrap();
+        assert_eq!(*v.boxed, None);
+        let v: import::Holder = serde_json::from_value(serde_json::json!({"boxed": 3})).unwrap();
+        assert_eq!(*v.boxed, Some(3));
+        assert_eq!(
+            serde_json::to_value(import::Holder {
+                boxed: Box::new(None)
+            })
+            .unwrap(),
+            serde_json::json!({})
+        );
+    }
+}
+
 // A map whose key is a struct containing a float cannot satisfy the Ord and Eq
 // constraints required of BTreeMap keys; finalize should return Err.
 #[test]

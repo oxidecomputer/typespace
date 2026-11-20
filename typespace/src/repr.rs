@@ -244,14 +244,11 @@ impl<'a, Id: Ord> Skip<'a, Id> {
             // The same applies to external types.
             Type::Native(_) => None,
 
-            // We have a property whose type is an Option meaning that it
-            // may have a value of null. The "Default" state means that it
-            // takes on its "intrinsic" default value if the field is
-            // absent. This means we can ignore any of the
-            // optional/nullable settings as they don't particularly apply
-            // here.
-            //
-            // Note that #[serde(default)] is a no-op for Option<T>.
+            // Reached only through a Box: a Default-state property whose
+            // type is itself an Option is decided in `PropertyRepr::of`
+            // without coming here. serde reads an absent Box<Option<T>> as
+            // None just as it does an absent Option<T>, so the `default`
+            // that `of` adds for a Box<Option<T>> is a no-op there too.
             Type::Option(_) => Some(Skip::IsNone),
 
             Type::Box(boxed_id) => Self::for_default(boxed_id, types, settings),
