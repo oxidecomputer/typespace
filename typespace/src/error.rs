@@ -206,7 +206,9 @@ where
     /// flattened property; typespace refuses the graph as a programming error
     /// rather than emitting an attribute that does nothing.
     #[error(
-        "{} flattens the property `{property}` and gives it a default;          serde never finds a flattened property missing, so a default          would never apply",
+        "{} flattens the property `{property}` and gives it a default; \
+         serde never finds a flattened property missing, so a default \
+         would never apply",
         flatten_site(.type_name, .variant)
     )]
     FlattenWithDefault {
