@@ -906,11 +906,12 @@ where
                     // optional-nullable settings).
                     (StructPropertyState::Optional, None)
                     | (StructPropertyState::Default, None) => {
-                        // If the state is Default, implementing the
-                        // Default trait on this type confers a requirement of
-                        // a Default implementation for the type of the field.
+                        // A field filled with Default::default() requires
+                        // a Default implementation for the type of the
+                        // field.
                         if self.mode == Mode::Check
-                            && prop_info.state == StructPropertyState::Default
+                            && PropertyRepr::of(prop_info, self.types, self.settings)
+                                .fills_from_default()
                         {
                             let mut path = state.path.clone();
                             path.push(PathStep {

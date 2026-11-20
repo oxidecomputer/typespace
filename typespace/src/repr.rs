@@ -165,8 +165,10 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
         }
     }
 
-    /// Whether the field carries `#[serde(default)]`.
-    pub(crate) fn has_serde_default(&self) -> bool {
+    /// Whether an absent field is filled with `Default::default()`: by
+    /// serde through `#[serde(default)]`, and by a generated `Default`
+    /// impl.
+    pub(crate) fn fills_from_default(&self) -> bool {
         matches!(self, Self::Value { default: true, .. })
     }
 }

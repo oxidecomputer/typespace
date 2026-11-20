@@ -628,19 +628,20 @@ where
                         // possible.
                         cannot_implement()
                     } else {
-                        // A property in the Default state fills from
-                        // Default::default(), so its type must implement
-                        // it. serde_default_properties seeds the same
+                        // A property that fills from Default::default()
+                        // when absent needs its type to implement it.
+                        // serde_default_properties seeds the same
                         // requirement for serde's #[serde(default)]; this
                         // records it again because the impl calls it in
-                        // its own right. An optional property is an
-                        // Option, Default whatever it holds, and a
-                        // property with its own default value fills from a
-                        // generated function.
+                        // its own right. The other properties hold an
+                        // Option, which is Default whatever it holds, or
+                        // fill from a generated function.
                         let obligations = struct_info
                             .properties
                             .iter()
-                            .filter(|prop| matches!(prop.state, StructPropertyState::Default))
+                            .filter(|prop| {
+                                PropertyRepr::of(prop, types, settings).fills_from_default()
+                            })
                             .map(|prop| Obligation {
                                 required: TypespaceTrait::Default,
                                 path: one_hop(type_id, Relation::Field(prop.rust_name.clone())),
@@ -800,7 +801,7 @@ fn serde_default_properties<'a, Id: Clone + Ord>(
     settings: &Settings,
 ) -> Vec<&'a StructProperty<Id>> {
     let is_default =
-        |prop: &&StructProperty<Id>| PropertyRepr::of(prop, types, settings).has_serde_default();
+        |prop: &&StructProperty<Id>| PropertyRepr::of(prop, types, settings).fills_from_default();
     match ty {
         Type::Struct(struct_info) => struct_info.properties.iter().filter(is_default).collect(),
         Type::Enum(enum_info) => enum_info
