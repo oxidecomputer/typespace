@@ -2283,6 +2283,24 @@ fn test_never_default_value_property() {
     assert_eq!(type_id, "DefaultValueHolder");
 }
 
+// A whole-type default value cannot supply a value for an `Optional<!>`
+// property: the field is always absent, and the walk refuses the value as
+// it does for any `!`.
+#[test]
+fn test_never_optional_property_with_a_default_value() {
+    let builder = typespace_builder!(never_settings(), {
+        #[default = { "value": null }]
+        struct Holder {
+            value: Optional<!>,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to refuse a value for an absent property");
+    };
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+}
+
 // An `Option<!>` property that may be absent accepts both wire forms it
 // names, omitted and null, and nothing else.
 #[test]

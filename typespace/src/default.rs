@@ -967,7 +967,10 @@ where
                         // representation.
                         let prop_default_value =
                             match PropertyRepr::of(prop_info, self.types, self.settings) {
-                                PropertyRepr::Value { .. } => value?,
+                                // The field is the type itself. An Absent
+                                // field is a Never, whose walk refuses any
+                                // value.
+                                PropertyRepr::Value { .. } | PropertyRepr::Absent => value?,
                                 PropertyRepr::NonNullOption | PropertyRepr::FlattenedOption => {
                                     value?.map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
@@ -982,8 +985,8 @@ where
                                         )
                                     })?
                                 }
-                                PropertyRepr::RequiredOption | PropertyRepr::Absent => {
-                                    unreachable!("an Optional property is never represented so")
+                                PropertyRepr::RequiredOption => {
+                                    unreachable!("a required property is not in the Optional state")
                                 }
                             };
 
