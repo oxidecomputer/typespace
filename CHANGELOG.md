@@ -4,6 +4,8 @@
 
 * Lower the MSRV to 1.88: the newest compiler the crate itself needs (for
   `let` chains), and what its `regress` dependency needs.
+* `TypespaceTrait::from_path` compares parsed paths, so a derive written with
+  spaced separators (`schemars :: JsonSchema`) is recognized as the trait.
 * An `Optional` whose type is a container (`Vec`, `Set`, `Map`) or the
   unit type (`()`) have settings (`optional_container` and `optional_unit`--to
   join `optional_nullable` for `Optional` `Option` types) that govern whether
