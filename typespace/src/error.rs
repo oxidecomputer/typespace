@@ -200,11 +200,11 @@ where
 
     /// A flattened property is in the `Default` or `DefaultValue` state.
     ///
-    /// serde deserializes a flattened property from whatever keys the
-    /// other properties leave, so it never finds the property missing
-    /// and a default would never apply. The two states that promise one
-    /// have no meaning on a flattened property; typespace refuses the
-    /// graph rather than emitting an attribute that does nothing.
+    /// serde deserializes a flattened property from whatever keys the other
+    /// properties don't consume, so it never finds the property "missing" and
+    /// a default would never apply. The default states have no meaning on a
+    /// flattened property; typespace refuses the graph as a programming error
+    /// rather than emitting an attribute that does nothing.
     #[error(
         "{} flattens the property `{property}` and gives it a default;          serde never finds a flattened property missing, so a default          would never apply",
         flatten_site(.type_name, .variant)

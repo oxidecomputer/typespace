@@ -229,8 +229,7 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
 }
 
 impl<'a, Id: Ord> Skip<'a, Id> {
-    /// The skip for a field in the `Default` state whose type is the one
-    /// with this id.
+    /// The skip for a field in the `Default` state.
     fn for_default(
         id: &'a Id,
         types: &'a BTreeMap<Id, Type<Id>>,
