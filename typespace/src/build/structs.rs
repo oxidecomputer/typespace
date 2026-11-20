@@ -1842,6 +1842,12 @@ impl<Id> NewtypeStruct<Id> {
                 }
             }
 
+            // The rendered check and finalize's check of a default value both
+            // build a validator from the schema.
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => schema_validator(schema)
+                .map(|_| ())
+                .map_err(|e| invalid("JSON schema", format!("the schema does not compile: {e}"))),
+
             _ => Ok(()),
         }
     }
@@ -2117,20 +2123,25 @@ impl NewtypeConstraints {
     /// The error is the reason the value fails. A default value is constructed
     /// directly and never passes through `TryFrom`, so finalize applies this
     /// to it instead. `inner` is the type the newtype wraps. A float constraint
-    /// compares in its precision. Two checks differ from the rendered ones. An
+    /// compares in its precision. One check differs from the rendered one. An
     /// allow or deny list compares JSON values, where the rendered list
     /// compares constructed values, so two values that differ only in a
-    /// property the inner type defaults are not the same here. A JSON schema
-    /// constraint is not checked at all: the rendered check validates the
-    /// serialized form of the constructed value, which can differ from the
-    /// default as written.
+    /// property the inner type defaults are not the same here.
     pub(crate) fn check_value<Id>(
         &self,
         value: &serde_json::Value,
         inner: &Type<Id>,
     ) -> Result<(), String> {
         match self {
-            NewtypeConstraints::None | NewtypeConstraints::JsonSchema(_) => Ok(()),
+            NewtypeConstraints::None => Ok(()),
+
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                let validator =
+                    schema_validator(schema).expect("check_constraints compiled the schema");
+                validator
+                    .validate(value)
+                    .map_err(|e| format!("does not validate against the schema: {e}"))
+            }
 
             NewtypeConstraints::AllowList(values) => {
                 if values
@@ -2282,6 +2293,21 @@ impl NewtypeConstraints {
             }
         }
     }
+}
+
+/// The validator for a JSON schema constraint, built as the rendered
+/// `TryFrom` builds it: a schema that names no draft is validated as
+/// draft-07, and one that names its draft is validated under that.
+fn schema_validator(
+    schema: &serde_json::Value,
+) -> Result<jsonschema::Validator, jsonschema::ValidationError<'static>> {
+    let options = jsonschema::options();
+    let options = if schema.get("$schema").is_none() {
+        options.with_draft(jsonschema::Draft::Draft7)
+    } else {
+        options
+    };
+    options.build(schema)
 }
 
 /// JSON equality with numbers compared by value, so that `1` and `1.0` are

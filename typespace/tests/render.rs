@@ -4703,6 +4703,16 @@ fn test_default_value_newtype_constraints() {
             vec![json!(2), json!(10)],
             vec![json!(0), json!(12), json!(3)],
         ),
+        // A JSON schema constraint validates the default as written.
+        (
+            Type::Integer("u32".to_string()),
+            NewtypeConstraints::JsonSchema(JsonValue(json!({
+                "type": "integer",
+                "multipleOf": 2,
+            }))),
+            vec![json!(2), json!(4)],
+            vec![json!(3)],
+        ),
         (
             Type::Float("f64".to_string()),
             NewtypeConstraints::Float {
@@ -4873,6 +4883,36 @@ fn test_newtype_pattern_must_compile() {
         .expect_err("\"(\" is not a pattern");
     assert!(
         matches!(&err, Error::InvalidConstraints { name, kind, .. } if name == "Broken" && *kind == "string"),
+        "{err}"
+    );
+}
+
+/// A JSON schema constraint whose schema does not compile is refused at
+/// finalize, whether or not a default value uses it.
+#[test]
+fn test_newtype_schema_must_compile() {
+    let mut builder = TypespaceBuilder::new(Settings::minimal());
+    builder
+        .insert("number".to_string(), Type::Integer("u32".to_string()))
+        .unwrap();
+    builder
+        .insert(
+            "Broken".to_string(),
+            Type::NewtypeStruct(
+                NewtypeStruct::new("number".to_string())
+                    .name("Broken")
+                    .constraints(NewtypeConstraints::JsonSchema(JsonValue(
+                        serde_json::json!({ "type": 7 }),
+                    ))),
+            ),
+        )
+        .unwrap();
+    let err = builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect_err("7 is not a type");
+    assert!(
+        matches!(&err, Error::InvalidConstraints { name, kind, .. } if name == "Broken" && *kind == "JSON schema"),
         "{err}"
     );
 }
@@ -6823,11 +6863,12 @@ fn json_schema_constraint_with_a_nested_unknown_keyword_refuses_json_schema() {
 }
 
 /// A `$ref` points into the document the constraint came from, which
-/// the reported schema does not carry.
+/// the reported schema does not carry. The reference here resolves, to
+/// the schema itself, since one that did not would not compile.
 #[test]
 fn json_schema_constraint_with_a_ref_refuses_json_schema() {
     let keyword = refused_keyword(serde_json::json! {{
-        "$ref": "#/definitions/Pair",
+        "$ref": "#",
     }});
     assert_eq!(keyword, "$ref");
 }
