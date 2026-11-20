@@ -11,7 +11,8 @@ use typespace::build::{
 };
 use typespace::error::{Error, NameAxis, OffenderReason, Relation, RequirementOrigin};
 use typespace::settings::{
-    ContainerType, ForeignTrait, GeneratedCrate, OptionalNullable, Settings, Std,
+    ContainerType, ForeignTrait, GeneratedCrate, OptionalContainer, OptionalNullable, OptionalUnit,
+    Settings, Std,
 };
 use typespace::{TraitProvision, TypespaceBuilder, TypespaceTrait, TypespaceTraitSet, no_cycles};
 use typespace_test_macro::{check_and_include, typespace_builder};
@@ -2550,17 +2551,208 @@ fn test_never_optional_vec() {
 
     #[check_and_include("tests/output/test_never_optional_vec.rs", common::codespace(&ts).into_stream())]
     fn inner() {
-        let absent = import::OptionalVecHolder { values: None };
-        assert_eq!(serde_json::to_string(&absent).unwrap(), "{}");
-
-        let empty = import::OptionalVecHolder {
-            values: Some(Vec::new()),
-        };
-        assert_eq!(serde_json::to_string(&empty).unwrap(), r#"{"values":[]}"#);
+        let empty = import::OptionalVecHolder { values: Vec::new() };
+        assert_eq!(serde_json::to_string(&empty).unwrap(), "{}");
 
         assert!(serde_json::from_str::<import::OptionalVecHolder>("{}").is_ok());
         assert!(serde_json::from_str::<import::OptionalVecHolder>(r#"{"values":[]}"#).is_ok());
         assert!(serde_json::from_str::<import::OptionalVecHolder>(r#"{"values":[1]}"#).is_err());
+    }
+}
+
+// An unwrapped optional container renders `#[serde(default)]`, so the
+// container type must implement `Default` when the struct deserializes.
+// Finalize refuses a container declared without it rather than leaving the
+// failure to the consumer's build; wrapping the container in an `Option`
+// removes the obligation.
+#[test]
+fn optional_container_without_default_is_refused_at_finalize() {
+    let vec_without_default =
+        ContainerType::vec().with_provision(TypespaceTrait::Default, TraitProvision::Never);
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_vec_type(vec_without_default.clone());
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            values: Optional<Vec<String>>,
+        }
+    });
+    builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect_err("an unwrapped optional container needs Default");
+
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_vec_type(vec_without_default)
+        .with_optional_container(OptionalContainer::AbsentAsNone);
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            values: Optional<Vec<String>>,
+        }
+    });
+    builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect("an Option-wrapped container owes nothing");
+}
+
+// The representations of optional container, unit, and flattened fields,
+// one module per setting. Each struct has the same fields:
+// - optional_vec, optional_set, optional_map: containers that may be absent
+// - optional_unit: a unit field that may be absent
+// - required_vec: a container that must be present
+// - default_vec: a container in the Default state
+// - inner: a flattened struct that may be absent
+// and a whole-type default value that supplies every one of them, so the
+// `Default` impl shows how each field is filled.
+fn optional_field_codespace() -> proc_macro2::TokenStream {
+    let absent_as_empty = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_desired_trait(TypespaceTrait::Default)
+        .with_optional_container(OptionalContainer::AbsentAsEmpty)
+        .with_optional_unit(OptionalUnit::AbsentAsUnit);
+    let absent_as_empty = typespace_builder!(absent_as_empty, {
+        struct Inner {
+            a: u32,
+        }
+        #[default = {
+            optional_vec: ["x"],
+            optional_set: ["x"],
+            optional_map: { "m": 1 },
+            optional_unit: null,
+            required_vec: ["y"],
+            default_vec: ["z"],
+            a: 7,
+        }]
+        struct AbsentAsEmpty {
+            optional_vec: Optional<Vec<String>>,
+            optional_set: Optional<Set<String>>,
+            optional_map: Optional<Map<String, u32>>,
+            optional_unit: Optional<()>,
+            required_vec: Vec<String>,
+            #[default]
+            default_vec: Vec<String>,
+            #[flatten]
+            inner: Optional<Inner>,
+        }
+    });
+
+    let absent_as_none = Settings::minimal()
+        .with_std(Std::Unqualified)
+        .with_required_trait(TypespaceTrait::Debug)
+        .with_required_trait(TypespaceTrait::PartialEq)
+        .with_required_trait(TypespaceTrait::Serialize)
+        .with_required_trait(TypespaceTrait::Deserialize)
+        .with_desired_trait(TypespaceTrait::Default)
+        .with_optional_container(OptionalContainer::AbsentAsNone)
+        .with_optional_unit(OptionalUnit::AbsentAsNone);
+    let absent_as_none = typespace_builder!(absent_as_none, {
+        struct Inner {
+            a: u32,
+        }
+        #[default = {
+            optional_vec: ["x"],
+            optional_set: ["x"],
+            optional_map: { "m": 1 },
+            optional_unit: null,
+            required_vec: ["y"],
+            default_vec: ["z"],
+            a: 7,
+        }]
+        struct AbsentAsNone {
+            optional_vec: Optional<Vec<String>>,
+            optional_set: Optional<Set<String>>,
+            optional_map: Optional<Map<String, u32>>,
+            optional_unit: Optional<()>,
+            required_vec: Vec<String>,
+            #[default]
+            default_vec: Vec<String>,
+            #[flatten]
+            inner: Optional<Inner>,
+        }
+    });
+
+    let builders = [
+        ("AbsentAsEmpty", absent_as_empty),
+        ("AbsentAsNone", absent_as_none),
+    ];
+
+    let mut codespace = Codespace::default();
+    for (name, builder) in builders {
+        let ts = builder.finalize(no_cycles).unwrap();
+        let modname = heck::ToSnakeCase::to_snake_case(name);
+        let modname_ident = format_ident!("{modname}");
+        let m = common::codespace(&ts).into_root_mod();
+
+        let root_mod = codespace.get_root_mod();
+        root_mod.replace_mod(modname, m);
+        root_mod.add_item(
+            name,
+            quote! {
+                pub use #modname_ident::*;
+            },
+        );
+    }
+    codespace.into_stream()
+}
+
+#[test]
+fn test_optional_fields() {
+    let out = optional_field_codespace();
+
+    #[check_and_include("tests/output/test_optional_fields.rs", out)]
+    fn inner() {
+        // An absent container or unit is its own default, and an absent
+        // flattened struct is None.
+        let v: import::AbsentAsEmpty = serde_json::from_str(r#"{"required_vec": []}"#).unwrap();
+        assert!(v.optional_vec.is_empty());
+        assert!(v.optional_map.is_empty());
+        assert_eq!(v.optional_unit, ());
+        assert!(v.inner.is_none());
+        // Empty containers are not written back; the unit is written as null.
+        assert_eq!(
+            serde_json::to_string(&v).unwrap(),
+            r#"{"optional_unit":null,"required_vec":[]}"#
+        );
+        // null is not a container.
+        assert!(
+            serde_json::from_str::<import::AbsentAsEmpty>(
+                r#"{"required_vec": [], "optional_vec": null}"#
+            )
+            .is_err()
+        );
+        // The whole-type default fills every field directly.
+        let d = import::AbsentAsEmpty::default();
+        assert_eq!(d.optional_vec, vec!["x".to_string()]);
+        assert_eq!(d.inner, Some(import::absent_as_empty::Inner { a: 7 }));
+
+        // Under AbsentAsNone absence is None, presence is Some, and null is
+        // rejected.
+        let v: import::AbsentAsNone = serde_json::from_str(r#"{"required_vec": []}"#).unwrap();
+        assert_eq!(v.optional_vec, None);
+        assert_eq!(v.optional_unit, None);
+        assert!(v.inner.is_none());
+        assert_eq!(serde_json::to_string(&v).unwrap(), r#"{"required_vec":[]}"#);
+        let v: import::AbsentAsNone = serde_json::from_str(
+            r#"{"required_vec": [], "optional_vec": [], "optional_unit": null}"#,
+        )
+        .unwrap();
+        assert_eq!(v.optional_vec, Some(Vec::new()));
+        assert_eq!(v.optional_unit, Some(()));
+        assert!(
+            serde_json::from_str::<import::AbsentAsNone>(
+                r#"{"required_vec": [], "optional_vec": null}"#
+            )
+            .is_err()
+        );
+        let d = import::AbsentAsNone::default();
+        assert_eq!(d.optional_vec, Some(vec!["x".to_string()]));
+        assert_eq!(d.inner, Some(import::absent_as_none::Inner { a: 7 }));
     }
 }
 

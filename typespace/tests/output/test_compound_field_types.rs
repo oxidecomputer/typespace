@@ -33,7 +33,7 @@ pub struct Defaults {
     pub an_array: [u32; 3usize],
     #[serde(default)]
     pub a_tuple: (String, u32),
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub an_option: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub a_box_string: Box<String>,

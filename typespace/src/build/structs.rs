@@ -699,14 +699,20 @@ pub enum StructPropertySerde {
 /// Only `Optional` translates into an `Option<T>` type; the others are
 /// required in Rust. Conversely, only `Required` must be present during
 /// deserialization; the others may be omitted. Note that the rendering of an
-/// `Optional` property whose type is [`Type::Option`] is dictated by the
-/// value of
-/// [`Settings::optional_nullable`](crate::settings::Settings::optional_nullable).
+/// `Optional` field of certain types is affected by the value of [`Settings`]:
+///
+/// - `Option` -- [`Settings::optional_nullable`]
+/// - `Vec`, `Set`, `Map` -- [`Settings::optional_container`]
+/// - `Unit` -- [`Settings::optional_unit`]
+///
+/// A flattened property ignores these settings: it renders as its type, or as
+/// an `Option` of it when `Optional`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StructPropertyState {
     /// The field must be present.
     Required,
-    /// The field may be omitted.
+    /// The field may be omitted; depending on [`Settings`] the absence of a
+    /// value may or may not be distinguished from the type's default value.
     Optional,
     /// The field may be omitted; if it is, its value comes from the type's
     /// intrinsic default. For built-in types, serialization of the default

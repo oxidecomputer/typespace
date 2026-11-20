@@ -39,6 +39,16 @@ pub struct Settings {
     #[serde(default)]
     pub optional_nullable: OptionalNullable,
 
+    /// How container fields that may be absent are represented; see
+    /// [`OptionalContainer`]. The default is `AbsentAsEmpty`.
+    #[serde(default)]
+    pub optional_container: OptionalContainer,
+
+    /// How unit fields that may be absent are represented; see
+    /// [`OptionalUnit`]. The default is `AbsentAsUnit`.
+    #[serde(default)]
+    pub optional_unit: OptionalUnit,
+
     /// The container [`Type::Map`](crate::build::Type) renders as: its
     /// path, what it demands of its key and value types, and what it
     /// implements.
@@ -169,7 +179,9 @@ impl Settings {
     pub fn minimal() -> Self {
         Self {
             std: Std::FullyQualified,
-            optional_nullable: OptionalNullable::default(),
+            optional_nullable: Default::default(),
+            optional_container: Default::default(),
+            optional_unit: Default::default(),
             map_type: Self::default_map_type(),
             set_type: Self::default_set_type(),
             vec_type: Self::default_vec_type(),
@@ -254,6 +266,21 @@ impl Settings {
     /// [`OptionalNullable::ConflateAsAbsent`].
     pub fn with_optional_nullable(mut self, optional_nullable: OptionalNullable) -> Self {
         self.optional_nullable = optional_nullable;
+        self
+    }
+
+    /// Set how fields whose types are containers that may be absent are
+    /// modeled; see [`OptionalContainer`]. The default is
+    /// [`OptionalContainer::AbsentAsEmpty`].
+    pub fn with_optional_container(mut self, optional_container: OptionalContainer) -> Self {
+        self.optional_container = optional_container;
+        self
+    }
+
+    /// Set how fields of the unit type that may be absent are modeled;
+    /// see [`OptionalUnit`]. The default is [`OptionalUnit::AbsentAsUnit`].
+    pub fn with_optional_unit(mut self, optional_unit: OptionalUnit) -> Self {
+        self.optional_unit = optional_unit;
         self
     }
 
@@ -1227,8 +1254,8 @@ pub enum Std {
     Unqualified,
 }
 
-/// Specify the modeling of values that may be either 'null' or 'optional'
-/// (i.e. absent).
+/// Specify the modeling of typed fields that may be present, `null` or
+/// absent.
 // One of these lives in each Settings; boxing CustomType's declaration
 // to shrink the enum would tax every construction site instead.
 #[allow(clippy::large_enum_variant)]
@@ -1264,6 +1291,31 @@ pub enum OptionalNullable {
     /// implements it never, always, or (typically) when `T` does.
     /// [`ContainerType::option`] is the intended base for a declaration.
     CustomType(ContainerType),
+}
+
+/// Specify the modeling of container (`Vec`, `Set`, `Map`) fields that may
+/// be absent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OptionalContainer {
+    #[default]
+    /// Model an absent container as an empty container. This is the default.
+    AbsentAsEmpty,
+    /// Model a container field with an enclosing `Option` type so that a
+    /// `None` value indicates that the field is absent.
+    AbsentAsNone,
+}
+
+/// Specify the modeling of unit (`()`) fields that may be absent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OptionalUnit {
+    #[default]
+    /// Model an absent unit field as `()`. This is the default.
+    AbsentAsUnit,
+    /// Model a unit field with an enclosing `Option` type so that a `None`
+    /// value indicates that the field is absent.
+    AbsentAsNone,
 }
 
 /// A crate that generated code references by path.
