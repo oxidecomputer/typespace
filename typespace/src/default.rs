@@ -509,6 +509,7 @@ where
                 let inner = self.at(state, id, Relation::Inner, |state| {
                     self.expansion_guard_default_impl(state, &newtype_struct.inner, value)
                 })?;
+                // Check that the value adheres to any constraints.
                 newtype_struct
                     .constraints
                     .check_value(value, self.types.get(&newtype_struct.inner).unwrap())
