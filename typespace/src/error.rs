@@ -198,6 +198,30 @@ where
         property: String,
     },
 
+    /// A flattened property is in the `Default` or `DefaultValue` state.
+    ///
+    /// serde deserializes a flattened property from whatever keys the other
+    /// properties don't consume, so it never finds the property "missing" and
+    /// a default would never apply. The default states have no meaning on a
+    /// flattened property; typespace refuses the graph as a programming error
+    /// rather than emitting an attribute that does nothing.
+    #[error(
+        "{} flattens the property `{property}` and gives it a default; \
+         serde never finds a flattened property missing, so a default \
+         would never apply",
+        flatten_site(.type_name, .variant)
+    )]
+    FlattenWithDefault {
+        /// The name of the struct or enum carrying the property.
+        type_name: String,
+        /// The struct-style variant carrying the flattened property,
+        /// or `None` when the type is a struct.
+        variant: Option<String>,
+        /// The Rust name of the flattened property. A type may flatten
+        /// several; the first offender in declaration order is named.
+        property: String,
+    },
+
     /// A flattened property's type is one serde cannot flatten.
     ///
     /// `#[serde(flatten)]` splices the property's own keys into the

@@ -14,6 +14,16 @@
 * A flattened property renders as its type, or as a plain `Option` of that type
   when `Optional`, with `flatten` as its only serde attribute; the settings
   for absent keyed fields do not apply.
+* A flattened property in the `Default` or `DefaultValue` state is refused at
+  finalize (`Error::FlattenWithDefault`): serde never finds a flattened
+  property missing, so a default would never apply.
+* A generated `Default` impl requires `Default` of every field it assigns
+  `Default::default()`, which includes an `Optional` container or unit left
+  unwrapped by `optional_container` or `optional_unit`. A `vec_type`, `set_type`,
+  or `map_type` declared without `Default` now refuses `Default` on such a struct
+  rather than deriving an impl that does not compile.
+* A `Default`-state property of type `JsonValue` renders with `#[serde(default)]`
+  (an absent key reads as `null`) instead of panicking.
 
 ## [0.1.3] - 2026-11-18
 

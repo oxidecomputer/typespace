@@ -714,3 +714,52 @@ fn a_variant_flattening_a_struct_is_accepted() {
 
     builder.finalize(no_cycles).unwrap();
 }
+
+/// serde deserializes a flattened property from the keys the other
+/// properties leave, so it never finds the property missing and a
+/// default would never apply. `finalize` refuses the two states that
+/// promise one.
+#[test]
+fn flattened_property_with_a_default_is_rejected() {
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            #[default]
+            inner: Inner,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened property in the Default state");
+    };
+    assert!(
+        matches!(&err, Error::FlattenWithDefault { property, .. } if property == "inner"),
+        "{err:?}"
+    );
+
+    let builder = typespace_builder!(settings(), {
+        struct Inner {
+            b: u32,
+        }
+
+        struct Outer {
+            a: u32,
+            #[flatten]
+            #[default = { "b": 2 }]
+            inner: Inner,
+        }
+    });
+
+    let Err(err) = builder.finalize(no_cycles) else {
+        panic!("expected finalize to reject a flattened property with a default value");
+    };
+    assert!(
+        matches!(&err, Error::FlattenWithDefault { property, .. } if property == "inner"),
+        "{err:?}"
+    );
+}

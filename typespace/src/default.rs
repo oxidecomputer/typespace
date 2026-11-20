@@ -19,7 +19,8 @@ use crate::{
     },
     error::{Error, PathStep, Relation},
     output::Outputspace,
-    settings::{GeneratedCrate, OptionalContainer, OptionalNullable, OptionalUnit, Settings, Std},
+    repr::PropertyRepr,
+    settings::{GeneratedCrate, Settings, Std},
 };
 
 /// The values an integer type accepts: the closed range it holds, and
@@ -905,11 +906,11 @@ where
                     // optional-nullable settings).
                     (StructPropertyState::Optional, None)
                     | (StructPropertyState::Default, None) => {
-                        // If the state is Default, implementing the
-                        // Default trait on this type confers a requirement of
-                        // a Default implementation for the type of the field.
+                        // A field assigned Default::default() requires a
+                        // Default implementation for the type of the field.
                         if self.mode == Mode::Check
-                            && prop_info.state == StructPropertyState::Default
+                            && PropertyRepr::of(prop_info, self.types, self.settings)
+                                .fills_from_default()
                         {
                             let mut path = state.path.clone();
                             path.push(PathStep {
@@ -958,71 +959,36 @@ where
                     (StructPropertyState::Optional, Some(prop_value)) => {
                         let prop_id = &prop_info.type_id;
 
-                        let prop_ty = self.types.get(prop_id).unwrap();
-
-                        enum TypeOfInterest<Id> {
-                            Option(Id),
-                            Container,
-                            Unit,
-                            Other,
-                        }
-
-                        let type_of_interest = match prop_ty {
-                            Type::Option(id) => TypeOfInterest::Option(id),
-                            Type::Vec(_) | Type::Set(_) | Type::Map(..) => {
-                                TypeOfInterest::Container
-                            }
-                            Type::Unit => TypeOfInterest::Unit,
-                            _ => TypeOfInterest::Other,
-                        };
-
                         let value = self.at(state, id, relation.clone(), |state| {
                             self.default_impl(state, prop_id, prop_value)
                         });
 
-                        let prop_default_value = match type_of_interest {
-                            TypeOfInterest::Option(option_inner_id) => {
-                                match &self.settings.optional_nullable {
-                                    // A simple Option<T> is sufficient.
-                                    OptionalNullable::ConflateAsAbsent
-                                    | OptionalNullable::ConflateAsNull => value?,
-                                    // Nest the option in a `Some`.
-                                    OptionalNullable::DoubleOption => value?.map(|prop_value| {
+                        // Render the value according to the field's
+                        // representation.
+                        let prop_default_value =
+                            match PropertyRepr::of(prop_info, self.types, self.settings) {
+                                // The field is the type itself. An Absent
+                                // field is a Never, whose walk refuses any
+                                // value.
+                                PropertyRepr::Value { .. } | PropertyRepr::Absent => value?,
+                                PropertyRepr::NonNullOption | PropertyRepr::FlattenedOption => {
+                                    value?.map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
-                                    }),
-
-                                    // Construct the custom type
-                                    OptionalNullable::CustomType(_) => {
-                                        self.at(state, id, relation.clone(), |state| {
-                                            self.default_impl_custom_optional_nullable(
-                                                state,
-                                                option_inner_id,
-                                                prop_value,
-                                            )
-                                        })?
-                                    }
+                                    })
                                 }
-                            }
-                            TypeOfInterest::Container => match &self.settings.optional_container {
-                                OptionalContainer::AbsentAsEmpty => value?,
-                                OptionalContainer::AbsentAsNone => value?.map(|prop_value| {
-                                    let some = self.render_option_variant2("Some");
-                                    quote! { #some(#prop_value) }
-                                }),
-                            },
-                            TypeOfInterest::Unit => match &self.settings.optional_unit {
-                                OptionalUnit::AbsentAsUnit => value?,
-                                OptionalUnit::AbsentAsNone => value?.map(|prop_value| {
-                                    let some = self.render_option_variant2("Some");
-                                    quote! { #some(#prop_value) }
-                                }),
-                            },
-                            TypeOfInterest::Other => value?.map(|prop_value| {
-                                let some = self.render_option_variant2("Some");
-                                quote! { #some(#prop_value) }
-                            }),
-                        };
+                                // Construct the custom type
+                                PropertyRepr::CustomOption { inner, .. } => {
+                                    self.at(state, id, relation.clone(), |state| {
+                                        self.default_impl_custom_optional_nullable(
+                                            state, inner, prop_value,
+                                        )
+                                    })?
+                                }
+                                PropertyRepr::RequiredOption => {
+                                    unreachable!("a required property is not in the Optional state")
+                                }
+                            };
 
                         let prop_default = prop_default_value.map(|value| {
                             let prop_ident = format_ident!("{}", prop_info.rust_name);

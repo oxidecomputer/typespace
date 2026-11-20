@@ -11,7 +11,8 @@
 //! outcome that follows from that rule, so a change that widens or
 //! narrows the obligation set fails here.
 
-use typespace::{TypespaceTrait, no_cycles, settings::Settings};
+use typespace::settings::{ContainerType, OptionalContainer, Settings};
+use typespace::{TraitProvision, TypespaceTrait, no_cycles};
 use typespace_test_macro::typespace_builder;
 
 mod common;
@@ -214,4 +215,41 @@ fn a_flattened_obligation_names_the_path_it_walked() {
         "the path from Foo to Thing runs through `inner` and then \
          `thing`:\n{error}"
     );
+}
+
+/// An optional container rendered as the container itself (the
+/// `AbsentAsEmpty` setting) is filled with `Default::default()` by the
+/// generated `Default` impl, exactly as `#[serde(default)]` fills it, so
+/// a container without `Default` refuses the impl. Wrapped in an Option
+/// (`AbsentAsNone`) it owes nothing.
+#[test]
+fn unwrapped_optional_container_is_obligated_for_default() {
+    let vec_without_default =
+        ContainerType::vec().with_provision(TypespaceTrait::Default, TraitProvision::Never);
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Default)
+        .with_vec_type(vec_without_default.clone());
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            values: Optional<Vec<String>>,
+        }
+    });
+    builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect_err("an unwrapped optional container needs Default");
+
+    let settings = Settings::minimal()
+        .with_required_trait(TypespaceTrait::Default)
+        .with_vec_type(vec_without_default)
+        .with_optional_container(OptionalContainer::AbsentAsNone);
+    let builder = typespace_builder!(settings, {
+        struct Holder {
+            values: Optional<Vec<String>>,
+        }
+    });
+    builder
+        .finalize(no_cycles)
+        .map(|_| ())
+        .expect("an Option-wrapped container owes nothing");
 }
