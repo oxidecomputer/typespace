@@ -221,7 +221,7 @@ use crate::{Obligation, TraitProvision, TypespaceTrait, TypespaceTraitSet};
 /// wrapper is `Wrapped`, carrying the declaration, the `Option` node at
 /// the property, and the option's value type; every other edge is
 /// `Plain`. The wrapping condition--the optional property state, an
-/// `Option` type, the `CustomType` setting--is `PropertyRepr::Custom`;
+/// `Option` type, the `CustomType` setting--is `PropertyRepr::CustomOption`;
 /// this walk has only the child edge, not the property, so it restates
 /// the condition.
 enum Edge<'a, Id> {

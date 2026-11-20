@@ -79,14 +79,21 @@ pub(crate) enum PropertyRepr<'a, Id> {
     RequiredOption,
     /// `Option<T>` with `default`, `deserialize_some`, and the `is_none`
     /// skip: absent is `None` and `null` is an error.
-    Strict,
+    NonNullOption,
+    // `Option<T>` with only the `is_none` skip: absent and `null` both
+    // read as `None`, which is serde's own handling of an `Option`. This
+    // is the rendering of an optional property under the `AllowNull`
+    // setting proposed in typespace #68; it is here as a note until that
+    // setting exists.
+    //
+    // NullableOption,
     /// `Option<T>` with no attribute, for a flattened property: serde reads
     /// it as `Some` when the leftover keys parse as `T` and `None`
     /// otherwise, and writes `None` as no keys.
-    PlainOption,
+    FlattenedOption,
     /// The consumer's optional-nullable `container` around `inner`, with
     /// `default` and the `is_absent` skip.
-    Custom {
+    CustomOption {
         container: &'a ContainerType,
         inner: &'a Id,
     },
@@ -108,7 +115,9 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
             // A flattened property has no key, so the settings for how a keyed
             // field represents absence do not apply. It renders as its type,
             // or as an Option of it when Optional.
-            (StructPropertySerde::Flatten, StructPropertyState::Optional, _) => Self::PlainOption,
+            (StructPropertySerde::Flatten, StructPropertyState::Optional, _) => {
+                Self::FlattenedOption
+            }
 
             (
                 _,
@@ -167,8 +176,10 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                         skip: None,
                     },
                     // Wrap the type (an Option) in another Option.
-                    OptionalNullable::DoubleOption => Self::Strict,
-                    OptionalNullable::CustomType(container) => Self::Custom { container, inner },
+                    OptionalNullable::DoubleOption => Self::NonNullOption,
+                    OptionalNullable::CustomType(container) => {
+                        Self::CustomOption { container, inner }
+                    }
                 }
             }
 
@@ -178,7 +189,7 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                         default: true,
                         skip: Some(Skip::IsEmpty(&prop.type_id)),
                     },
-                    OptionalContainer::AbsentAsNone => Self::Strict,
+                    OptionalContainer::AbsentAsNone => Self::NonNullOption,
                 }
             }
 
@@ -187,14 +198,14 @@ impl<'a, Id: Ord> PropertyRepr<'a, Id> {
                     default: true,
                     skip: None,
                 },
-                OptionalUnit::AbsentAsNone => Self::Strict,
+                OptionalUnit::AbsentAsNone => Self::NonNullOption,
             },
 
             (_, StructPropertyState::Optional, Type::Never) => Self::Absent,
 
             // An optional typed field may not be null; we use the
             // json_serde::deserialize_some function to enforce this.
-            (_, StructPropertyState::Optional, _) => Self::Strict,
+            (_, StructPropertyState::Optional, _) => Self::NonNullOption,
         }
     }
 

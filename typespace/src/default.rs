@@ -969,14 +969,14 @@ where
                         let prop_default_value =
                             match PropertyRepr::of(prop_info, self.types, self.settings) {
                                 PropertyRepr::Value { .. } => walk_value(state)?,
-                                PropertyRepr::Strict | PropertyRepr::PlainOption => {
+                                PropertyRepr::NonNullOption | PropertyRepr::FlattenedOption => {
                                     walk_value(state)?.map(|prop_value| {
                                         let some = self.render_option_variant2("Some");
                                         quote! { #some(#prop_value) }
                                     })
                                 }
                                 // Construct the custom type
-                                PropertyRepr::Custom { inner, .. } => {
+                                PropertyRepr::CustomOption { inner, .. } => {
                                     self.at(state, id, relation.clone(), |state| {
                                         self.default_impl_custom_optional_nullable(
                                             state, inner, prop_value,

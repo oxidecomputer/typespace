@@ -2016,7 +2016,7 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                     serde_options.push(quote! { deserialize_with = #opt_deserialize });
                     (ty_ident, ty_ident_scoped)
                 }
-                PropertyRepr::Strict => {
+                PropertyRepr::NonNullOption => {
                     serde_options.push(quote! { default });
                     let json_serde = serde_options.crate_path_text(out, GeneratedCrate::JsonSerde);
                     let deserialize_some = format!("{json_serde}::deserialize_some");
@@ -2037,14 +2037,14 @@ impl<'a, Id: Clone + Ord + std::fmt::Debug + std::fmt::Display> TypespaceRendere
                         quote! { #std_opt_type<#ty_ident_scoped> },
                     )
                 }
-                PropertyRepr::PlainOption => (
+                PropertyRepr::FlattenedOption => (
                     quote! { #std_opt_type<#ty_ident> },
                     quote! { #std_opt_type<#ty_ident_scoped> },
                 ),
                 // A custom container requires custom handling; note that
                 // trait resolution's edge classifier also requires special
                 // handling for this case.
-                PropertyRepr::Custom { container, inner } => {
+                PropertyRepr::CustomOption { container, inner } => {
                     let custom_type_path = out.container(container);
                     serde_options.push(quote! { default });
                     let is_absent = self.skip_predicate(
