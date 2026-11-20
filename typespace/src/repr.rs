@@ -5,9 +5,10 @@
 //! Each property has a state (required, optional, default, or a default
 //! value), a type, and a wire name or `flatten`. Those three, with the
 //! settings, determine how the field is rendered: the type itself or an
-//! `Option` around it, the associated serde attributes, and how it is assigned a value
-//! when the key is absent. [`PropertyRepr::of`] makes this determination
-//! in a single place, and the various code paths that depend on it process the result.
+//! `Option` around it, the associated serde attributes, and how it is
+//! assigned a value when the key is absent. [`PropertyRepr::of`] makes this
+//! determination in a single place, and the various code paths that depend
+//! on it process the result.
 //!
 //! Three callers use it:
 //! - The renderer emits the field's type and attributes from it.
@@ -51,17 +52,17 @@ use crate::build::{
 };
 use crate::settings::{ContainerType, OptionalContainer, OptionalNullable, OptionalUnit, Settings};
 
-/// The predicate a field's `skip_serializing_if` names.
+/// The predicate a field's `skip_serializing_if` attribute specifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip<'a, Id> {
     /// `Option::is_none`.
     IsNone,
-    /// `is_empty` of the type with this id, a container or a string. A
-    /// field that holds it in a `Box` names the boxed type here.
+    /// `is_empty` of the type with this id, a container or a string. For a
+    /// field of type `Box<T>`, the id is `T`'s.
     IsEmpty(&'a Id),
 }
 
-/// How a struct property is held in the Rust struct.
+/// How a struct property is rendered in a Rust struct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PropertyRepr<'a, Id> {
     /// The type itself. `default` is whether the `#[serde(default)]` attribute
@@ -105,7 +106,7 @@ pub(crate) enum PropertyRepr<'a, Id> {
 }
 
 impl<'a, Id: Ord> PropertyRepr<'a, Id> {
-    /// Decide `prop`'s representation from its state, its type, and the
+    /// Determine how `prop` is rendered from its state, type, name, and the
     /// settings.
     pub(crate) fn of(
         prop: &'a StructProperty<Id>,
