@@ -87,6 +87,34 @@ fn parse_recognizes_a_modeled_trait() {
     }
 }
 
+/// `from_path` recognizes a modeled trait however its path tokens are spaced,
+/// as in the `schemars :: JsonSchema` that `ToTokens` produces.
+#[test]
+fn from_path_ignores_token_spacing() {
+    for spelling in [
+        "schemars :: JsonSchema",
+        ":: schemars :: JsonSchema",
+        "::schemars::JsonSchema",
+        "schemars::JsonSchema",
+        " JsonSchema ",
+    ] {
+        assert_eq!(
+            TypespaceTrait::from_path(spelling),
+            Some(TypespaceTrait::JsonSchema),
+            "{spelling}"
+        );
+    }
+    assert_eq!(
+        TypespaceTrait::from_path("core :: cmp :: Ord"),
+        Some(TypespaceTrait::Ord)
+    );
+    assert_eq!(TypespaceTrait::from_path("deftly :: Deftly"), None);
+    assert!(matches!(
+        TraitSpec::parse("deftly :: Deftly"),
+        Ok(TraitSpec::Foreign(_))
+    ));
+}
+
 /// `parse` reads bounds after a colon, each a modeled trait.
 #[test]
 fn parse_reads_bounds() {

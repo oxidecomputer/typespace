@@ -406,16 +406,26 @@ impl TypespaceTrait {
     /// its leading `::`, and the `core` synonym of a `std` path. Anything else
     /// is not a trait typespace models.
     pub fn from_path(path: &str) -> Option<Self> {
-        let path = path.trim();
+        // We compare parsed segments so that any token spacing matches, such
+        // as the `schemars :: JsonSchema` that `ToTokens` produces.
+        let path = syn::parse_str::<syn::Path>(path).ok()?;
+        let segments = path
+            .segments
+            .iter()
+            .map(|segment| {
+                segment
+                    .arguments
+                    .is_none()
+                    .then(|| segment.ident.to_string())
+            })
+            .collect::<Option<Vec<_>>>()?;
         Self::iter().find(|trait_| {
-            let canonical = trait_.canonical_path();
-            let unrooted = &canonical[2..];
-            path == trait_.to_string()
-                || path == canonical
-                || path == unrooted
-                || unrooted.strip_prefix("std::").is_some_and(|rest| {
-                    path == format!("core::{rest}") || path == format!("::core::{rest}")
-                })
+            let canonical = trait_.canonical_path()[2..].split("::").collect::<Vec<_>>();
+            (path.leading_colon.is_none() && segments == [trait_.to_string()])
+                || segments == canonical
+                || (canonical[0] == "std"
+                    && segments[0] == "core"
+                    && segments[1..] == canonical[1..])
         })
     }
 }
