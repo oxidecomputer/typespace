@@ -4144,6 +4144,34 @@ fn newtype_with_an_attached_default_renders_the_impl() {
     );
 }
 
+/// TYPIFY COMPAT: typify derives `Default` for no newtype, but it writes
+/// one from an attached default value, so imitation keeps that impl and
+/// still withholds `Default` from a newtype without a value.
+#[test]
+fn newtype_with_an_attached_default_keeps_the_impl_under_typify_compat() {
+    let builder = typespace_builder!(default_settings().with_typify_compat(true), {
+        #[default = 3]
+        struct Count(u32);
+
+        struct Plain(u32);
+    });
+    let ts = builder.finalize(no_cycles).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+    assert!(
+        rendered.contains("impl ::std::default::Default for Count"),
+        "no Default impl for Count under typify_compat in:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Count(3_u32)"),
+        "the impl does not construct the attached value in:\n{rendered}"
+    );
+    assert!(
+        !common::implements(&file, "Plain", "Default"),
+        "Plain gained Default under typify_compat in:\n{rendered}"
+    );
+}
+
 /// The impl is withheld when constructing the value would need
 /// something the value's own contents cannot provide.
 ///

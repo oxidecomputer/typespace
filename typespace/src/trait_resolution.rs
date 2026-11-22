@@ -706,8 +706,11 @@ where
                 }
                 _ => Feasibility::IfAllChildren,
             },
-            // TYPIFY COMPAT: typify doesn't implement a default for newtypes.
-            TypespaceTrait::Default if settings.typify_compat => cannot_implement(),
+            // TYPIFY COMPAT: typify doesn't derive a default for newtypes, but
+            // it does write one from a schema's `default` value.
+            TypespaceTrait::Default if settings.typify_compat && common.default.is_none() => {
+                cannot_implement()
+            }
             TypespaceTrait::Default if common.default.is_some() => Feasibility::IfSomeChildren(
                 default_checks
                     .whole_type
