@@ -140,3 +140,127 @@ fn flattened_property_may_not_be_an_option() {
         .map(|_| ())
         .expect_err("a flattened property's type may not be an Option");
 }
+
+// An allow or deny list is a set of JSON documents, so membership is
+// JSON equality: a wire value is on the list when it is one of the
+// documents as written. The rendered check compares constructed values
+// instead. `TryFrom<Inner>` builds each listed document into an `Inner`
+// and tests whether the candidate equals one of them, and `Deserialize`
+// reads an `Inner` first and then calls that `TryFrom`. Two documents
+// that construct the same `Inner` are therefore the same to the
+// rendered check. With
+//
+//     struct Inner { a: u32, b: u32 = 0 }
+//     struct Listed(Inner) allowing [{"a": 1, "b": 0}]
+//
+// the generated code accepts the wire value `{"a": 1}`, which the list
+// does not contain.
+//
+// Finalize already reads the list literally: `check_value` compares a
+// default against the documents as written, so a default of `{"a": 1}`
+// on `Listed` is refused even though the generated code would accept
+// the same value at runtime. The rendered side has to become literal
+// too: `TryFrom<Inner>` serializes the candidate with
+// `serde_json::to_value` and compares documents, and `Deserialize`
+// reads a `serde_json::Value`, checks it against the list, and only
+// then converts it into an `Inner`. ahl, 2026-11-19: "we should treat
+// the allow and deny list literally".
+#[test]
+#[ignore = "the rendered list check compares constructed values"]
+fn list_membership_is_json_equality_in_rendered_code() {
+    use serde_json::json;
+    use typespace::TypespaceBuilder;
+    use typespace::build::{
+        JsonValue, NewtypeConstraints, NewtypeStruct, Struct, StructProperty, StructPropertyState,
+        Type,
+    };
+    use typespace::error::Error;
+
+    // `Holder.value` is a `Listed`, with the given default if any.
+    fn build(
+        default: Option<serde_json::Value>,
+    ) -> Result<typespace::Typespace<String>, Error<String>> {
+        let settings = Settings::minimal().with_required_trait(TypespaceTrait::Deserialize);
+        let mut builder = TypespaceBuilder::new(settings);
+        builder
+            .insert("u32".to_string(), Type::Integer("u32".to_string()))
+            .unwrap();
+        builder
+            .insert(
+                "Inner".to_string(),
+                Struct::new()
+                    .name("Inner")
+                    .properties(vec![
+                        StructProperty::new("a", "u32".to_string())
+                            .with_state(StructPropertyState::Required),
+                        StructProperty::new("b", "u32".to_string())
+                            .with_state(StructPropertyState::DefaultValue(JsonValue(json!(0)))),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "Listed".to_string(),
+                Type::NewtypeStruct(
+                    NewtypeStruct::new("Inner".to_string())
+                        .name("Listed")
+                        .constraints(NewtypeConstraints::AllowList(vec![JsonValue(
+                            json!({"a": 1, "b": 0}),
+                        )])),
+                ),
+            )
+            .unwrap();
+        let state = match default {
+            Some(value) => StructPropertyState::DefaultValue(JsonValue(value)),
+            None => StructPropertyState::Required,
+        };
+        builder
+            .insert(
+                "Holder".to_string(),
+                Struct::new()
+                    .name("Holder")
+                    .properties(vec![
+                        StructProperty::new("value", "Listed".to_string()).with_state(state),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        builder.finalize(no_cycles)
+    }
+
+    // The impl block that starts with `header`, through its closing brace.
+    fn impl_block<'a>(rendered: &'a str, header: &str) -> &'a str {
+        let start = rendered
+            .find(header)
+            .unwrap_or_else(|| panic!("no `{header}` in:\n{rendered}"));
+        let end = rendered[start..]
+            .find("\n}\n")
+            .map_or(rendered.len(), |n| start + n + 2);
+        &rendered[start..end]
+    }
+
+    // Finalize reads the list literally.
+    let err = build(Some(json!({"a": 1})))
+        .err()
+        .expect("a default the list does not contain");
+    assert!(matches!(err, Error::InvalidDefault { .. }), "{err:?}");
+
+    // The rendered impls do too.
+    let ts = build(None).unwrap();
+    let file = syn::parse2::<syn::File>(common::codespace(&ts).into_stream()).unwrap();
+    let rendered = prettyplease::unparse(&file);
+
+    let try_from = impl_block(&rendered, "impl ::std::convert::TryFrom<Inner> for Listed");
+    assert!(
+        try_from.contains("to_value"),
+        "TryFrom compares constructed values, not documents:\n{try_from}"
+    );
+    let deserialize = impl_block(&rendered, "Deserialize<'de> for Listed");
+    assert!(
+        deserialize.contains("serde_json::Value"),
+        "Deserialize reads an Inner before checking the list:\n{deserialize}"
+    );
+}
