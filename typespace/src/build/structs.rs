@@ -2121,8 +2121,8 @@ impl NewtypeConstraints {
     /// Check a value against the constraints, as the rendered `TryFrom` does.
     ///
     /// The error is the reason the value fails. A default value is constructed
-    /// directly and never passes through `TryFrom`, so finalize applies this
-    /// to it instead. `inner` is the type the newtype wraps. A float constraint
+    /// directly and never passes through `TryFrom`, so we must validate
+    /// in finalize. `inner` is the type the newtype wraps. A float constraint
     /// compares in its precision. One check differs from the rendered one. An
     /// allow or deny list compares JSON values, where the rendered list
     /// compares constructed values, so two values that differ only in a
@@ -2194,10 +2194,9 @@ impl NewtypeConstraints {
                 })
             }
 
-            // The inner walk rejected anything but an array before this runs.
             NewtypeConstraints::Array { min, max } => {
                 let Some(items) = value.as_array() else {
-                    return Ok(());
+                    unreachable!("the inner walk rejected anything but an array before this runs");
                 };
                 if let Some(max) = max
                     && items.len() > *max
@@ -2212,7 +2211,6 @@ impl NewtypeConstraints {
                 Ok(())
             }
 
-            // The inner walk rejected anything but an integer before this runs.
             NewtypeConstraints::Integer {
                 min,
                 max,
@@ -2223,7 +2221,9 @@ impl NewtypeConstraints {
                     .map(i128::from)
                     .or_else(|| value.as_u64().map(i128::from))
                 else {
-                    return Ok(());
+                    unreachable!(
+                        "the inner walk rejected anything but an integer before this runs"
+                    );
                 };
                 if let Some(min) = min
                     && number < *min
@@ -2243,14 +2243,13 @@ impl NewtypeConstraints {
                 Ok(())
             }
 
-            // The inner walk rejected anything but a number before this runs.
             NewtypeConstraints::Float {
                 min,
                 max,
                 multiple_of,
             } => {
                 let Some(number) = value.as_f64() else {
-                    return Ok(());
+                    unreachable!("the inner walk rejected anything but a number before this runs");
                 };
                 // The rendered check compares in the inner type's precision.
                 // Rounding every operand through f32 reproduces an f32
