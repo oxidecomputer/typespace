@@ -2,7 +2,7 @@
 name = "typespace"
 version = "0.1.3"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/oxidecomputer/typespace"
 description = "Model Rust types for code generation"
