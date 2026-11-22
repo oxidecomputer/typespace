@@ -4144,9 +4144,9 @@ fn newtype_with_an_attached_default_renders_the_impl() {
     );
 }
 
-/// TYPIFY COMPAT: typify derives `Default` for no newtype, but it writes
-/// one from an attached default value, so imitation keeps that impl and
-/// still withholds `Default` from a newtype without a value.
+/// TYPIFY COMPAT: typify derives `Default` for no newtype, but it writes an
+/// implementation for an attached default value, so compatibility keeps that
+/// impl but still withholds `Default` from a newtype without a value.
 #[test]
 fn newtype_with_an_attached_default_keeps_the_impl_under_typify_compat() {
     let builder = typespace_builder!(default_settings().with_typify_compat(true), {
