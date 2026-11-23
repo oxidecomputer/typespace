@@ -4661,6 +4661,16 @@ fn test_default_value_newtype_constraints() {
             vec![json!("ok"), json!("\u{e9}\u{e9}")],
             vec![json!("o"), json!("too")],
         ),
+        // A string constraint over a `FromStr` inner reads a string on the
+        // wire, so a number is not a value the type can receive, and the
+        // inner walk refuses the string form it cannot parse: no default
+        // fits.
+        (
+            Type::Integer("u32".to_string()),
+            string(None, None, &["^[0-9]+$"]),
+            vec![],
+            vec![json!(5), json!("5")],
+        ),
         (
             Type::String,
             NewtypeConstraints::AllowList(list(&[json!("a"), json!("b")])),

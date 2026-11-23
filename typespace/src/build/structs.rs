@@ -2166,11 +2166,11 @@ impl NewtypeConstraints {
             }
 
             NewtypeConstraints::String { min, max, patterns } => {
-                // A `FromStr` inner type may write its default in its own JSON
-                // form, which the inner walk checks; only a string is checked
-                // against the string constraints.
+                // The rendered type reads a string and parses it, whatever
+                // the inner type, so a default in any other form is not a
+                // value the type can receive.
                 let Some(text) = value.as_str() else {
-                    return Ok(());
+                    return Err("not a string".to_string());
                 };
                 let len = text.chars().count();
                 if let Some(max) = max
