@@ -5,16 +5,18 @@
 # `Human-Review: required` when it expects no human to review the
 # commit before the PR, and to end the PR description with an HTML
 # comment saying the same when any commit is unreviewed at that point.
-# This job looks for either and sets or clears the
-# `requires-human-review` label. It runs in the base repository's context so it can label PRs
-# from forks; it reads the PR through the API and never checks out or
-# runs the PR's code.
+# This job looks for either when the PR is opened and sets the
+# `requires-human-review` label. Nothing clears the label but a
+# maintainer who has read the diff: a later edit to the description or
+# the commits does not run this job. It runs in the base repository's
+# context so it can label PRs from forks; it reads the PR through the
+# API and never checks out or runs the PR's code.
 #
 name: Human review
 
 on:
   pull_request_target:
-    types: [ opened, edited, reopened, synchronize ]
+    types: [ opened ]
 
 permissions:
   pull-requests: write
@@ -49,6 +51,4 @@ jobs:
           gh label create requires-human-review --force --color 0e8a16 \
             --description "Nobody has read this change yet; a maintainer will"
           gh pr edit "$PR" --add-label requires-human-review
-        else
-          gh pr edit "$PR" --remove-label requires-human-review 2>/dev/null || true
         fi
