@@ -2,6 +2,8 @@
 
 ## Next
 
+## [0.1.4] - 2026-11-23
+
 * Lower the MSRV to 1.88: the newest compiler the crate itself needs (for
   `let` chains), and what its `regress` dependency needs.
 * `TypespaceTrait::from_path` compares parsed paths, so a derive written with
@@ -126,6 +128,7 @@
 
 * Initial release
 
+[0.1.4]: https://github.com/oxidecomputer/typespace/releases/v0.1.4
 [0.1.3]: https://github.com/oxidecomputer/typespace/releases/v0.1.3
 [0.1.2]: https://github.com/oxidecomputer/typespace/releases/v0.1.2
 [0.1.1]: https://github.com/oxidecomputer/typespace/releases/v0.1.1
