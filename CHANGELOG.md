@@ -30,9 +30,7 @@
   (an absent key reads as `null`) instead of panicking.
 * A default value for a constrained newtype, whether the type's own or a
   property's, is checked against the constraints at `finalize`, as the
-  rendered `TryFrom` would check it: string length and patterns, array
-  length, numeric bounds and multiples, allow and deny lists, and a JSON
-  schema. A pattern or schema that does not compile is refused at `finalize`
+  rendered `TryFrom` would check it.
 
 ## [0.1.3] - 2026-11-18
 
