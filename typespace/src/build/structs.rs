@@ -1733,23 +1733,33 @@ impl<Id> NewtypeStruct<Id> {
             .expect("every reference resolves before this runs");
 
         match &self.constraints {
-            NewtypeConstraints::String { .. } => match inner {
-                Type::String => Ok(()),
-                _ if has_trait(
-                    types,
-                    settings,
-                    &self.inner,
-                    TypespaceTrait::FromStr,
-                    &mut BTreeSet::new(),
-                ) =>
-                {
-                    Ok(())
+            NewtypeConstraints::String { patterns, .. } => {
+                for pattern in patterns {
+                    regress::Regex::with_flags(pattern, "u").map_err(|e| {
+                        invalid(
+                            "string",
+                            format!("the pattern `{pattern}` does not compile: {e}"),
+                        )
+                    })?;
                 }
-                _ => Err(invalid(
-                    "string",
-                    "the inner type is neither `String` nor `FromStr`".to_string(),
-                )),
-            },
+                match inner {
+                    Type::String => Ok(()),
+                    _ if has_trait(
+                        types,
+                        settings,
+                        &self.inner,
+                        TypespaceTrait::FromStr,
+                        &mut BTreeSet::new(),
+                    ) =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err(invalid(
+                        "string",
+                        "the inner type is neither `String` nor `FromStr`".to_string(),
+                    )),
+                }
+            }
 
             NewtypeConstraints::Array { .. } => match inner {
                 Type::Vec(_) | Type::Set(_) | Type::Array(..) => Ok(()),
@@ -1831,6 +1841,12 @@ impl<Id> NewtypeStruct<Id> {
                     )),
                 }
             }
+
+            // The rendered check and finalize's check of a default value both
+            // build a validator from the schema.
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => schema_validator(schema)
+                .map(|_| ())
+                .map_err(|e| invalid("JSON schema", format!("the schema does not compile: {e}"))),
 
             _ => Ok(()),
         }
@@ -2099,6 +2115,223 @@ fn integer_subject(itype: &str) -> (TokenStream, String) {
 /// the inner type, or the primitive a `NonZero` wraps.
 fn suffixed_literal(value: impl std::fmt::Display, rust_type: &str) -> Literal {
     Literal::from_str(&format!("{value}_{rust_type}")).expect("a checked bound has a literal form")
+}
+
+impl NewtypeConstraints {
+    /// Check a value against the constraints, as the rendered `TryFrom` does.
+    ///
+    /// The error is the reason the value fails. A default value is constructed
+    /// directly and never passes through `TryFrom`, so we must validate
+    /// in finalize. `inner` is the type the newtype wraps. A float constraint
+    /// compares in its precision. One check differs from the rendered one. An
+    /// allow or deny list compares JSON values, where the rendered list
+    /// compares constructed values, so two values that differ only in a
+    /// property the inner type defaults are not the same here.
+    pub(crate) fn check_value<Id>(
+        &self,
+        value: &serde_json::Value,
+        inner: &Type<Id>,
+    ) -> Result<(), String> {
+        match self {
+            NewtypeConstraints::None => Ok(()),
+
+            NewtypeConstraints::JsonSchema(JsonValue(schema)) => {
+                let validator =
+                    schema_validator(schema).expect("check_constraints compiled the schema");
+                validator
+                    .validate(value)
+                    .map_err(|e| format!("does not validate against the schema: {e}"))
+            }
+
+            NewtypeConstraints::AllowList(values) => {
+                if values
+                    .iter()
+                    .any(|JsonValue(allowed)| same_value(allowed, value))
+                {
+                    Ok(())
+                } else {
+                    Err("not on the allow list".to_string())
+                }
+            }
+
+            NewtypeConstraints::DenyList(values) => {
+                if values
+                    .iter()
+                    .any(|JsonValue(denied)| same_value(denied, value))
+                {
+                    Err("on the deny list".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+
+            NewtypeConstraints::String { min, max, patterns } => {
+                // The rendered type reads a string and parses it, whatever
+                // the inner type, so a default in any other form is not a
+                // value the type can receive.
+                let Some(text) = value.as_str() else {
+                    return Err("not a string".to_string());
+                };
+                let len = text.chars().count();
+                if let Some(max) = max
+                    && len > *max
+                {
+                    return Err(format!("longer than {max} characters"));
+                }
+                if let Some(min) = min
+                    && len < *min
+                {
+                    return Err(format!("shorter than {min} characters"));
+                }
+                patterns.iter().try_for_each(|pattern| {
+                    let regex = regress::Regex::with_flags(pattern, "u")
+                        .expect("check_constraints compiled every pattern");
+                    if regex.find(text).is_none() {
+                        Err(format!("does not match the pattern `{pattern}`"))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }
+
+            NewtypeConstraints::Array { min, max } => {
+                let Some(items) = value.as_array() else {
+                    unreachable!("the inner walk rejected anything but an array before this runs");
+                };
+                if let Some(max) = max
+                    && items.len() > *max
+                {
+                    return Err(format!("more than {max} items"));
+                }
+                if let Some(min) = min
+                    && items.len() < *min
+                {
+                    return Err(format!("fewer than {min} items"));
+                }
+                Ok(())
+            }
+
+            NewtypeConstraints::Integer {
+                min,
+                max,
+                multiple_of,
+            } => {
+                let Some(number) = value
+                    .as_i64()
+                    .map(i128::from)
+                    .or_else(|| value.as_u64().map(i128::from))
+                else {
+                    unreachable!(
+                        "the inner walk rejected anything but an integer before this runs"
+                    );
+                };
+                if let Some(min) = min
+                    && number < *min
+                {
+                    return Err(format!("less than {min}"));
+                }
+                if let Some(max) = max
+                    && number > *max
+                {
+                    return Err(format!("greater than {max}"));
+                }
+                if let Some(multiple) = multiple_of
+                    && number % (*multiple as i128) != 0
+                {
+                    return Err(format!("not a multiple of {multiple}"));
+                }
+                Ok(())
+            }
+
+            NewtypeConstraints::Float {
+                min,
+                max,
+                multiple_of,
+            } => {
+                let Some(number) = value.as_f64() else {
+                    unreachable!("the inner walk rejected anything but a number before this runs");
+                };
+                // The rendered check compares in the inner type's precision.
+                // Rounding every operand through f32 reproduces an f32
+                // comparison, since every f32 is exactly an f64.
+                let (round, epsilon): (fn(f64) -> f64, f64) = match inner {
+                    Type::Float(ftype) if ftype == "f32" => {
+                        (|x| x as f32 as f64, f32::EPSILON as f64)
+                    }
+                    _ => (|x| x, f64::EPSILON),
+                };
+                let number = round(number);
+                match min {
+                    Some(FloatConstraint::Inclusive(bound)) if number < round(*bound) => {
+                        return Err(format!("less than {bound}"));
+                    }
+                    Some(FloatConstraint::Exclusive(bound)) if number <= round(*bound) => {
+                        return Err(format!("not greater than {bound}"));
+                    }
+                    _ => {}
+                }
+                match max {
+                    Some(FloatConstraint::Inclusive(bound)) if number > round(*bound) => {
+                        return Err(format!("greater than {bound}"));
+                    }
+                    Some(FloatConstraint::Exclusive(bound)) if number >= round(*bound) => {
+                        return Err(format!("not less than {bound}"));
+                    }
+                    _ => {}
+                }
+                if let Some(multiple) = multiple_of {
+                    // `numeric_checks` renders and explains this margin.
+                    let quotient = round(number / round(*multiple));
+                    if (quotient - quotient.round()).abs()
+                        > quotient.abs().max(1.0) * (4.0 * epsilon)
+                    {
+                        return Err(format!("not a multiple of {multiple}"));
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The validator for a JSON schema constraint, built as the rendered
+/// `TryFrom` builds it: a schema that names no draft is validated as
+/// draft-07, and one that names its draft is validated under that.
+fn schema_validator(
+    schema: &serde_json::Value,
+) -> Result<jsonschema::Validator, jsonschema::ValidationError<'static>> {
+    let options = jsonschema::options();
+    let options = if schema.get("$schema").is_none() {
+        options.with_draft(jsonschema::Draft::Draft7)
+    } else {
+        options
+    };
+    options.build(schema)
+}
+
+/// JSON equality with numbers compared by value, so that `1` and `1.0` are
+/// the same number here as they are once constructed. Integers compare
+/// exactly; a float on either side compares both as f64.
+fn same_value(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Number(a), Value::Number(b)) => match (a.as_i64(), b.as_i64()) {
+            (Some(a), Some(b)) => a == b,
+            _ => match (a.as_u64(), b.as_u64()) {
+                (Some(a), Some(b)) => a == b,
+                _ => a.as_f64() == b.as_f64(),
+            },
+        },
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_value(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_value(a, b)))
+        }
+        _ => a == b,
+    }
 }
 
 /// The checks an integer or float constraint renders in `try_from`,

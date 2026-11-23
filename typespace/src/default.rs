@@ -503,16 +503,21 @@ where
                 self.default_impl_tuple_struct(state, tuple_struct, value, id)
             }
             Type::NewtypeStruct(newtype_struct) => {
-                // TODO 9/4/2026
-                // if mode = validate we need to check the value against
-                // constraints for the newtype
-
                 // A newtype struct may contain itself (directly or
                 // indirectly), so we need to take care not to recur without
                 // narrowing the JSON value.
                 let inner = self.at(state, id, Relation::Inner, |state| {
                     self.expansion_guard_default_impl(state, &newtype_struct.inner, value)
                 })?;
+                // Check that the value adheres to any constraints.
+                newtype_struct
+                    .constraints
+                    .check_value(value, self.types.get(&newtype_struct.inner).unwrap())
+                    .map_err(|reason| Error::InvalidDefault {
+                        value: value.clone(),
+                        id: id.clone(),
+                        reason,
+                    })?;
                 Ok(inner.map(|inner| {
                     let ident = self.render_ident(id);
                     quote! { #ident(#inner) }
