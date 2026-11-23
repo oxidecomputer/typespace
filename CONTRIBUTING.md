@@ -8,3 +8,7 @@ You're responsible for every line: you should be able to explain it in review.
 In general, a clear issue describing a real problem you encountered is more
 highly valued than a lightly-prompted PR. If you're interested in fixing your
 own issue (with or without AI) please say so.
+
+An agent working without a reviewer marks its commits with a
+`Human-Review: required` trailer. If you have since read the diff, amend the
+commits to drop it.

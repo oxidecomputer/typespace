@@ -1,11 +1,12 @@
 #
 # Label a PR that still needs a human reader.
 #
-# AGENTS.md asks an agent that opens a PR nobody has read to end each
-# commit message with the trailer `Human-Review: required` and to end
-# the PR description with an HTML comment saying the same. This job
-# looks for either and sets or clears the `requires-human-review`
-# label. It runs in the base repository's context so it can label PRs
+# AGENTS.md asks an agent to end a commit message with the trailer
+# `Human-Review: required` when it expects no human to review the
+# commit before the PR, and to end the PR description with an HTML
+# comment saying the same when any commit is unreviewed at that point.
+# This job looks for either and sets or clears the
+# `requires-human-review` label. It runs in the base repository's context so it can label PRs
 # from forks; it reads the PR through the API and never checks out or
 # runs the PR's code.
 #
