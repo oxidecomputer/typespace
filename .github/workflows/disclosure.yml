@@ -1,0 +1,54 @@
+#
+# Label a PR that still needs a human reader.
+#
+# AGENTS.md asks an agent to end a commit message with the trailer
+# `Human-Review: required` when it expects no human to review the
+# commit before the PR, and to end the PR description with an HTML
+# comment saying the same when any commit is unreviewed at that point.
+# This job looks for either and sets or clears the
+# `requires-human-review` label. It runs in the base repository's context so it can label PRs
+# from forks; it reads the PR through the API and never checks out or
+# runs the PR's code.
+#
+name: Human review
+
+on:
+  pull_request_target:
+    types: [ opened, edited, reopened, synchronize ]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+    - name: Look for the markers
+      run: |
+        set -euo pipefail
+
+        gh pr view "$PR" --json body,commits > pr.json
+
+        found=0
+        if jq -e '.body // "" | test("<!-- requires human review -->")' \
+            pr.json > /dev/null; then
+          found=1
+        fi
+        if jq -e '[.commits[].messageBody
+                   | test("(^|\\n)Human-Review: required[ \\t]*(\\n|$)")] | any' \
+            pr.json > /dev/null; then
+          found=1
+        fi
+
+        if [ "$found" = 1 ]; then
+          gh label create requires-human-review --force --color 0e8a16 \
+            --description "Nobody has read this change yet; a maintainer will"
+          gh pr edit "$PR" --add-label requires-human-review
+        else
+          gh pr edit "$PR" --remove-label requires-human-review 2>/dev/null || true
+        fi
